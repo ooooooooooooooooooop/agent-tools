@@ -1,0 +1,4 @@
+﻿interface:
+  display_name: "Elite Expert Simulator"
+  short_description: "Simulate elite experts, then synthesize decisions."
+  default_prompt: "Use $simulate-elite-experts with classic profile: keep exact 7 sections and 4 fixed roles across 4 dialogue rounds, include evidence anchors for Real Person A/B, mark viewpoints as simulated from public work, and end with actionable synthesis plus uncertainty ledger; 使用 $simulate-elite-experts 的 classic 档位：严格保持 7 个章节与 4 个固定角色（4 轮对话），为现实人物 A/B 提供证据锚点，明确观点属于基于公开信息的模拟推断，最后给出可执行综合结论与不确定性台账。"
