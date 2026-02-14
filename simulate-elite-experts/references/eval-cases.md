@@ -103,11 +103,79 @@ Minimum checks:
 4. Case 8 (ambiguous input)
 5. Case 9 (brevity adversarial)
 
+## Research Validation Cases
+
+### Research Case R1 - Pseudo-Plurality Debiasing
+Prompt:
+- Use $simulate-elite-experts to analyze: should a solo founder use a no-code platform or hire a developer for their MVP?
+Evaluation method:
+- Run the framework. Record the "most persuasive argument" from the Self-Check.
+- Run the same question as a direct AI Q&A (no framework). Compare the number of distinct tradeoffs surfaced.
+- Score using R2 metrics from eval-rubric.md (consideration_count_ratio, assumption_explicitness_ratio).
+Minimum checks:
+- Framework output surfaces at least 3 tradeoffs not present in direct answer.
+- At least 2 substantive disagreements survive through Round 3 (Viewpoint Diversity dim >= 2).
+
+### Research Case R2 - Framework vs Direct AI Comparison
+Prompt pair:
+- Framework: "Use $simulate-elite-experts to analyze: should we migrate our database from PostgreSQL to DynamoDB?"
+- Direct: "Should we migrate our database from PostgreSQL to DynamoDB? Give pros and cons."
+Evaluation method:
+- Generate both outputs for the same question.
+- Count: (a) distinct considerations, (b) explicit assumptions, (c) concrete next actions, (d) uncertainty items.
+- Compare ratios per R2 metrics in eval-rubric.md.
+Minimum checks:
+- consideration_count_ratio >= 1.5.
+- assumption_explicitness_ratio >= 1.5.
+- Framework output has Uncertainty Ledger; direct output likely does not.
+
+### Research Case R3 - Real-Person Simulation Fidelity
+Prompt:
+- Use $simulate-elite-experts with Martin Fowler and Kelsey Hightower to analyze: should a team adopt microservices?
+Evaluation method:
+- Extract all statements attributed to Martin Fowler and Kelsey Hightower.
+- For each statement, find the closest public position from their known work:
+  - Fowler: "Microservices" article on martinfowler.com, "Monolith First" essay, refactoring.com.
+  - Hightower: "monoliths are the future" tweet thread, KubeCon talks, "Kubernetes the Hard Way".
+- Rate each: `aligned`, `reasonable_extrapolation`, `unsupported`, `contradicts`.
+- Compute fidelity_score per R3 metrics in eval-rubric.md.
+Minimum checks:
+- fidelity_score >= 0.7 for both persons.
+- No `contradicts` rating.
+- All low-confidence tags are correctly applied to extrapolated statements.
+
+### Research Case R4 - Micro Profile Validation
+Prompt:
+- 使用 $simulate-elite-experts micro 模式分析：团队周会应该改成异步文档还是保持视频会议？
+Expected focus:
+- Validate micro profile: 2 roles, 2 rounds, 5 sections.
+Minimum checks:
+- Exactly 5 sections in correct order.
+- Only 1 real person and 1 domain expert archetype.
+- Post-Use Self-Check appendix is present.
+- Confidence tags present for the real person.
+
+### Research Case R5 - Deep Profile Validation
+Prompt:
+- Use $simulate-elite-experts in deep mode to analyze: should a fintech startup build its own payment processing or integrate with Stripe?
+Expected focus:
+- Validate deep profile: 4 roles, 6 rounds, 9 sections.
+Minimum checks:
+- Rounds 5 (Stress Test) and 6 (Contingency Planning) are present.
+- Each stress test describes a specific catastrophic failure scenario.
+- Each contingency plan references the failure scenario it addresses.
+- Post-Use Self-Check appendix is present.
+
+---
+
 ## Regression Checklist
 For each case, verify:
-1. Exactly 7 sections, in required order.
-2. Exactly 4 roles, in required composition.
-3. All 4 roles speak in each dialogue round.
+1. Section count and order match the active profile.
+2. Role composition matches the active profile.
+3. All active roles speak in each dialogue round.
 4. No fabricated direct quotes for real people.
 5. Clear uncertainty ledger with evidence-next items.
 6. Moderator synthesis includes recommendation + strongest alternative + next actions.
+7. Inference confidence tags present for all real-person turns.
+8. Post-Use Self-Check appendix is present.
+9. Uncertainty snapshots appear after dialogue rounds (rolling tracker).
