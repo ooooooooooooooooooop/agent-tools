@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"
+
+      - name: Check Python syntax
+        run: |
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "*/__pycache__/*" | while read f; do
+            echo "Checking $f"
+            python3 -c "import py_compile; py_compile.compile('$f', doraise=True)"
+          done
+
+      - name: Validate skills.json
+        run: python3 -c "import json; json.load(open('skills.json'))"
