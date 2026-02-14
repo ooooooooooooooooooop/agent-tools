@@ -1,0 +1,13 @@
+{
+  "line-length": false,
+  "no-emphasis-as-heading": false,
+  "table-column-style": false,
+  "blanks-around-lists": false,
+  "blanks-around-headings": false,
+  "no-blanks-blockquote": false,
+  "no-trailing-punctuation": false,
+  "ol-prefix": false,
+  "blanks-around-fences": false,
+  "fenced-code-language": false,
+  "no-duplicate-heading": false
+}

@@ -25,4 +25,4 @@ jobs:
           done
 
       - name: Validate skills.json
-        run: python3 -c "import json; json.load(open('skills.json'))"
+        run: python3 -c "import json; json.load(open('skills.json', encoding='utf-8'))"
