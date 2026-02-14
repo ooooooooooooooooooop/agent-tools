@@ -1,0 +1,18 @@
+{
+  "skills": [
+    {
+      "name": "simulate-elite-experts",
+      "path": "./simulate-elite-experts",
+      "version": "1.0.0",
+      "description": "Simulate high-stakes reasoning by modeling how top domain experts think, disagree, and converge",
+      "lang": ["en", "zh"]
+    },
+    {
+      "name": "unified-taskflow",
+      "path": "./unified-taskflow",
+      "version": "4.1.0",
+      "description": "复杂任务管理系统，基于锚点锚定和检查点协议",
+      "lang": ["zh"]
+    }
+  ]
+}
