@@ -22,6 +22,7 @@ LOCAL_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 VALID_CATEGORIES = {"reasoning", "workflow", "writing", "reporting", "maintenance"}
 VALID_PRIORITIES = {"P0", "P1", "P2"}
+CJK_RE = re.compile(r"[\u3400-\u9fff]")
 EXCLUDED_DIRS = {
     ".git",
     ".claude",
@@ -103,6 +104,8 @@ def parse_agent_metadata(path: Path) -> Tuple[Dict[str, str], List[str]]:
                 values[key] = value
         if not values.get(key):
             errors.append(f"{rel(path)} is missing interface.{key}")
+        elif not CJK_RE.search(values[key]):
+            errors.append(f"{rel(path)} interface.{key} must contain a Chinese description")
     return values, errors
 
 
@@ -177,6 +180,8 @@ def validate(strict: bool = False) -> Dict[str, Any]:
             errors.append(f"{name} is missing a valid version")
         if not isinstance(entry.get("description"), str) or not entry["description"].strip():
             errors.append(f"{name} is missing a valid registry description")
+        elif not CJK_RE.search(entry["description"]):
+            errors.append(f"{name} registry description must contain Chinese")
         languages = entry.get("lang")
         if not isinstance(languages, list) or not languages or not all(isinstance(item, str) and item.strip() for item in languages):
             errors.append(f"{name} must declare a non-empty lang array")
@@ -203,6 +208,13 @@ def validate(strict: bool = False) -> Dict[str, Any]:
 
         frontmatter, frontmatter_errors = parse_frontmatter(skill_file)
         errors.extend(frontmatter_errors)
+        try:
+            skill_text = skill_file.read_text(encoding="utf-8-sig")
+            frontmatter_match = FRONTMATTER_RE.match(skill_text)
+            if not frontmatter_match or not CJK_RE.search(frontmatter_match.group(1)):
+                errors.append(f"{rel(skill_file)} frontmatter description must contain Chinese")
+        except UnicodeDecodeError:
+            pass
         if frontmatter.get("name") and frontmatter["name"] != name:
             errors.append(
                 f"{rel(skill_file)} name does not match manifest: "

@@ -1,6 +1,6 @@
 ---
 name: clarify-before-change
-description: Clarify ambiguous, high-risk, or multi-file changes before editing. Use when modifying skills, AGENTS.md, project rules, workflow rules, repository structure, complex code, documents with structural impact, or any change that may be hard to roll back; also use when the user asks to optimize a skill, change rules, refactor, restructure, or gives incomplete requirements.
+description: 在修改前澄清范围、风险、假设与验收标准，避免误改。用于修改 Skill、AGENTS.md、项目规则、工作流规则、仓库结构、复杂代码或具有结构影响的文档，也用于优化 Skill、调整规则、重构、重组或需求不完整的场景。
 ---
 
 # Clarify Before Change

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Task Mode Router"
-  short_description: "Choose the lightest workflow that controls risk."
-  default_prompt: "Use $task-mode-router to classify the task as small, medium, large, or high-risk and state the matching execution boundary."
+  display_name: "任务模式路由"
+  short_description: "按任务规模与风险选择执行深度，避免流程过度或风险失控。"
+  default_prompt: "使用 $task-mode-router，将任务分类为小型、中型、大型或高风险，并说明对应的执行边界。"

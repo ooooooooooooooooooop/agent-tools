@@ -1,62 +1,65 @@
-# skills
+# Skill 仓库
 
-Public skills repository for agent tooling.
+面向智能体工具的公开 Skill 仓库。
 
-## Included Skills
+## 已包含的 Skill
 
-| Skill | Description | Language |
+| Skill | 简介 | 支持语言 |
 |-------|-------------|----------|
-| [simulate-elite-experts](./simulate-elite-experts) | Simulate high-stakes reasoning by modeling how top domain experts think, disagree, and converge | English / 中文 |
-| [unified-taskflow](./unified-taskflow) | 复杂任务管理系统，基于锚点锚定和检查点协议 | 中文 |
-| [clarify-before-change](./clarify-before-change) | Clarify ambiguous or high-risk changes before editing | English / 中文 |
-| [task-mode-router](./task-mode-router) | Route tasks by size and risk before choosing execution depth | English / 中文 |
-| [minimal-implementation](./minimal-implementation) | Prefer the smallest correct implementation and verification scope | English / 中文 |
-| [natural-rewrite](./natural-rewrite) | Rewrite Chinese or English copy naturally while preserving meaning | English / 中文 |
-| [weekly-work-summary](./weekly-work-summary) | Reconstruct evidence-based weekly summaries from workspace activity | English / 中文 |
-| [skill-repository-maintainer](./skill-repository-maintainer) | Audit, validate, organize, and explicitly synchronize a skill repository | English / 中文 |
-| [environment-bootstrap](./environment-bootstrap) | Restore a known skill set on another device with hash verification | English / 中文 |
+| [simulate-elite-experts](./simulate-elite-experts) | 模拟顶级专家视角，交叉质询并综合复杂决策，记录不确定性 | 英文 / 中文 |
+| [unified-taskflow](./unified-taskflow) | 管理真正复杂的多阶段任务，追踪锚点、检查点与验收 | 中文 |
+| [clarify-before-change](./clarify-before-change) | 在修改前澄清范围、风险、假设与验收标准，避免误改 | 英文 / 中文 |
+| [task-mode-router](./task-mode-router) | 按任务规模与风险选择执行深度，避免流程过度或风险失控 | 英文 / 中文 |
+| [minimal-implementation](./minimal-implementation) | 以最小正确改动完成任务，并提供可复核的验证证据 | 英文 / 中文 |
+| [natural-rewrite](./natural-rewrite) | 把中文或英文文本改得自然流畅，同时保持事实、语气和含义 | 英文 / 中文 |
+| [weekly-work-summary](./weekly-work-summary) | 基于工作区证据重建周报、状态总结和按日回顾，区分事实与推断 | 英文 / 中文 |
+| [skill-repository-maintainer](./skill-repository-maintainer) | 审计、验证并安全同步 Skill 仓库，隔离私有运行时文件 | 英文 / 中文 |
+| [environment-bootstrap](./environment-bootstrap) | 安全恢复 Codex Skill 环境并校验哈希，不删除目标端额外文件 | 英文 / 中文 |
 
-## Install
+## 安装
 
 ```bash
-# Replace <skill-name> with any entry in the table above.
+# 将 <skill-name> 替换为上表中的任意 Skill 名称。
 npx skills add https://github.com/ooooooooooooooooooop/skills --skill <skill-name>
 ```
 
-## Usage
+## 使用
 
-After installation, trigger skills with:
+安装后，可使用以下方式触发 Skill：
 
 ```text
 /simulate-elite-experts
 /unified-taskflow
+/clarify-before-change
+/task-mode-router
+/minimal-implementation
+/natural-rewrite
+/weekly-work-summary
 /skill-repository-maintainer
 /environment-bootstrap
 ```
 
-## Repository Layout
+## 仓库结构
 
 ```text
 <skill-name>/
-  SKILL.md              # Required skill definition
-  agents/openai.yaml    # Published skill metadata
-  examples/              # Representative inputs and outputs
-  references/            # Long-form rules and evaluation material
-  scripts/               # Deterministic helpers, when needed
+  SKILL.md              # Skill 定义
+  agents/openai.yaml    # 发布用元数据
+  examples/              # 代表性输入与输出
+  references/            # 详细规则与评估材料
+  scripts/               # 按需提供的确定性辅助脚本
 
 scripts/
-  validate_repo.py       # Validate manifest, packages, frontmatter, and links
-  sync_skills.py         # Check or explicitly sync packages to another device
-tests/                   # Repository-level fixtures and regression checks
-docs/                    # Repository architecture and release notes
+  validate_repo.py       # 校验 manifest、Skill 包、frontmatter 和链接
+  sync_skills.py         # 检查或显式同步 Skill 包到其他设备
+tests/                   # 仓库级 fixture 与回归测试
+docs/                    # 仓库架构与发布说明
 ```
 
-See [architecture.md](./docs/architecture.md), [skill-contract.md](./docs/skill-contract.md), and [sync-and-release.md](./docs/sync-and-release.md) for the source-of-truth boundary, package contract, and cross-device workflow.
+关于源仓库边界、Skill 包契约和跨设备流程，请参阅 [架构说明](./docs/architecture.md)、[Skill 契约](./docs/skill-contract.md) 和 [同步发布流程](./docs/sync-and-release.md)。
 
-Runtime state such as `.taskflow/`, `.grepai/`, `node_modules/`, local memory,
-temporary inspection files, and generated weekly reports is intentionally kept
-outside the published skill packages.
+`.taskflow/`、`.grepai/`、`node_modules/`、本地记忆、临时检查文件和生成的周报等运行时状态，不会进入已发布的 Skill 包。
 
-## License
+## 许可证
 
 [MIT](./LICENSE)

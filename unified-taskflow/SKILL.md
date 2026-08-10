@@ -1,7 +1,9 @@
 ---
 name: unified-taskflow
 description: |
-  重型复杂任务管理系统。仅在用户明确要求使用 unified-taskflow、taskflow、.taskflow，或任务确实需要跨多轮/多文件/多阶段的 anchor、checkpoint、design、恢复与验收追踪时使用。不要用于小修、普通优化、普通重构、单个 skill 小改、日常 bug fix，或 task-mode-router / minimal-implementation 已足够处理的任务。
+  面向真正复杂任务的重型管理系统，使用 anchor、checkpoint、design、恢复和验收追踪。
+  仅在用户明确要求使用 unified-taskflow、taskflow、.taskflow，或任务确实需要跨多轮、多文件、多阶段的可恢复记录时使用。
+  不用于小修、普通优化、普通重构、单个 Skill 小改、日常 bug fix，或 task-mode-router / minimal-implementation 已足够处理的任务。
 ---
 
 # Unified Taskflow v4.3
