@@ -117,6 +117,7 @@ description: |
 - `scripts/task-lifecycle.py` 使用 `assets/templates/` 作为 anchor、checkpoint、design 的唯一模板源；不要在脚本中复制第二份模板。
 - 新任务名必须是安全的单一路径组件（字母/数字/`-`/`_`，最多 64 个字符）；不接受绝对路径、`..` 或路径分隔符。
 - 可用 `--project-path <path>` 指定项目根目录；`list` 和 `status` 可附加 `--json` 生成机器可读状态。默认仍为当前工作目录。
+- `task-lifecycle.py --help` 和 `session-catchup.py --help` 必须显示帮助并以 0 退出；帮助参数不能被当作项目路径或任务名。
 - `index.json` 写入经过 schema/lifecycle 校验并采用原子替换；历史 `archived` 状态继续只读兼容。
 
 ### 3-Strike Protocol
@@ -164,6 +165,25 @@ description: |
 - 选择题优先，3-4 个选项
 - 每个选择点有推荐选项
 - 可选参考：[interaction-design.md](references/interaction-design.md)
+
+## 输出契约
+
+每个阶段都应明确当前状态、已完成项、未完成项、阻塞项、下一步和验收证据。完成前逐项核对 anchor.md 的 Critical Constraints 与 Done-when；任何未验证项都不能标记为完成。
+
+脚本的机器可读输出使用 `--json`，人类可读输出保留原始错误和实际路径。不会用旧 checkpoint、模糊的“仍在正轨”或静默降级替代逐项核对。
+
+## 验证
+
+最小验证集：
+
+```bash
+python3 scripts/task-lifecycle.py new demo-task
+python3 scripts/task-lifecycle.py validate
+python3 scripts/task-lifecycle.py complete --message "验证完成"
+python3 scripts/session-catchup.py --help
+```
+
+应在隔离项目中运行，不能把测试任务写入当前仓库的正式 `.taskflow/`。
 
 ## 引用文件
 

@@ -378,29 +378,27 @@ Rules:
 - It appears after the Uncertainty Ledger, as a non-numbered appendix (not counted in the main section count).
 - Keep it to exactly 5 questions. Do not expand or customize.
 
-## Evaluation and Regression
+## 评估与回归
 
-Use:
+使用：
 - `references/eval-rubric.md` for scoring criteria.
 - `references/eval-cases.md` for regression test prompts.
 - `references/first-use-guide.md` for onboarding new users.
 - `scripts/lint_response.ps1` for hard-gate structure checks on generated outputs.
 - `scripts/lint_response.py` for the portable hard-gate validator.
 - `scripts/run_examples.ps1` for repository example smoke tests.
-- `scripts/run_examples.py` for cross-platform smoke tests covering `micro`, `lean`, `classic`, and `deep` profiles.
+- `scripts/run_examples.py`：跨平台结构 smoke test，覆盖 `micro`、`lean`、`classic` 和 `deep`。
 
-When updating this skill:
-- Run at least 5 cases from `eval-cases.md`.
-- Ensure every case matches its profile's section and role count requirements.
-- Track rubric score before/after edits and avoid regressions (new baseline: 0-20 scale).
-- Record outcomes using a compact log: date, cases run, pass rate, avg score, fail reasons.
-- Run example smoke tests before packaging or publishing.
-- Keep the PowerShell entry point for Windows users and use the Python validator in CI or other environments; both must enforce the same section, round, uncertainty, and self-check gates.
+更新本 Skill 时：
 
-## Output Contract
+- 至少运行 `eval-cases.md` 中推荐的 5 个案例，而不是只运行四档结构 fixture。
+- 逐案检查 profile 的章节数、角色数、轮次、不确定性和 self-check。
+- 记录修改前后评分、通过率、平均分和失败原因；没有真实输出时不要虚构评分。
+- Windows 保留 PowerShell 入口，CI 使用 Python 入口；两者必须执行相同的硬门禁。
 
-- Use `references/output-templates.md` for English output.
-- Use `references/output-templates-zh.md` for Chinese output.
-- If user asks for brevity, keep all sections required by the active profile and compress each section to 1-3 bullets.
-- If using `lean` profile, keep all required sections and all active role turns per round.
-- If using `micro` profile, use the 5-section template with 2 roles.
+## 输出契约
+
+- 英文输出使用 `references/output-templates.md`，中文输出使用 `references/output-templates-zh.md`；用户使用中文时默认中文。
+- 用户要求简短时仍保留当前 profile 的全部必需章节，每节压缩为 1-3 个要点。
+- `lean` 保留 4 个角色、4 轮和 7 个章节；`micro` 保留 2 个角色、2 轮和 5 个章节。
+- 缺少本地或当前事实时，必须写入假设或不确定性台账，不得用角色口吻补齐事实。

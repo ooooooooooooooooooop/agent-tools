@@ -22,6 +22,7 @@ LOCAL_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 VALID_CATEGORIES = {"reasoning", "workflow", "writing", "reporting", "maintenance"}
 VALID_PRIORITIES = {"P0", "P1", "P2"}
+VALID_TIERS = {"core", "conditional", "optional"}
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 EXCLUDED_DIRS = {
     ".git",
@@ -191,6 +192,9 @@ def validate(strict: bool = False) -> Dict[str, Any]:
         priority = entry.get("priority")
         if priority not in VALID_PRIORITIES:
             errors.append(f"{name} has invalid priority: {priority!r}")
+        tier = entry.get("tier")
+        if tier not in VALID_TIERS:
+            errors.append(f"{name} has invalid tier: {tier!r}")
         dependencies = entry.get("depends_on")
         if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
             errors.append(f"{name} must declare depends_on as a list of skill names")
@@ -251,11 +255,43 @@ def validate(strict: bool = False) -> Dict[str, Any]:
                 "missing_optional": missing_optional,
                 "category": entry.get("category"),
                 "priority": entry.get("priority"),
+                "tier": entry.get("tier"),
                 "depends_on": entry.get("depends_on", []),
             }
         )
 
     known_names = set(manifest_names)
+
+    profiles = manifest.get("profiles") if isinstance(manifest, dict) else None
+    if not isinstance(profiles, dict) or not profiles:
+        errors.append("skills.json must contain a non-empty profiles mapping")
+        profiles = {}
+    for profile_name, profile_skills in profiles.items():
+        if not isinstance(profile_name, str) or not SKILL_NAME_RE.fullmatch(profile_name):
+            errors.append(f"invalid install profile name: {profile_name!r}")
+            continue
+        if not isinstance(profile_skills, list) or not all(isinstance(item, str) for item in profile_skills):
+            errors.append(f"profile {profile_name} must contain a list of skill names")
+            continue
+        if len(profile_skills) != len(set(profile_skills)):
+            errors.append(f"profile {profile_name} contains duplicate skill names")
+        unknown_profile_skills = sorted(set(profile_skills) - known_names)
+        for skill_name in unknown_profile_skills:
+            errors.append(f"profile {profile_name} contains unregistered skill: {skill_name}")
+    full_profile = profiles.get("full")
+    if isinstance(full_profile, list) and set(full_profile) != known_names:
+        errors.append("profile full must contain every registered skill exactly once")
+    core_profile = profiles.get("core")
+    tier_by_name = {
+        item["name"]: item.get("tier")
+        for item in checked_skills
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if isinstance(core_profile, list):
+        for skill_name in core_profile:
+            if tier_by_name.get(skill_name) != "core":
+                errors.append(f"profile core contains a non-core skill: {skill_name}")
+
     for name, dependencies in dependency_checks:
         for dependency in dependencies:
             if dependency == name:

@@ -18,6 +18,7 @@ SCRIPTS = ROOT / "scripts"
 VALIDATOR = SCRIPTS / "validate_repo.py"
 SYNC = SCRIPTS / "sync_skills.py"
 TASKFLOW = ROOT / "unified-taskflow" / "scripts" / "task-lifecycle.py"
+QUALITY = ROOT / "skill-quality-gate" / "scripts" / "quality_report.py"
 
 
 class RepositoryContractTests(unittest.TestCase):
@@ -44,7 +45,18 @@ class RepositoryContractTests(unittest.TestCase):
         names = {entry["name"] for entry in manifest["skills"]}
         self.assertIn("skill-repository-maintainer", names)
         self.assertIn("environment-bootstrap", names)
+        self.assertIn("skill-quality-gate", names)
+        self.assertNotIn("weekly-work-summary", names)
         self.assertEqual(len(names), len(manifest["skills"]))
+
+    def test_install_profiles_cover_registered_packages(self) -> None:
+        manifest = json.loads((ROOT / "skills.json").read_text(encoding="utf-8"))
+        names = {entry["name"] for entry in manifest["skills"]}
+        tiers = {entry["name"]: entry["tier"] for entry in manifest["skills"]}
+        self.assertTrue(manifest["profiles"]["core"])
+        self.assertEqual(set(manifest["profiles"]["full"]), names)
+        self.assertTrue(all(tier in {"core", "conditional", "optional"} for tier in tiers.values()))
+        self.assertTrue(set(manifest["profiles"]["core"]).issubset(names))
 
     def test_public_introductions_are_chinese(self) -> None:
         manifest = json.loads((ROOT / "skills.json").read_text(encoding="utf-8"))
@@ -69,6 +81,10 @@ class RepositoryContractTests(unittest.TestCase):
             checked = self.run_script(SYNC, "--destination", str(destination), "--check")
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             self.assertTrue(extra.is_file())
+
+    def test_quality_gate(self) -> None:
+        result = self.run_script(QUALITY, "--root", str(ROOT), "--strict")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_taskflow_lifecycle_in_isolated_project(self) -> None:
         with tempfile.TemporaryDirectory(prefix="skills-taskflow-") as raw:

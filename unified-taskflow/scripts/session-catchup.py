@@ -80,6 +80,10 @@ def detect_task_files(task_dir: Path) -> Dict[str, bool]:
 
 
 def main():
+    if any(item in {"--help", "-h"} for item in sys.argv[1:]):
+        print(__doc__)
+        return
+
     project_path = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     root = get_taskflow_root(project_path)
 

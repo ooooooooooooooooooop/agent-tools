@@ -1,4 +1,0 @@
-interface:
-  display_name: "周工作总结"
-  short_description: "基于工作区证据重建周报、状态总结和按日回顾，区分事实与推断。"
-  default_prompt: "使用 $weekly-work-summary，基于当前工作区证据撰写本周工作总结。"

@@ -48,8 +48,14 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_entries() -> List[Dict[str, Any]]:
+def load_manifest() -> Dict[str, Any]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8-sig"))
+    if not isinstance(manifest, dict):
+        raise ValueError("skills.json must contain an object")
+    return manifest
+
+
+def load_entries(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     entries = manifest.get("skills")
     if not isinstance(entries, list):
         raise ValueError("skills.json must contain a skills array")
@@ -106,7 +112,9 @@ def atomic_copy(source: Path, destination: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, required=True)
-    parser.add_argument("--skill", action="append", dest="skills", help="limit to one or more skill names")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--skill", action="append", dest="skills", help="limit to one or more skill names")
+    selection.add_argument("--profile", help="sync a manifest install profile such as core or full")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="read-only comparison")
     mode.add_argument("--apply", action="store_true", help="copy source files to the destination")
@@ -121,9 +129,16 @@ def main() -> int:
             details = "; ".join(source_validation["errors"][:5])
             raise ValueError(f"source repository validation failed: {details}")
         ensure_destination_is_safe(args.destination)
-        entries = load_entries()
-        selected = set(args.skills or [entry.get("name") for entry in entries])
+        manifest = load_manifest()
+        entries = load_entries(manifest)
         known = {entry.get("name"): entry for entry in entries}
+        if args.profile:
+            profiles = manifest.get("profiles")
+            if not isinstance(profiles, dict) or args.profile not in profiles:
+                raise ValueError(f"unknown install profile: {args.profile}")
+            selected = set(profiles[args.profile])
+        else:
+            selected = set(args.skills or [entry.get("name") for entry in entries])
         unknown = sorted(selected - set(known))
         if unknown:
             raise ValueError(f"unknown skill name(s): {', '.join(unknown)}")
@@ -157,7 +172,12 @@ def main() -> int:
             print(f"ERROR: {exc}")
         return 1
 
-    result = {"pass": all(item["pass"] for item in results), "results": results}
+    result = {
+        "pass": all(item["pass"] for item in results),
+        "profile": args.profile,
+        "skills": sorted(item["skill"] for item in results),
+        "results": results,
+    }
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

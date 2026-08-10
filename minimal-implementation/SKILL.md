@@ -3,68 +3,47 @@ name: minimal-implementation
 description: 以最小正确改动完成代码、Skill、规则、脚本、修复、重构和工作流修改，并提供可复核的验证证据。用于修改代码、Skill、规则文件、脚本、辅助函数或工具，或用户要求优化、改进、重构、稳定化和增强鲁棒性的场景，避免不必要的辅助代码、降级路径、抽象、依赖、整文件重写和无关重构。
 ---
 
-# Minimal Implementation
+# 最小正确实现
 
-Use this skill to keep changes small, correct, and grounded in the existing project.
+## 核心规则
 
-## Core Rule
+只做当前请求需要的最小正确修改。用户明确要求架构、长期扩展或全面重构时，才扩大设计范围；普通“优化”不自动等于全面重写。
 
-Make the smallest correct change that solves the current request. Do not expand scope for "engineering completeness" unless the user explicitly asks for architecture, long-term extensibility, or a broader redesign.
+## 决策阶梯
 
-## Decision Ladder
+新增代码、规则、文件、辅助函数或抽象前，依次确认：
 
-Before adding new code, rules, files, helpers, or abstractions, check in order:
+1. 这件事是否真的需要存在？
+2. 项目中是否已有实现、模式、规则、脚本或工具？
+3. 能否复用现有结构？
+4. 标准库是否足够？
+5. 平台原生能力是否足够？
+6. 已安装依赖是否足够？
+7. 只有前面都不满足时，才添加最小实现。
 
-1. Does this need to exist at all?
-2. Is there already an implementation, pattern, rule, helper, script, or tool in this project?
-3. Can the existing structure be reused?
-4. Can the standard library solve it?
-5. Can a platform/native capability solve it?
-6. Can an already-installed dependency solve it?
-7. Only then add the smallest implementation that works.
+在第一个满足请求的层级停止。
 
-Stop at the first rung that satisfies the request.
+## 变更预算
 
-## Guardrails
+编辑前写下最小影响面、验收检查和明确不改的相邻文件。若新增抽象不能消除真实重复、提高正确性或让验证确定化，就不要新增。
 
-- Do not add unnecessary helpers.
-- Do not add unnecessary fallback paths.
-- Do not add unnecessary abstractions.
-- Do not introduce new dependencies unless required.
-- Do not do unrelated refactors.
-- Do not rewrite whole files unless the user explicitly asks.
-- Do not broaden the task just to make it feel more engineered.
-- Preserve existing naming, structure, and style when possible.
-- For bug fixes, fix the root cause in the shared path rather than patching only the visible symptom.
+## 安全边界
 
-## Change Budget and Acceptance
+- 不添加无必要的 fallback、依赖、抽象或无关重构。
+- 不用吞异常、静默降级、旧产物或修改测试预期掩盖根因。
+- 修复共享路径上的根因，不只修补可见症状。
+- 保留现有命名、结构和风格，除非用户明确要求改变。
+- 只读审计不修改文件；高风险写入必须确认精确目标和回滚方式。
 
-Before editing, write down the smallest affected surface and the acceptance check that proves it. Keep an explicit `intentionally not changed` list for nearby files that could be tempting to refactor. If a new helper or abstraction does not remove real duplication, improve correctness, or make verification deterministic, do not add it.
+## 输出契约
 
-Do not treat a passing exit code or a stale artifact as proof. Prefer fresh, artifact-level evidence: targeted tests, validator output, hashes, rendered output, or a direct behavior check.
+小任务简要报告改动和验证。中大型任务报告：
 
-## Output Behavior
+- 修改面和复用的现有实现；
+- 验收证据；
+- 有意未修改的范围；
+- 残余风险或真正阻塞。
 
-For small tasks:
-- Make the minimal change directly.
-- Keep explanation short.
+## 验证
 
-For medium or large tasks:
-- State what existing implementation, pattern, or rule can be reused.
-- State the minimal change plan.
-- State what extensions are intentionally not being done.
-- State the verification method.
-
-After the change, report:
-
-- changed surface;
-- acceptance evidence;
-- intentionally unchanged surface;
-- remaining risk or a true blocker.
-
-## When Full Design Is Allowed
-
-Use a broader design only when:
-- the user explicitly asks for architecture, long-term extensibility, or a full redesign;
-- the existing code shape requires a shared abstraction to avoid real duplication or inconsistent behavior;
-- safety, security, data-loss prevention, accessibility, or correctness would be weakened by the smaller change.
+不要把 exit code 或旧产物单独当作成功证据。优先使用新鲜的定向测试、validator、哈希、渲染结果或直接行为检查。

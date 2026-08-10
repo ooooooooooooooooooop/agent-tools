@@ -15,6 +15,9 @@ jobs:
       - name: Validate skill repository
         run: python3 scripts/validate_repo.py --strict
 
+      - name: Run Skill quality gate
+        run: python3 skill-quality-gate/scripts/quality_report.py --root . --strict
+
       - name: Lint Markdown
         uses: DavidAnson/markdownlint-cli2-action@v19
         with:

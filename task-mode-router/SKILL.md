@@ -3,75 +3,75 @@ name: task-mode-router
 description: 按任务规模与风险选择执行深度，避免流程过度或风险失控。用于判断代码、配置、文档和工作流请求应采用小型直接修改、中型计划变更、大型分阶段执行，还是高风险流程；高风险场景包括安装工具、修改全局配置、添加 MCP 服务或 hooks、删除文件、修改权限和使用浏览器登录状态。
 ---
 
-# Task Mode Router
+# 任务模式路由
 
-Use this skill to choose the lightest workflow that still controls risk.
+## 目标
 
-## Small Task
+选择能够控制实际风险的最轻执行模式。只负责分类和路由，不代替后续 Skill 执行，也不因为分类而自动写入文件。
 
-Characteristics:
-- Single file or single point change.
-- Clear instruction.
-- Low risk.
-- Easy to verify and roll back.
+## 分类
 
-Action:
-- Make the smallest change directly.
-- Avoid long plans, new abstractions, and new dependencies.
+### 小型任务
 
-## Read-Only Audit
+单文件或单点修改、目标明确、风险低、容易验证和回滚。
 
-Characteristics:
-- The user asks to inspect, compare, explain, review, or report status.
-- No file, repository, external system, or configuration write is requested.
+处理：直接做最小修改，不引入新抽象、依赖或长流程。
 
-Action:
-- Use the smallest evidence-gathering workflow.
-- Do not create reports, alter strategy/configuration, sync files, or clean up artifacts as an implied next step.
-- Report facts, inference, and remaining uncertainty separately.
+### 只读审计
 
-## Medium Task
+用户要求检查、比较、解释、审查或报告状态，未授权文件、仓库、外部系统或配置写入。
 
-Characteristics:
-- Multiple edits or moderate judgment.
-- Possible behavior impact.
-- Verification is needed.
+处理：只收集证据；不生成额外报告文件，不同步、不清理、不修改策略或配置。
 
-Action:
-- Give a short plan.
-- State the affected files and risk.
-- Execute after the plan is clear.
-- Report verification and rollback.
+### 中型任务
 
-## Large Task
+涉及多个文件或需要适度判断，可能影响行为，且需要验证。
 
-Characteristics:
-- Multi-file feature, refactor, architecture change, rule-system change, or long-term workflow.
-- Requirements or acceptance criteria matter.
+处理：给出短计划，说明影响面和风险，完成修改并报告验证与回滚方式。
 
-Action:
-- Define goal, non-goals, constraints, impact, and acceptance criteria.
-- Use the repository's task tracking method when one exists.
-- Wait for confirmation if material ambiguity remains.
+### 大型任务
 
-## High-Risk Task
+多文件功能、架构重构、规则系统变更、长期工作流或需要验收标准的任务。
 
-Characteristics:
-- Installing Skill, MCP, CLI, plugin, or hook.
-- Changing user-level or global configuration.
-- Deleting, moving, or permission-changing operations.
-- Running untrusted code.
-- Using real browser login state or sensitive pages.
+处理：先明确目标、非目标、约束、影响和验收标准；有实质歧义时先确认，再分阶段执行。
 
-Action:
-- Audit first.
-- Explain source, command, files written, local file access, command execution, upload risk, permissions, verification, and rollback.
-- Do not proceed without explicit confirmation.
+### 高风险任务
 
-## Precedence and Composition
+安装 Skill、MCP、CLI、插件或 hooks；修改用户级/全局配置；删除、移动或改变权限；运行不可信代码；使用浏览器登录状态或敏感页面。
 
-Apply the highest applicable risk class: high-risk write > read-only audit boundary > large/medium/small execution depth. A read-only request remains read-only even if the likely next action would be useful. Use `clarify-before-change` for unresolved scope, `minimal-implementation` for the selected implementation, and `unified-taskflow` only when the large-task trigger and recovery tracking are genuinely needed; dependencies guide routing and do not authorize actions.
+处理：先审计来源、命令、写入路径、权限、上传风险和回滚方式；没有明确授权时停止。
 
-## Decision Rule
+## 路由顺序
 
-Choose the lowest mode that covers the actual risk. Do not make small tasks ceremonial, and do not treat high-risk tasks as ordinary edits.
+按以下优先级判断：
+
+1. 只读请求保持只读，不因“顺便修复”而扩大范围。
+2. 高风险写入优先于任务规模判断。
+3. 再区分小型、中型和大型执行深度。
+4. 大型任务只有在确实需要可恢复锚点、检查点和交接记录时才使用 `unified-taskflow`。
+
+## Skill 组合
+
+- 本 Skill 只做模式分类。
+- 有实质歧义时交给 `clarify-before-change`。
+- 确定要修改时交给 `minimal-implementation` 控制变更预算。
+- 只有大型、跨阶段且需要恢复记录时才交给 `unified-taskflow`。
+- 依赖关系只表示建议组合，不代表自动安装或自动执行。
+
+## 输出契约
+
+输出以下字段：
+
+```text
+模式：small | audit | medium | large | high-risk
+依据：触发该模式的事实
+允许动作：当前模式可以做什么
+禁止动作：当前模式明确不能做什么
+下一步：需要调用的 Skill 或最小执行路径
+```
+
+如果证据不足，只指出缺失信息；不要用猜测替代风险分类。
+
+## 验证
+
+分类完成后检查：模式是否与用户授权一致、是否遗漏高风险写入、是否误把只读审计变成了修改任务。相关示例见 [multi-file-change.md](examples/multi-file-change.md)。

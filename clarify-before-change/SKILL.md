@@ -3,62 +3,48 @@ name: clarify-before-change
 description: 在修改前澄清范围、风险、假设与验收标准，避免误改。用于修改 Skill、AGENTS.md、项目规则、工作流规则、仓库结构、复杂代码或具有结构影响的文档，也用于优化 Skill、调整规则、重构、重组或需求不完整的场景。
 ---
 
-# Clarify Before Change
+# 修改前澄清
 
-Use this skill to prevent premature edits when the target, scope, or risk is unclear.
+## 适用范围
 
-## Workflow
+当修改目标、业务含义、影响范围或验收标准存在实质歧义时使用。本 Skill 只建立变更边界，不执行修改。
 
-1. Restate the user's goal in one sentence.
-2. Identify missing information that materially affects the change.
-3. List the assumptions you would otherwise make.
-4. List the main risks, including reversibility and cross-file impact.
-5. Propose the smallest executable path.
-6. Ask at most one key question if the answer is required before work can proceed.
-7. If the task is clear and low-risk, do not over-question; proceed with the minimal path.
+## 工作流程
 
-## Evidence-First Gate
+1. 用一句话重述用户目标。
+2. 先检查代码、配置、测试、规则、调用关系和历史行为，优先从仓库证据消除歧义。
+3. 列出仍然会影响目标、业务语义或不可逆范围的缺失信息。
+4. 明确默认假设、主要风险、受影响文件和可回滚方式。
+5. 给出最小可执行路径和验收标准。
+6. 只有缺失信息确实阻止继续时才提一个关键问题；否则采用可逆假设继续。
 
-Before asking a question, inspect the files, tests, rules, call sites, and current behavior that can answer it. Classify the request as:
+## 证据门禁
 
-- `audit`: read-only inspection; report evidence and do not edit;
-- `change`: an authorized reversible edit with a concrete target;
-- `high-risk`: a write outside the project, deletion, credentialed action, install, or global configuration change.
+将请求分为：
 
-Proceed when repository evidence resolves the ambiguity. Ask one focused question only when the missing answer changes the target, business meaning, or irreversible scope. If a safe narrow path exists, use it and record the assumption in the final report.
+- `audit`：只读检查，不创建报告、不修改文件、不同步目的地。
+- `change`：用户已授权的可逆修改，有明确目标和验证方式。
+- `high-risk`：删除、移动、用户级/全局写入、凭据、权限或外部系统操作。
 
-## Decision Record
+不要因为“可能存在不确定性”就停下；只有答案会改变目标、业务意义或不可逆范围时才提问。
 
-For a medium or large change, keep this compact record before editing:
+## 决策记录
 
-```text
-Facts: repository evidence already confirmed
-Assumptions: unresolved but reversible choices
-Risk: files, behavior, data, or external state affected
-Minimal path: smallest change that satisfies the request
-Non-goals: explicitly unchanged areas
-Status: proceed | ask | blocked
-```
-
-## Guardrails
-
-- Do not execute high-risk or ambiguous changes immediately.
-- Do not ask questions just to create process overhead.
-- Do not invent hidden fallback behavior.
-- Separate facts from assumptions.
-- If a later discovery invalidates the direction, stop and reassess before editing further.
-
-## Output
-
-Use this shape when clarification is needed:
+中型或大型修改在动手前记录：
 
 ```text
-Goal:
-Missing information:
-Assumptions:
-Risks:
-Minimal path:
-Question:
+事实：已由仓库证据确认的内容
+假设：尚未确认但可逆的选择
+风险：文件、行为、数据和外部状态影响
+最小路径：满足目标的最小改动
+非目标：明确不改的相邻内容
+状态：proceed | ask | blocked
 ```
 
-For an audit or completed change, report the status and evidence instead of emitting an empty question template.
+## 输出契约
+
+审计或已完成的澄清应报告目标、证据、假设、风险、最小路径、非目标和状态。需要提问时最多提出一个会改变执行边界的问题。
+
+## 验证
+
+继续执行前确认：目标路径已确定、写入权限已获得、删除/移动目标已精确解析、验收条件可观察。相关示例见 [ambiguous-restructure.md](examples/ambiguous-restructure.md)。
