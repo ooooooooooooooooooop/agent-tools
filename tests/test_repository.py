@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,19 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("skill-repository-maintainer", names)
         self.assertIn("environment-bootstrap", names)
         self.assertEqual(len(names), len(manifest["skills"]))
+
+    def test_public_introductions_are_chinese(self) -> None:
+        manifest = json.loads((ROOT / "skills.json").read_text(encoding="utf-8"))
+        readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+        chinese = re.compile(r"[\u3400-\u9fff]")
+        for entry in manifest["skills"]:
+            self.assertRegex(entry["description"], chinese, entry["name"])
+            matching = [line for line in readme_lines if f"[{entry['name']}]" in line]
+            self.assertEqual(len(matching), 1, entry["name"])
+            self.assertRegex(matching[0], chinese, entry["name"])
+            skill_text = (ROOT / entry["path"] / "SKILL.md").read_text(encoding="utf-8")
+            frontmatter = skill_text.split("---", 2)[1]
+            self.assertRegex(frontmatter, chinese, entry["name"])
 
     def test_sync_apply_then_check(self) -> None:
         with tempfile.TemporaryDirectory(prefix="skills-sync-") as raw:

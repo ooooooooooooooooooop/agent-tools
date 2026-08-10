@@ -1,4 +1,4 @@
 interface:
-  display_name: "Unified Taskflow"
-  short_description: "Track genuinely large multi-stage tasks."
-  default_prompt: "Use $unified-taskflow only when the task needs multi-stage anchors, checkpoints, recovery, or auditable acceptance tracking."
+  display_name: "统一任务流"
+  short_description: "管理真正复杂的多阶段任务，追踪锚点、检查点与验收。"
+  default_prompt: "仅在任务需要多阶段锚点、检查点、恢复机制或可审计验收追踪时使用 $unified-taskflow。"

@@ -1,31 +1,31 @@
 ---
 name: your-skill-name
-description: One-line description of what this skill does
+description: 用一句中文说明这个 Skill 能做什么，以及何时应该触发它
 version: 0.1.0
 triggers:
-  - "trigger phrase 1"
-  - "trigger phrase 2"
+  - "触发短语 1"
+  - "触发短语 2"
 not_for:
-  - "out-of-scope request"
+  - "不适用的请求"
 depends_on: []
 ---
 
-# Your Skill Name
+# 你的 Skill 名称
 
-## When to Use
+## 使用场景
 
-Describe when this skill should be activated.
+说明何时应该触发这个 Skill。
 
-## Workflow
+## 工作流程
 
-1. Step one
-2. Step two
-3. Step three
+1. 第一步
+2. 第二步
+3. 第三步
 
-## Output Contract
+## 输出契约
 
-Describe the expected output format.
+说明预期的输出格式。
 
-## Verification
+## 验证
 
-Describe the smallest check that proves the skill followed its contract.
+说明能够证明 Skill 遵守契约的最小检查。

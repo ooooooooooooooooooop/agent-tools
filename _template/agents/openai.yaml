@@ -1,4 +1,4 @@
 interface:
-  display_name: "Your Skill Name"
-  short_description: "One-line description for the skill picker."
-  default_prompt: "Use $your-skill-name when the user's request matches its published trigger conditions."
+  display_name: "你的 Skill 名称"
+  short_description: "填写面向用户的中文简介，说明 Skill 能做什么。"
+  default_prompt: "当用户请求符合已发布的触发条件时，使用 $your-skill-name。"

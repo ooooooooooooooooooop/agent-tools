@@ -1,6 +1,6 @@
 ---
 name: natural-rewrite
-description: Rewrite messages, emails, comments, explanations, social posts, or copy into natural human-sounding wording while preserving meaning. Use for Chinese or English text polishing, de-AI wording, WeChat replies, private messages, email drafts, comments, and concise natural rewrites; do not add unconfirmed facts.
+description: 在保持事实、语气和含义的前提下，把消息、邮件、评论、解释、社交媒体内容或文案改写得自然流畅。用于中文或英文润色、去除机器翻译感、微信回复、私信、邮件草稿、评论和简洁改写；不得添加未经确认的事实。
 ---
 
 # Natural Rewrite

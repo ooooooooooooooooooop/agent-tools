@@ -1,6 +1,6 @@
 ---
 name: weekly-work-summary
-description: Evidence-based weekly status synthesis for any current workspace or user-specified folder. Use when the user asks for a weekly report, asks what was done recently, asks for a concise day-by-day recap, or gives a vague prompt such as "weekly summary", "status update", "what did we do this week", "本周工作总结", "周报", "总结本周", "这周干了什么", or "最近做了什么". This skill is not a shortcut for a fixed phrase or a project-specific workflow; it defines how to reconstruct work from local evidence when the user does not spell out the method.
+description: 基于当前工作区或用户指定文件夹的本地证据，重建周报、状态总结和按日回顾，并区分事实与推断。用于用户要求周报、近期工作回顾、简洁的每日总结，或提出“本周工作总结”“周报”“总结本周”“这周干了什么”“最近做了什么”等模糊请求；它不是固定短语宏，而是在用户未指定方法时定义如何从本地证据重建工作叙事。
 ---
 
 # Weekly Work Summary

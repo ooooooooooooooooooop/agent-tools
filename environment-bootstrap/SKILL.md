@@ -1,6 +1,6 @@
 ---
 name: environment-bootstrap
-description: Restore a known set of Codex skills from a source repository to another device or user-level skill directory with a read-only audit, explicit apply step, SHA-256 verification, and no deletion of destination-only files. Use when reproducing a Codex work environment, comparing installed skills with a backup repository, or preparing a safe cross-device restore.
+description: 从源仓库向其他设备或用户级 Skill 目录恢复已登记的 Codex Skill，提供只读审计、显式应用、SHA-256 校验，并且不删除目标端额外文件。用于复现 Codex 工作环境、比较已安装 Skill 与备份仓库，或准备安全的跨设备恢复。
 ---
 
 # Environment Bootstrap

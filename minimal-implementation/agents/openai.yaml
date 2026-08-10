@@ -1,4 +1,4 @@
 interface:
-  display_name: "Minimal Implementation"
-  short_description: "Make the smallest correct change and verify it."
-  default_prompt: "Use $minimal-implementation to limit the change to the smallest correct scope, preserve existing behavior, and state verification."
+  display_name: "最小实现"
+  short_description: "以最小正确改动完成任务，并提供可复核的验证证据。"
+  default_prompt: "使用 $minimal-implementation，将变更限制在最小正确范围内，保持现有行为并说明验证证据。"

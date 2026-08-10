@@ -1,4 +1,4 @@
 interface:
-  display_name: "Environment Bootstrap"
-  short_description: "Restore a known Codex skill environment"
-  default_prompt: "Use $environment-bootstrap to audit and restore the registered Codex skills on this device."
+  display_name: "环境恢复"
+  short_description: "安全恢复 Codex Skill 环境并校验哈希，不删除目标端额外文件。"
+  default_prompt: "使用 $environment-bootstrap，审计并恢复本设备登记的 Codex Skill。"

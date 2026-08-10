@@ -1,4 +1,4 @@
 interface:
-  display_name: "Skill Repository Maintainer"
-  short_description: "Audit and sync a Codex skill repository"
-  default_prompt: "Use $skill-repository-maintainer to audit, validate, and safely sync this skill repository."
+  display_name: "Skill 仓库维护"
+  short_description: "审计、验证并安全同步 Skill 仓库，隔离私有运行时文件。"
+  default_prompt: "使用 $skill-repository-maintainer，审计、验证并安全同步当前 Skill 仓库。"

@@ -1,9 +1,9 @@
 ---
 name: simulate-elite-experts
 description: |
-  Simulate high-stakes reasoning by modeling how top experts in the relevant domain would think, disagree, and converge on a decision.
-  Use when users ask to role-play strongest minds, compare elite viewpoints, or ask: what would be a good group of people to explore X, and what would they say.
-  Trigger for prompts like "think like world-class experts", "simulate top domain specialists", "role-play strongest domain people", and "use four-lens dialogue".
+  通过模拟相关领域顶级专家的思考、分歧与收敛，辅助高复杂度、高风险决策。
+  用于用户要求模拟顶尖人物、比较强势观点，或询问“应该找哪些优秀人物来讨论某个问题，以及他们可能会怎么说”。
+  适用于“用世界级专家视角思考”“模拟顶级领域专家”“扮演最强领域人物”和“使用四视角对话”等请求。
 ---
 
 # Simulate Elite Experts

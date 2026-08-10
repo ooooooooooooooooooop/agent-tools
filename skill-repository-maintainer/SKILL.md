@@ -1,6 +1,6 @@
 ---
 name: skill-repository-maintainer
-description: Audit and maintain a repository of Codex skills: inspect package layout, validate the manifest and metadata, detect private/runtime files, review organization, and explicitly synchronize registered packages to another device. Use when maintaining a skill backup repository, checking whether skills are complete, preparing a release, or comparing a source repository with an installed skill directory.
+description: 审计、验证并安全同步 Codex Skill 仓库：检查包结构、manifest 和元数据，识别私有或运行时文件，审查目录组织，并将已登记的包显式同步到其他设备。用于维护 Skill 备份仓库、检查 Skill 是否完整、准备发布，或比较源仓库与已安装 Skill 目录。
 ---
 
 # Skill Repository Maintainer
