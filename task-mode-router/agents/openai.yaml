@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Mode Router"
+  short_description: "Choose the lightest workflow that controls risk."
+  default_prompt: "Use $task-mode-router to classify the task as small, medium, large, or high-risk and state the matching execution boundary."

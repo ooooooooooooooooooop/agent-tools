@@ -3,16 +3,92 @@
     {
       "name": "simulate-elite-experts",
       "path": "./simulate-elite-experts",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Simulate high-stakes reasoning by modeling how top domain experts think, disagree, and converge",
-      "lang": ["en", "zh"]
+      "lang": ["en", "zh"],
+      "category": "reasoning",
+      "priority": "P1",
+      "depends_on": []
     },
     {
       "name": "unified-taskflow",
       "path": "./unified-taskflow",
-      "version": "4.1.0",
-      "description": "复杂任务管理系统，基于锚点锚定和检查点协议",
-      "lang": ["zh"]
+      "version": "4.3.0",
+      "description": "Heavy multi-stage task management system for explicit multi-turn and multi-file tasks with anchors, checkpoints, and acceptance tracking",
+      "lang": ["zh"],
+      "category": "workflow",
+      "priority": "P0",
+      "depends_on": ["task-mode-router", "minimal-implementation"]
+    },
+    {
+      "name": "clarify-before-change",
+      "path": "./clarify-before-change",
+      "version": "1.1.0",
+      "description": "Clarify ambiguous, high-risk, or multi-file changes before editing",
+      "lang": ["en", "zh"],
+      "category": "workflow",
+      "priority": "P0",
+      "depends_on": ["task-mode-router"]
+    },
+    {
+      "name": "task-mode-router",
+      "path": "./task-mode-router",
+      "version": "1.1.0",
+      "description": "Route tasks by size and risk before choosing execution depth",
+      "lang": ["en", "zh"],
+      "category": "workflow",
+      "priority": "P0",
+      "depends_on": []
+    },
+    {
+      "name": "natural-rewrite",
+      "path": "./natural-rewrite",
+      "version": "1.1.0",
+      "description": "Rewrite messages and copy into natural human-sounding wording without adding facts",
+      "lang": ["en", "zh"],
+      "category": "writing",
+      "priority": "P1",
+      "depends_on": []
+    },
+    {
+      "name": "minimal-implementation",
+      "path": "./minimal-implementation",
+      "version": "1.1.0",
+      "description": "Prefer the smallest correct change and avoid unnecessary helpers, fallbacks, abstractions, and unrelated refactors",
+      "lang": ["en", "zh"],
+      "category": "workflow",
+      "priority": "P0",
+      "depends_on": []
+    },
+    {
+      "name": "weekly-work-summary",
+      "path": "./weekly-work-summary",
+      "version": "1.1.0",
+      "description": "Evidence-based weekly status synthesis for any current workspace or user-specified folder",
+      "lang": ["en", "zh"],
+      "category": "reporting",
+      "priority": "P1",
+      "depends_on": []
+    },
+    {
+      "name": "skill-repository-maintainer",
+      "path": "./skill-repository-maintainer",
+      "version": "1.0.0",
+      "description": "Audit, organize, validate, and explicitly synchronize a repository of Codex skills",
+      "lang": ["en", "zh"],
+      "category": "maintenance",
+      "priority": "P0",
+      "depends_on": ["task-mode-router", "minimal-implementation"]
+    },
+    {
+      "name": "environment-bootstrap",
+      "path": "./environment-bootstrap",
+      "version": "1.0.0",
+      "description": "Safely restore a known skill set on another device with read-only audit, explicit apply, and hash verification",
+      "lang": ["en", "zh"],
+      "category": "maintenance",
+      "priority": "P0",
+      "depends_on": ["skill-repository-maintainer"]
     }
   ]
 }

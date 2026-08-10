@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate skill repository
+        run: python3 scripts/validate_repo.py --strict
+
       - name: Lint Markdown
         uses: DavidAnson/markdownlint-cli2-action@v19
         with:
@@ -26,3 +29,9 @@ jobs:
 
       - name: Validate skills.json
         run: python3 -c "import json; json.load(open('skills.json', encoding='utf-8'))"
+
+      - name: Run repository regression tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Run portable elite-experts smoke tests
+        run: python3 simulate-elite-experts/scripts/run_examples.py

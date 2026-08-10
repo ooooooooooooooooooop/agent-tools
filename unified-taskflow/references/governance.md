@@ -1,4 +1,6 @@
-# unified-taskflow 治理规范 v4.1
+# unified-taskflow 治理规范 v4.2
+
+> 本治理规范只适用于已经明确启动 unified-taskflow 的重型任务。普通小任务、中等任务、单个 skill 小改不应创建 `.taskflow/`。
 
 ## 一、目录隔离（强制）
 
@@ -35,6 +37,7 @@ NEW → ACTIVE → COMPLETED / ABANDONED
 - `ACTIVE ↔ SUSPENDED`：任务可在 active 和 suspended 之间切换
 - suspended 任务保留在 `active/` 下，仅在 index.json 中标记状态为 `suspended`
 - resume 时检查是否已有 active 任务，若有则拒绝
+- 旧版本索引中的 `archived` 状态只作为兼容读取状态；新归档应明确使用 `completed` 或 `abandoned`
 
 ---
 
@@ -61,7 +64,7 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 
 | 触发事件 | 动作 |
 |----------|------|
-| 每 2 次文件操作 | 更新 checkpoint + 内置 re-grounding 逐项核对 |
+| 关键文件操作批次 | 更新 checkpoint + 内置 re-grounding 逐项核对 |
 | 子任务完成 | 同上 |
 | 用户新指令 | 先更新 anchor.md（如需要），再更新 checkpoint |
 | 不确定性 | 同上，若偏移则暂停请示用户 |
@@ -78,7 +81,7 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 ## 四、门禁例外
 
 ### Debug Window
-- 统一 Checkpoint 协议放宽为 4 次文件操作触发一次
+- 统一 Checkpoint 协议可放宽为每个调试批次触发一次
 - 保留 3-Strike Protocol
 - 连续失败时触发额外 Re-grounding 核对
 
@@ -88,8 +91,8 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 
 | 文件 | 要求 |
 |------|------|
-| anchor.md | 必须，Phase 0 完成后创建，含版本号和分层约束 |
-| checkpoint.md | 必须，执行期间持续更新，含 Anchor Mirror 和滚动压缩 |
+| anchor.md | 启动 unified-taskflow 后必须，Phase 0 完成后创建，含版本号和分层约束 |
+| checkpoint.md | 启动 unified-taskflow 后必须，执行期间按关键事件更新，含 Anchor Mirror 和滚动压缩 |
 | design.md | 按需，复杂任务时生成 |
 
 ---

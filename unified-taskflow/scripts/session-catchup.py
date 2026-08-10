@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Session Catchup Script for unified-taskflow v4.1
+Session Catchup Script for unified-taskflow v4.3
 
 Analyzes .taskflow/ directory to recover context from previous sessions.
 
@@ -19,6 +19,7 @@ TASKFLOW_DIR = ".taskflow"
 ACTIVE_DIR = "active"
 ARCHIVE_DIR = "archive"
 INDEX_FILE = "index.json"
+TASKFLOW_VERSION = "4.3"
 
 
 def get_taskflow_root(project_path: str = ".") -> Path:
@@ -31,7 +32,7 @@ def load_index(root: Path) -> Dict:
     index_path = root / INDEX_FILE
     if index_path.exists():
         return json.loads(index_path.read_text(encoding='utf-8'))
-    return {"version": "4.1", "tasks": []}
+    return {"version": TASKFLOW_VERSION, "tasks": []}
 
 
 def get_active_task(root: Path) -> Optional[str]:
@@ -82,7 +83,7 @@ def main():
     project_path = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     root = get_taskflow_root(project_path)
 
-    print(f"\n[unified-taskflow v4.1] SESSION CATCHUP")
+    print(f"\n[unified-taskflow v4.3] SESSION CATCHUP")
     print(f"目录: {root}")
 
     if not root.exists():
@@ -153,12 +154,19 @@ def main():
 
         # Show recent archives
         index = load_index(root)
-        recent = [t for t in index.get("tasks", []) if t.get("status") in ("completed", "abandoned")][-5:]
+        recent = [
+            t for t in index.get("tasks", [])
+            if t.get("status") in ("completed", "abandoned", "archived")
+        ][-5:]
 
         if recent:
             print("\n最近归档:")
             for t in recent:
-                status = "[完成]" if t.get("status") == "completed" else "[放弃]"
+                status = {
+                    "completed": "[完成]",
+                    "abandoned": "[放弃]",
+                    "archived": "[归档]",
+                }.get(t.get("status"), "[归档]")
                 print(f"   {status} {t.get('archive_path', t.get('name'))}")
 
         print("\n--- 建议操作 ---")

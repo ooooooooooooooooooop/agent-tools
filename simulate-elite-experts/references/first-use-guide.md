@@ -33,6 +33,12 @@ Start with something real but not your highest-stakes decision. Good first-run e
 
 **For your first run, use `classic`** (it's the default, you don't need to specify it).
 
+### Step 2.5: Choose an Execution Mode
+
+Use `one-shot` when you want a complete answer immediately. This is the default.
+
+Use `interactive` when you want to approve or swap the expert roster before the dialogue starts.
+
 ### Step 3: Run the Prompt
 
 Simply ask:
@@ -46,10 +52,10 @@ Use simulate-elite-experts to analyze: [your question here]
 
 ### Step 4: Interact with the Output
 
-The framework will first present a **roster** of 4 experts. Before the dialogue begins, you'll be asked:
+In `interactive` mode, the framework will first present a **roster** of 4 experts. Before the dialogue begins, you'll be asked:
 - "Do these roles and people look right for your question?"
 
-This is your chance to swap in someone more relevant. Don't skip this step.
+This is your chance to swap in someone more relevant. In default `one-shot` mode, the framework completes the full analysis in one response.
 
 ### Step 5: Read Actively, Not Passively
 
@@ -57,6 +63,8 @@ As you read the 4 rounds of dialogue, pay attention to:
 - **Round 2 (Cross-Examination)**: Which challenges surprised you? Those are your blind spots.
 - **Confidence tags**: `[confidence: low]` on a real person's statement means the framework is extrapolating beyond their published work — treat that claim with extra skepticism.
 - **Uncertainty snapshots**: These track which assumptions survived scrutiny and which didn't.
+- **Roster diversity**: A weak diversity score means the panel may be too homogeneous.
+- **Context basis**: This tells you whether the answer used project/current evidence or only general public anchors.
 
 ### Step 6: Complete the Self-Check
 

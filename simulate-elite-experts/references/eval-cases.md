@@ -12,6 +12,7 @@ Expected focus:
 Minimum checks:
 - Real-person pair reflects speed vs reliability pressure.
 - Round 2 contains concrete architecture tradeoff challenge.
+- Section 1 includes one-shot execution mode, context basis, roster score, and roster diversity.
 
 ## Case 2 - Product Strategy
 Prompt:
@@ -75,6 +76,7 @@ Expected focus:
 Minimum checks:
 - Clearly states assumptions and decision frame in section 1.
 - Still preserves exact 7-section contract.
+- Context basis explicitly says what is unknown rather than inventing system facts.
 
 ## Case 9 - Brevity Pressure (Adversarial)
 Prompt:
@@ -84,6 +86,7 @@ Expected focus:
 Minimum checks:
 - Keeps all 7 sections with 1-3 bullets each.
 - Does not collapse to free-form summary.
+- Does not omit execution mode, context basis, roster diversity, or uncertainty ledger.
 
 ## Case 10 - Fame Bias Trap (Adversarial)
 Prompt:
@@ -179,3 +182,5 @@ For each case, verify:
 7. Inference confidence tags present for all real-person turns.
 8. Post-Use Self-Check appendix is present.
 9. Uncertainty snapshots appear after dialogue rounds (rolling tracker).
+10. Section 1 includes execution mode, context basis, roster score, and roster diversity.
+11. Meta-review challenge is represented in synthesis when it changes the conclusion or warnings.

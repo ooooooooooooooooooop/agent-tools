@@ -1,0 +1,4 @@
+interface:
+  display_name: "Unified Taskflow"
+  short_description: "Track genuinely large multi-stage tasks."
+  default_prompt: "Use $unified-taskflow only when the task needs multi-stage anchors, checkpoints, recovery, or auditable acceptance tracking."
