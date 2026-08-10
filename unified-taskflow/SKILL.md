@@ -1,31 +1,42 @@
 ---
 name: unified-taskflow
 description: |
-  【强制】复杂任务管理系统。
-  AI 必须在遇到以下情况时**先读取此 SKILL.md**，再执行任何操作：
-  - 多文件变更、规划设计、新功能开发
-  - 用户说"帮我想想/重构/升级/实现"
-  禁止使用内置 agentic_mode 的 artifact 目录处理复杂任务，必须使用项目根目录下的 .taskflow/ 目录。
+  重型复杂任务管理系统。仅在用户明确要求使用 unified-taskflow、taskflow、.taskflow，或任务确实需要跨多轮/多文件/多阶段的 anchor、checkpoint、design、恢复与验收追踪时使用。不要用于小修、普通优化、普通重构、单个 skill 小改、日常 bug fix，或 task-mode-router / minimal-implementation 已足够处理的任务。
 ---
 
-# Unified Taskflow v4.1
+# Unified Taskflow v4.3
 
-> 更新：2026-02-13
+> 更新：2026-08-10
 
 > [!CAUTION]
 > **核心规则**
-> 1. 遇到复杂任务时，**必须先读取本文档**，禁止直接使用内置 task_boundary
-> 2. 任务管理使用项目根目录下的 `.taskflow/` 目录，**不使用**内置 artifact 目录
+> 1. 只有通过触发门禁后，才启动 unified-taskflow；不要把普通任务流程化
+> 2. 启动后，任务管理使用项目根目录下的 `.taskflow/` 目录，**不使用**内置 artifact 目录
 > 3. 禁止跨阶段推理 — 执行时不能跳回规划，规划时不能偷跑代码
-> 4. 如不确定是否触发，默认触发并询问用户
+> 4. 如不确定是否需要启动，先用 `task-mode-router` 判断；仍不确定时询问用户，不默认触发
 
 > **规则优先级**（冲突时按此顺序裁决）：
 > **Safety > Correctness > Efficiency > Completeness**
 
 ## 触发判断
 
-**触发**：多文件变更、规划设计、"帮我想想/重构/升级/实现"
-**不触发**：简单问答、单行修改、明确直接指令
+**触发**：
+- 用户明确说“使用 unified-taskflow / taskflow / .taskflow”。
+- 任务跨多轮、多文件、多阶段，且需要可恢复的执行记录。
+- 任务需要明确的 anchor、checkpoint、design、验收标准和回滚路径。
+- 用户要求长期复盘、审计轨迹、阶段冻结或复杂交接。
+
+**不触发**：
+- 简单问答、单行修改、单文件小修。
+- 普通 skill description 小改、文案调整、同步用户级 skill。
+- 普通“优化 / 完善 / 重构 / 更稳定”，除非用户明确要求重型流程。
+- `clarify-before-change`、`task-mode-router`、`minimal-implementation` 已足够控制风险的任务。
+
+**路由关系**：
+- 先由 `task-mode-router` 判断任务模式。
+- 小任务和中等任务默认不用 `.taskflow/`。
+- 只有大型、长任务、可审计交接任务才进入本 skill。
+- 进入本 skill 后，仍遵守 `minimal-implementation`，不为了流程完整性扩大实现范围。
 
 ## 按需加载
 
@@ -40,14 +51,15 @@ description: |
 
 **目的**：确保 Agent 正确理解用户需求，生成防幻觉锚点。
 
-1. **禁止**立即创建文档或代码
-2. Agent 输出**理解快照**：
+1. **确认已通过触发门禁**；未通过时退回普通任务流程
+2. **禁止**立即创建文档或代码
+3. Agent 输出**理解快照**：
    - 用户意图（一句话）
    - 识别到的歧义点
    - Agent 的假设（显式列出，用户逐条确认）
-3. 用户确认或修正
-4. **完备性门禁**（详见 phase0-clarification.md）
-5. 写入 `anchor.md`（北极星文件，含版本号）
+4. 用户确认或修正
+5. **完备性门禁**（详见 phase0-clarification.md）
+6. 写入 `anchor.md`（北极星文件，含版本号）
 
 > 问题框架（参考，不强制全部使用）：边界 / 约束 / 优先级 / 风险
 > 详见 [phase0-clarification.md](references/phase0-clarification.md)
@@ -56,9 +68,9 @@ description: |
 
 弹性深度 — 根据任务复杂度自然展开，无固定档位：
 
-- **简单任务**：anchor.md → 直接执行 → 更新 checkpoint.md
-- **中等任务**：anchor.md → 拟定计划（口头或 checkpoint 中记录）→ 执行 → 更新 checkpoint.md
-- **复杂任务**：anchor.md → 生成 design.md → 执行 → 持续更新 checkpoint.md
+- **重型任务最小路径**：anchor.md → checkpoint.md → 执行 → 验收核对
+- **需要设计时**：anchor.md → design.md → checkpoint.md → 执行 → 验收核对
+- **不做**：为低风险小任务创建 `.taskflow/`、anchor、checkpoint 或 design
 
 执行期间遵守：
 - **统一 Checkpoint 协议**：事件驱动的 checkpoint 更新 + 内置 re-grounding 核对（见下方）
@@ -70,9 +82,11 @@ description: |
 2. 向用户报告完成状态
 3. 归档任务（移入 archive/）
 
+> 兼容说明：历史 `index.json` 可能使用 `archived` 状态；读取、list 和 catch-up 必须保留兼容显示，新写入使用 `completed` 或 `abandoned`。
+
 ## 运行机制
 
-### 统一 Checkpoint 协议（合并原 2-Action Rule + Re-grounding）
+### 统一 Checkpoint 协议（事件批次 + Re-grounding）
 
 将进度记录和对齐验证合并为单一机制，减少协议数量，提高遵从率。
 
@@ -80,7 +94,7 @@ description: |
 
 | 事件 | 说明 |
 |------|------|
-| 文件创建/修改 | 每 2 次文件操作触发一次（Debug 窗口放宽为 4 次） |
+| 关键文件创建/修改 | 完成一个影响验收、设计、数据或行为的文件操作批次后触发 |
 | 子任务完成 | 每完成一个逻辑子任务 |
 | 用户新指令 | 用户补充信息或修改要求 |
 | 不确定性 | 遇到模糊决策或多种可行方案 |
@@ -95,6 +109,13 @@ description: |
 **滚动压缩**：checkpoint.md 保留最近 3 条完整记录，旧记录压缩为一行摘要移入「历史摘要」区。
 
 > 详见 [regrounding-protocol.md](references/regrounding-protocol.md)
+
+### 脚本边界
+
+- `scripts/task-lifecycle.py` 使用 `assets/templates/` 作为 anchor、checkpoint、design 的唯一模板源；不要在脚本中复制第二份模板。
+- 新任务名必须是安全的单一路径组件（字母/数字/`-`/`_`，最多 64 个字符）；不接受绝对路径、`..` 或路径分隔符。
+- 可用 `--project-path <path>` 指定项目根目录；`list` 和 `status` 可附加 `--json` 生成机器可读状态。默认仍为当前工作目录。
+- `index.json` 写入经过 schema/lifecycle 校验并采用原子替换；历史 `archived` 状态继续只读兼容。
 
 ### 3-Strike Protocol
 

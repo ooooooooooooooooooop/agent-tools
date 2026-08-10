@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill Repository Maintainer"
+  short_description: "Audit and sync a Codex skill repository"
+  default_prompt: "Use $skill-repository-maintainer to audit, validate, and safely sync this skill repository."

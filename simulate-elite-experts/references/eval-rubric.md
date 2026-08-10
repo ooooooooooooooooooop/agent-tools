@@ -13,11 +13,13 @@ If any hard-gate item fails, mark case as `hard-fail`, skip numeric scoring, and
 5. No fabricated direct quotes for real people without in-turn source.
 6. Inference confidence tags present for all real-person turns.
 7. Post-Use Self-Check appendix is present.
+8. Section 1 includes execution mode, context basis, roster score, and roster diversity.
+9. Roster diversity passes or is explicitly marked `low-diversity roster`.
 
 ## Scored Dimensions (0-20)
 
 ### 1. Structure Compliance (0-2)
-- 2: All required sections are present, ordered, and internally complete for the active profile.
+- 2: All required sections are present, ordered, exact in count, and internally complete for the active profile.
 - 1: Minor formatting drift, but all required content exists.
 - 0: Missing sections or major structure mismatch.
 
@@ -57,7 +59,7 @@ If any hard-gate item fails, mark case as `hard-fail`, skip numeric scoring, and
 - 0: Missing confidence tags or all tags are uniformly "high" regardless of evidence basis.
 
 ### 9. Viewpoint Diversity (Pseudo-Plurality Check) (0-2)
-- 2: The 4 roles express genuinely distinct positions with at least 2 substantive disagreements surviving through Round 3; final positions are not unanimous.
+- 2: The roster diversity score passes, the 4 roles express genuinely distinct positions, and at least 2 substantive disagreements survive through Round 3.
 - 1: Some diversity exists but roles converge too early or challenges are superficial.
 - 0: All roles essentially agree from Round 1; no meaningful tension.
 
@@ -65,6 +67,14 @@ If any hard-gate item fails, mark case as `hard-fail`, skip numeric scoring, and
 - 2: Simulated viewpoints are consistent with the person's known published positions; no attributions that contradict their public stance; low-confidence tags used when extrapolating.
 - 1: Mostly consistent but includes 1-2 attributions that stretch beyond documented positions without flagging confidence.
 - 0: Significant misattribution or fabrication of positions the person has never taken.
+
+## Additional Qualitative Checks
+
+Track these in notes without changing the 20-point score:
+
+- Context grounding: Did the response inspect relevant local/current context when the question depended on it?
+- Execution mode fit: Did the response avoid pausing in `one-shot` mode and avoid continuing past roster in `interactive` mode?
+- Meta-review effect: Did the anonymous meta-review surface a real blind spot, or was it perfunctory?
 
 ## Passing Threshold
 - Recommended pass: >= 15/20.

@@ -8,6 +8,17 @@ description: |
 
 # Simulate Elite Experts
 
+## 中文介绍
+
+`simulate-elite-experts` 用于处理高复杂度、高不确定性或较难逆转的决策问题。它不是普通的“专家角色扮演”，而是一个带硬约束的四视角推理框架：选择两位与问题直接相关、可从公开作品推断方法论的真实人物，再加入一个领域专家抽象角色和一个全知智能体抽象角色，让它们围绕同一决策进行立场陈述、交叉质询、修正和综合。
+
+适合使用的场景：
+- 需要比较多个强观点，而不是只要一个直接答案。
+- 决策涉及速度、质量、风险、成本、组织、伦理等多重约束。
+- 用户希望知道“应该找哪些顶级人物/视角来讨论这个问题，以及他们可能会怎么说”。
+
+不适合用于简单事实查询、单一正确答案、低成本可逆选择或纯情绪支持。输出必须区分事实、假设和推测；对真实人物的观点只能基于公开资料做模拟推断，不能伪造直接引语、私人意图或未验证事实。
+
 ## Applicability Pre-Check (Gate 0)
 
 Before running the full framework, evaluate 3 dimensions to decide whether this tool is appropriate:
@@ -31,6 +42,18 @@ Before running the full framework, evaluate 3 dimensions to decide whether this 
 
 If the user explicitly requests the framework regardless of score, proceed but note the pre-check result.
 
+## Execution Mode Selection
+
+Choose the execution mode before building the roster:
+
+- `one-shot` (default): Produce the complete output in one response. Use this when the user asks for an analysis, report, comparison, or direct recommendation and has not asked to co-design the panel.
+- `interactive`: Produce Section 1 only, ask the user to confirm or swap the roster, then wait before running dialogue rounds. Use this when the user explicitly asks to choose experts, workshop the panel, or collaborate step by step.
+
+Rules:
+- Do not pause after Section 1 in `one-shot` mode.
+- Do not continue past Section 1 in `interactive` mode until the user confirms or revises the roster.
+- If profile and execution mode conflict with token or time constraints, preserve the profile's required section/round counts and compress content rather than dropping structure.
+
 ## When NOT to Use This Framework
 
 Do not use (or actively recommend against using) this framework for:
@@ -41,6 +64,16 @@ Do not use (or actively recommend against using) this framework for:
 - **Pure emotional support**: When the user needs empathy, not analysis.
 
 If the user's question falls into these categories, briefly explain why and offer a direct answer instead.
+
+## Context Grounding Pass
+
+Before selecting real people, check whether the decision is grounded in a project, repository, document, dataset, or current external facts:
+
+- For local project/repository decisions, read the most relevant current context first (for example `AGENTS.md`, `CLAUDE.md`, README, design docs, or files named by the user). Keep this pass narrow: usually 1-3 files.
+- For current or time-sensitive public facts about real people, companies, regulations, models, or products, verify with current sources before using them as evidence anchors.
+- If no grounded context is available, state the missing context as an assumption in Section 1 and include it in the Uncertainty Ledger.
+
+Do not invent project facts, current facts, or source-backed claims. If evidence was not checked in the current turn, label the anchor as a known public anchor rather than a verified current source.
 
 ## Core Principle
 
@@ -113,6 +146,19 @@ Passing rules:
 - Pair diversity score >= 2/2.
 - If any rule fails, rerun candidate selection and mark `low-confidence roster` if no better pair is available.
 
+## Roster Diversity Matrix (Anti-Groupthink Guardrail)
+
+After selecting the four-lens roster, score the full roster:
+
+- Real-person pressure diversity (0-2): Do A and B represent materially different decision pressures?
+- Archetype coverage (0-2): Does the domain expert cover implementation/accountability constraints not covered by A/B?
+- System-risk coverage (0-2): Does the omniscient agent cover second-order effects, failure modes, and hidden coupling?
+
+Passing rules:
+- Total roster diversity score must be >= 5/6 for `classic`, `lean`, and `deep`.
+- `micro` must score the real person and domain expert coverage only; passing threshold is >= 3/4.
+- If the score fails, revise the roster or mark `low-diversity roster` and explain the consequence in Section 1.
+
 ## Fallback Strategy (When Real-Person Selection Is Unclear)
 
 Use this deterministic fallback order:
@@ -136,9 +182,19 @@ Uncertainty tracking is not limited to the final ledger. Apply rolling updates:
 - After Round 1: tag each initial position with its evidence basis (`fact`, `assumption`, or `speculation`).
 - After Round 2: record any assumptions that were challenged and whether they survived cross-examination.
 - After Round 3: note which revised positions introduced new assumptions or resolved old ones.
-- The final Uncertainty Ledger (Section 8) consolidates the rolling tracker into a clean summary.
+- The final Uncertainty Ledger consolidates the rolling tracker into a clean summary.
 
 This ensures uncertainty is visible throughout the dialogue, not hidden until the end.
+
+## Anonymous Meta-Review (Internal Anti-Convergence Step)
+
+Before writing Moderator Synthesis, run an internal blind review:
+
+1. Temporarily anonymize the active role positions as Position A/B/C/D (or A/B for `micro`).
+2. Identify the strongest argument, weakest assumption, missing stakeholder, and most dangerous shared blind spot.
+3. Use the result to revise Moderator Synthesis and Uncertainty Ledger.
+
+Do not output the anonymized transcript unless the user asks for a process trace. Do output the resulting challenge in the synthesis when it changes the recommendation, warning indicators, or evidence-needed list.
 
 ## Output Contract Guardrail (Hard Constraint)
 
@@ -155,14 +211,17 @@ Preflight checklist (internal; do not output verbatim):
 1. Role composition matches selected profile.
 2. Real-person scoring matrix passes.
 3. Evidence anchors are present for all real people.
-4. Section count matches profile contract.
-5. Each round has turns from all active roles.
-6. Inference confidence tags are present for all real-person turns.
+4. Full roster diversity passes or is explicitly marked `low-diversity roster`.
+5. Execution mode is clear (`one-shot` or `interactive`).
+6. Section count matches profile contract exactly.
+7. Each round has turns from all active roles.
+8. Inference confidence tags are present for all real-person turns.
 
 Postflight checklist (internal; do not output verbatim):
 1. No fabricated direct quotes for real people.
 2. Moderator synthesis includes recommendation, strongest alternative, preconditions, early warnings, and next actions.
 3. Uncertainty ledger cleanly separates facts, assumptions, and speculation.
+4. Anonymous meta-review did not reveal an unaddressed blind spot.
 
 ## Failure Modes and Recovery Actions
 
@@ -176,6 +235,12 @@ Postflight checklist (internal; do not output verbatim):
   - Recovery: add time horizon, trigger indicators, and 1-3 concrete next actions.
 - FM5: Speculation leakage.
   - Recovery: move uncertain claims to Uncertainty Ledger and add evidence-needed items.
+- FM6: One-shot output accidentally pauses after roster.
+  - Recovery: continue with the remaining required sections unless `interactive` mode was explicitly selected.
+- FM7: Groupthink from similar real-person selections.
+  - Recovery: replace one real person or the domain archetype to represent a distinct pressure, then rerun roster scoring.
+- FM8: Local or current context ignored.
+  - Recovery: read the narrow relevant context, update the decision frame, and move unsupported claims into assumptions.
 
 ## Controlled Execution Profiles (Structure-Preserving)
 
@@ -186,10 +251,10 @@ Profiles adjust depth and structure according to problem complexity.
 - `classic` (default): 4 roles, 4 dialogue rounds, balanced detail and readability.
 - `deep`: 4 roles, 6 dialogue rounds, 9 sections. Adds metrics, counterarguments, failure triggers, stress test, and contingency planning.
 
-Variable round rules:
-- Minimum 2 rounds for any profile (initial positions + final statements).
-- Rounds 2 (cross-examination) and 3 (revised positions) may be added or removed based on profile.
-- Maximum 6 rounds for `deep` profile: adds Round 5 (stress test with adversarial scenarios) and Round 6 (contingency planning).
+Profile round rules:
+- `micro`: exactly 2 rounds (initial positions + final statements).
+- `lean` and `classic`: exactly 4 rounds (initial positions, cross-examination, revised positions, final statements).
+- `deep`: exactly 6 rounds, adding stress test and contingency planning after the classic rounds.
 - Each round always includes one turn from every active role.
 
 Profile selection:
@@ -228,7 +293,7 @@ Profile selection:
 4. Moderator Synthesis
 5. Uncertainty Ledger
 
-### Deep — up to 9 sections:
+### Deep — 9 sections:
 1. Good Group To Explore X (Four-Lens Roster)
 2. Dialogue Round 1: Initial Positions
 3. Dialogue Round 2: Cross-Examination
@@ -247,11 +312,13 @@ Each dialogue round must contain one turn from each active role.
 1. Define decision frame
 - Restate question, success criteria, constraints, and time horizon.
 - Declare assumptions when context is missing.
+- Include grounded local/current context if the decision depends on it.
 
 2. Build four-lens roster
 - Select two real people with clear relevance to the problem.
 - Explain why each role belongs in the group.
 - Score Real Person A/B with the scoring matrix before finalizing.
+- Score full roster diversity and revise if the score fails.
 
 3. Run multi-round dialogue
 - Round 1: initial claims.
@@ -260,6 +327,7 @@ Each dialogue round must contain one turn from each active role.
 - Round 4: final stance and one concrete action.
 
 4. Synthesize
+- Run the internal anonymous meta-review before final synthesis.
 - Merge strongest arguments into one recommendation.
 - State why it beats the strongest alternative.
 - Include preconditions, early warning indicators, and next actions.
@@ -281,10 +349,11 @@ The framework output should not be a passive report. Build in interaction touchp
 
 1. **Pre-dialogue check-in**: After presenting the roster (Section 1), pause and ask the user:
    - "Do these roles and people look right for your question? Would you swap anyone?"
-   - If the user confirms, proceed. If the user suggests changes, adjust before running dialogue.
+   - Use this only in `interactive` mode. If the user confirms, proceed. If the user suggests changes, adjust before running dialogue.
 
 2. **Mid-dialogue checkpoint** (optional, for `deep` profile): After Round 2 (Cross-Examination), briefly ask:
    - "Any assumptions you think were missed in the cross-examination?"
+   - Use this only in `interactive` mode.
 
 3. **Post-output reflection**: After the Uncertainty Ledger, always append the Post-Use Self-Check.
 
@@ -316,12 +385,17 @@ Use:
 - `references/eval-cases.md` for regression test prompts.
 - `references/first-use-guide.md` for onboarding new users.
 - `scripts/lint_response.ps1` for hard-gate structure checks on generated outputs.
+- `scripts/lint_response.py` for the portable hard-gate validator.
+- `scripts/run_examples.ps1` for repository example smoke tests.
+- `scripts/run_examples.py` for cross-platform smoke tests covering `micro`, `lean`, `classic`, and `deep` profiles.
 
 When updating this skill:
 - Run at least 5 cases from `eval-cases.md`.
 - Ensure every case matches its profile's section and role count requirements.
 - Track rubric score before/after edits and avoid regressions (new baseline: 0-20 scale).
 - Record outcomes using a compact log: date, cases run, pass rate, avg score, fail reasons.
+- Run example smoke tests before packaging or publishing.
+- Keep the PowerShell entry point for Windows users and use the Python validator in CI or other environments; both must enforce the same section, round, uncertainty, and self-check gates.
 
 ## Output Contract
 

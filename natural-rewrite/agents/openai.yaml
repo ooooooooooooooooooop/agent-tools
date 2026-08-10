@@ -1,0 +1,4 @@
+interface:
+  display_name: "Natural Rewrite"
+  short_description: "Rewrite Chinese or English copy naturally."
+  default_prompt: "Use $natural-rewrite to rewrite the provided copy naturally while preserving facts, tone, and intended meaning."

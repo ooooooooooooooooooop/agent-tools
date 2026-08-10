@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clarify Before Change"
+  short_description: "Clarify material ambiguity before risky edits."
+  default_prompt: "Use $clarify-before-change to separate facts, assumptions, risks, and the smallest safe change path before editing."

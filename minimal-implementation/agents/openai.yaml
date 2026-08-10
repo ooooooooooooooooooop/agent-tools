@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minimal Implementation"
+  short_description: "Make the smallest correct change and verify it."
+  default_prompt: "Use $minimal-implementation to limit the change to the smallest correct scope, preserve existing behavior, and state verification."

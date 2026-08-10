@@ -1,0 +1,4 @@
+interface:
+  display_name: "Environment Bootstrap"
+  short_description: "Restore a known Codex skill environment"
+  default_prompt: "Use $environment-bootstrap to audit and restore the registered Codex skills on this device."
