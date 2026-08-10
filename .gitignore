@@ -1,2 +1,21 @@
 __pycache__/
 .claude/
+
+# Local runtimes, indexes, and dependency trees
+*.py[cod]
+**/__pycache__/
+node_modules/
+.grepai/
+.taskflow/
+Users/
+
+# Temporary inspection and generated deliverables
+.tmp_*
+_make_summary*.py
+build_weekly_summary.mjs
+*.inspect.ndjson
+*_inspect.ndjson
+artifacts/
+weekly_summary_*.xlsx
+weekly_summary_*.png
+weekly_summary_entries_*.json

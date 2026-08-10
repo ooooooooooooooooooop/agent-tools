@@ -7,15 +7,20 @@
 - Avoid direct quotes unless sourced in-turn.
 - Include confidence tags for all real-person turns.
 - Include uncertainty snapshots after each dialogue round.
+- Include execution mode and context basis in Section 1.
+- Include roster diversity score in Section 1.
 - Append Post-Use Self-Check after the final section.
 
 ## 1. Good Group To Explore X (Four-Lens Roster)
 - `Decision frame`: question + constraints + success criteria + time horizon.
+- `Execution mode`: one-shot or interactive + why this mode applies.
+- `Context basis`: local/current sources checked, or explicit statement that no grounded context was available.
 - `Real Person A`: name + role + why selected + 2-3 evidence anchors.
 - `Real Person B`: name + role + why selected + 2-3 evidence anchors.
 - `Domain Expert Archetype`: stance + decision pressure represented.
 - `Omniscient Agent Archetype`: observation scope + reasoning role.
 - `Roster score`: A score, B score, pair-diversity score, and confidence level.
+- `Roster diversity`: real-person pressure diversity + archetype coverage + system-risk coverage.
 
 Note: Keep exactly these four roles.
 
@@ -53,6 +58,7 @@ Note: Each role must challenge one concrete assumption or tradeoff.
 - `Preconditions`:
 - `Early warning indicators`:
 - `Immediate next 1-3 actions`:
+- `Meta-review challenge`: strongest blind-review challenge that affected the synthesis, or "none material".
 - `Run metadata (inline)`: profile used + unresolved risks count.
 
 ## 7. Uncertainty Ledger
@@ -82,9 +88,11 @@ When user asks for brevity:
 
 ### 1. Good Group To Explore X (Two-Lens Roster)
 - `Decision frame`: question + constraints + success criteria + time horizon.
+- `Execution mode`: one-shot or interactive + why this mode applies.
+- `Context basis`: local/current sources checked, or explicit statement that no grounded context was available.
 - `Real Person A`: name + role + why selected + 2-3 evidence anchors.
 - `Domain Expert Archetype`: stance + decision pressure represented.
-- `Roster score`: A score and confidence level.
+- `Roster score`: A score, diversity score, and confidence level.
 
 ### 2. Dialogue Round 1: Initial Positions
 - `[Real Person A]` ... `[confidence: high/medium/low]`

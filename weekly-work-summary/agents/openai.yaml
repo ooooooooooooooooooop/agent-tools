@@ -1,0 +1,4 @@
+interface:
+  display_name: "Weekly Work Summary"
+  short_description: "Build weekly reports from workspace evidence."
+  default_prompt: "Use $weekly-work-summary to write an evidence-based weekly summary for the current workspace."

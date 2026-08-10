@@ -1,0 +1,4 @@
+interface:
+  display_name: "Your Skill Name"
+  short_description: "One-line description for the skill picker."
+  default_prompt: "Use $your-skill-name when the user's request matches its published trigger conditions."

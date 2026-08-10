@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Task Lifecycle Manager for unified-taskflow v4.1
+Task Lifecycle Manager for unified-taskflow v4.3
 
 Manages task lifecycle: new, complete, abandon, resume, list, status,
 suspend, validate, sync-mirror, summary.
 
 Usage:
-    python task-lifecycle.py new <task-name>
+    python task-lifecycle.py [--project-path <path>] [--json] new <task-name>
     python task-lifecycle.py complete [--message "completion note"]
     python task-lifecycle.py abandon [--reason "reason"]
     python task-lifecycle.py resume <archive-name-or-suspended-task>
@@ -23,6 +23,7 @@ import re
 import sys
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List
@@ -32,11 +33,94 @@ TASKFLOW_DIR = ".taskflow"
 ACTIVE_DIR = "active"
 ARCHIVE_DIR = "archive"
 INDEX_FILE = "index.json"
+TASKFLOW_VERSION = "4.3"
+ARCHIVED_STATUSES = ("completed", "abandoned", "archived")
+TASK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+SCRIPT_DIR = Path(__file__).resolve().parent
+TEMPLATE_DIR = SCRIPT_DIR.parent / "assets" / "templates"
+PROJECT_PATH = "."
+OUTPUT_JSON = False
 
 
-def get_taskflow_root(project_path: str = ".") -> Path:
+def get_taskflow_root(project_path: Optional[str] = None) -> Path:
     """Get the .taskflow directory path."""
-    return Path(project_path).resolve() / TASKFLOW_DIR
+    return Path(project_path or PROJECT_PATH).resolve() / TASKFLOW_DIR
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """Write a UTF-8 file without exposing a partially written result."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, delete=False
+    ) as temporary:
+        temporary.write(content)
+        temporary_path = Path(temporary.name)
+    try:
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def load_template(name: str) -> str:
+    """Load a checked-in package template instead of duplicating it in code."""
+    template_path = TEMPLATE_DIR / name
+    if not template_path.is_file():
+        raise FileNotFoundError(f"taskflow template is missing: {template_path}")
+    return template_path.read_text(encoding="utf-8")
+
+
+def validate_task_name(task_name: str) -> bool:
+    """Allow only a safe single directory component for active task names."""
+    return bool(TASK_NAME_RE.fullmatch(task_name))
+
+
+def safe_child(parent: Path, name: str) -> Optional[Path]:
+    """Resolve a user-supplied child name without allowing path traversal."""
+    if not name or Path(name).name != name:
+        return None
+    candidate = (parent / name).resolve()
+    try:
+        candidate.relative_to(parent.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def validate_index(index: Dict) -> List[str]:
+    """Return schema and lifecycle consistency issues for index.json."""
+    issues: List[str] = []
+    if not isinstance(index, dict):
+        return ["index.json must contain an object"]
+    if not isinstance(index.get("tasks"), list):
+        return ["index.json tasks must be an array"]
+    active_count = 0
+    suspended_count = 0
+    live_names = set()
+    allowed = {"active", "suspended", *ARCHIVED_STATUSES}
+    for item in index["tasks"]:
+        if not isinstance(item, dict):
+            issues.append("index.json contains a non-object task")
+            continue
+        name = item.get("name")
+        status = item.get("status")
+        if not isinstance(name, str) or not validate_task_name(name):
+            issues.append(f"unsafe or invalid task name: {name!r}")
+        elif status in {"active", "suspended"} and name in live_names:
+            issues.append(f"duplicate live task name in index: {name}")
+        elif status in {"active", "suspended"}:
+            live_names.add(name)
+        if status not in allowed:
+            issues.append(f"invalid task status for {name!r}: {status!r}")
+        elif status == "active":
+            active_count += 1
+        elif status == "suspended":
+            suspended_count += 1
+    if active_count > 1:
+        issues.append("index.json contains more than one active task")
+    if suspended_count > 1:
+        issues.append("index.json contains more than one suspended task")
+    return issues
 
 
 def ensure_structure(root: Path) -> None:
@@ -46,24 +130,31 @@ def ensure_structure(root: Path) -> None:
 
     index_path = root / INDEX_FILE
     if not index_path.exists():
-        index_path.write_text(json.dumps({
-            "version": "4.1",
+        atomic_write_text(index_path, json.dumps({
+            "version": TASKFLOW_VERSION,
             "tasks": []
-        }, indent=2, ensure_ascii=False), encoding='utf-8')
+        }, indent=2, ensure_ascii=False) + "\n")
 
 
 def load_index(root: Path) -> Dict:
     """Load task index."""
     index_path = root / INDEX_FILE
     if index_path.exists():
-        return json.loads(index_path.read_text(encoding='utf-8'))
-    return {"version": "4.1", "tasks": []}
+        index = json.loads(index_path.read_text(encoding='utf-8'))
+        issues = validate_index(index)
+        if issues:
+            raise ValueError("; ".join(issues))
+        return index
+    return {"version": TASKFLOW_VERSION, "tasks": []}
 
 
 def save_index(root: Path, index: Dict) -> None:
     """Save task index."""
+    issues = validate_index(index)
+    if issues:
+        raise ValueError("; ".join(issues))
     index_path = root / INDEX_FILE
-    index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding='utf-8')
+    atomic_write_text(index_path, json.dumps(index, indent=2, ensure_ascii=False) + "\n")
 
 
 def get_active_task(root: Path) -> Optional[str]:
@@ -96,6 +187,9 @@ def get_next_version(index: Dict, task_name: str) -> int:
 
 def new_task(task_name: str) -> bool:
     """Create a new task with anchor.md and checkpoint.md."""
+    if not validate_task_name(task_name):
+        print(f"错误：任务名不安全或格式无效 '{task_name}'（仅允许字母、数字、-、_，且不超过 64 个字符）")
+        return False
     root = get_taskflow_root()
     ensure_structure(root)
 
@@ -109,50 +203,14 @@ def new_task(task_name: str) -> bool:
         return False
 
     task_dir = root / ACTIVE_DIR / task_name
-    task_dir.mkdir(parents=True, exist_ok=True)
+    if task_dir.exists():
+        print(f"错误：活跃目录已存在，拒绝覆盖 '{task_name}'")
+        return False
+    task_dir.mkdir(parents=True, exist_ok=False)
 
-    # Create anchor.md
-    (task_dir / "anchor.md").write_text(
-        "# Grounding Anchor\n\n"
-        "**Version**: v1\n"
-        "**Intent**: \n\n"
-        "## Critical Constraints（硬约束 — 违反即失败）\n\n"
-        "- \n\n"
-        "## Soft Preferences（软偏好 — 尽量满足）\n\n"
-        "- \n\n"
-        "## Scope\n\n"
-        "- Include: \n- Exclude: \n\n"
-        "## Done-when（按优先级排序）\n\n"
-        "- **P0**: \n- **P1**: \n\n"
-        "## Assumptions（假设登记簿）\n\n"
-        "| 假设 | 用户确认 |\n|------|----------|\n\n"
-        "## Resolved Ambiguities\n\n"
-        "- \n\n"
-        "## Change Log\n\n"
-        "| 版本 | 变更内容 | 原因 |\n|------|----------|------|\n"
-        "| v1 | 初始创建 | Phase 0 完成 |\n",
-        encoding='utf-8'
-    )
-
-    # Create checkpoint.md
-    (task_dir / "checkpoint.md").write_text(
-        "# 校验点记录\n\n"
-        "## Anchor Mirror（每次 checkpoint 更新时刷新）\n\n"
-        "- **Intent**: [从 anchor.md 复制]\n"
-        "- **Critical Constraints**: [从 anchor.md 复制硬约束]\n"
-        "- **Anchor Version**: v1\n\n"
-        "## Trace Stub\n\n"
-        "**目标**：\n**当前假设**：\n**已排除**：\n\n"
-        "---\n\n"
-        "## 校验点日志\n\n"
-        "> **滚动压缩规则**：保留最近 N 条完整记录（默认 N=3，复杂任务可调至 5）。\n\n"
-        "### 历史摘要\n\n"
-        "---\n\n"
-        "## Debug 记录\n\n"
-        "| 问题 | Strike | 尝试方案 | 结果 |\n"
-        "|------|--------|----------|------|\n",
-        encoding='utf-8'
-    )
+    # Templates are package resources and remain the single source of truth.
+    atomic_write_text(task_dir / "anchor.md", load_template("anchor.md"))
+    atomic_write_text(task_dir / "checkpoint.md", load_template("checkpoint.md").replace("v??", "v1"))
 
     # Update index
     index = load_index(root)
@@ -197,6 +255,9 @@ def complete_task(message: str = "") -> bool:
     # Move to archive
     src = root / ACTIVE_DIR / active
     dst = root / ARCHIVE_DIR / archive_name
+    if dst.exists():
+        print(f"错误：归档目标已存在，拒绝覆盖 '{dst}'")
+        return False
     shutil.move(str(src), str(dst))
 
     # Add completion note if provided
@@ -239,6 +300,9 @@ def abandon_task(reason: str = "") -> bool:
     # Move to archive
     src = root / ACTIVE_DIR / active
     dst = root / ARCHIVE_DIR / archive_name
+    if dst.exists():
+        print(f"错误：归档目标已存在，拒绝覆盖 '{dst}'")
+        return False
     shutil.move(str(src), str(dst))
 
     # Add abandonment note
@@ -318,8 +382,8 @@ def resume_task(task_name: str) -> bool:
         return True
 
     # Otherwise, try to restore from archive (legacy behavior)
-    archive_dir = root / ARCHIVE_DIR / task_name
-    if not archive_dir.exists():
+    archive_dir = safe_child(root / ARCHIVE_DIR, task_name)
+    if archive_dir is None or not archive_dir.exists():
         print(f"错误：未找到任务 '{task_name}'（既非暂停任务也非归档任务）")
         return False
 
@@ -335,7 +399,13 @@ def resume_task(task_name: str) -> bool:
     if len(parts) >= 3:
         original_name = "_".join(parts[1:-1])
 
-    dst = root / ACTIVE_DIR / original_name
+    if not validate_task_name(original_name):
+        print(f"错误：归档任务名无法安全恢复 '{original_name}'")
+        return False
+    dst = safe_child(root / ACTIVE_DIR, original_name)
+    if dst is None or dst.exists():
+        print(f"错误：恢复目标已存在或路径不安全 '{original_name}'")
+        return False
     shutil.move(str(archive_dir), str(dst))
 
     # Update index
@@ -356,10 +426,20 @@ def list_tasks(show_active: bool = True, show_archive: bool = True) -> None:
     ensure_structure(root)
 
     index = load_index(root)
+    active = get_active_task(root)
+    suspended = get_suspended_task(root)
+    archived = [t for t in index["tasks"] if t["status"] in ARCHIVED_STATUSES]
+
+    if OUTPUT_JSON:
+        print(json.dumps({
+            "root": str(root),
+            "active": active,
+            "suspended": suspended,
+            "archive": archived[-10:],
+        }, ensure_ascii=False, indent=2))
+        return
 
     if show_active:
-        active = get_active_task(root)
-        suspended = get_suspended_task(root)
         print("活跃任务:")
         if active:
             entry = next((t for t in index["tasks"] if t["name"] == active and t["status"] == "active"), {})
@@ -378,10 +458,13 @@ def list_tasks(show_active: bool = True, show_archive: bool = True) -> None:
 
     if show_archive:
         print("\n归档任务:")
-        archived = [t for t in index["tasks"] if t["status"] in ("completed", "abandoned")]
         if archived:
             for t in archived[-10:]:  # Show last 10
-                status = "[完成]" if t["status"] == "completed" else "[放弃]"
+                status = {
+                    "completed": "[完成]",
+                    "abandoned": "[放弃]",
+                    "archived": "[归档]",
+                }[t["status"]]
                 print(f"   {status} {t.get('archive_path', t['name'])}")
         else:
             print("   (无)")
@@ -399,6 +482,15 @@ def show_status() -> None:
     active = get_active_task(root)
     suspended = get_suspended_task(root)
     index = load_index(root)
+
+    if OUTPUT_JSON:
+        print(json.dumps({
+            "root": str(root),
+            "active": active,
+            "suspended": suspended,
+            "archive_count": len([t for t in index["tasks"] if t["status"] not in ("active", "suspended")]),
+        }, ensure_ascii=False, indent=2))
+        return
 
     print(f"目录: {root}")
     print(f"活跃任务: {active or '(无)'}")
@@ -503,6 +595,16 @@ def validate_task() -> bool:
     """Validate the active task's file integrity."""
     root = get_taskflow_root()
     ensure_structure(root)
+
+    try:
+        index_issues = validate_index(load_index(root))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"错误：index.json 无法校验：{exc}")
+        return False
+    if index_issues:
+        for issue in index_issues:
+            print(f"  [FAIL] {issue}")
+        return False
 
     task_dir = _get_active_task_dir(root)
     if not task_dir:
@@ -679,36 +781,64 @@ def summary_task() -> bool:
     return True
 
 
+def parse_global_options(argv: List[str]) -> List[str]:
+    """Parse options accepted before or after the lifecycle action."""
+    global PROJECT_PATH, OUTPUT_JSON
+    remaining: List[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--json":
+            OUTPUT_JSON = True
+        elif item == "--project-path":
+            if index + 1 >= len(argv):
+                raise ValueError("--project-path 需要目录参数")
+            PROJECT_PATH = argv[index + 1]
+            index += 1
+        elif item.startswith("--project-path="):
+            PROJECT_PATH = item.split("=", 1)[1]
+        else:
+            remaining.append(item)
+        index += 1
+    return remaining
+
+
 def main():
-    if len(sys.argv) < 2:
+    try:
+        argv = parse_global_options(sys.argv[1:])
+    except ValueError as exc:
+        print(f"错误：{exc}")
+        sys.exit(1)
+
+    if not argv:
         print(__doc__)
         sys.exit(1)
 
-    action = sys.argv[1]
+    action = argv[0]
 
     if action == "new":
-        if len(sys.argv) < 3:
+        if len(argv) < 2:
             print("用法: python task-lifecycle.py new <task-name>")
             sys.exit(1)
-        task_name = sys.argv[2]
+        task_name = argv[1]
         success = new_task(task_name)
         sys.exit(0 if success else 1)
 
     elif action == "complete":
         message = ""
-        if "--message" in sys.argv:
-            idx = sys.argv.index("--message")
-            if idx + 1 < len(sys.argv):
-                message = sys.argv[idx + 1]
+        if "--message" in argv:
+            idx = argv.index("--message")
+            if idx + 1 < len(argv):
+                message = argv[idx + 1]
         success = complete_task(message)
         sys.exit(0 if success else 1)
 
     elif action == "abandon":
         reason = ""
-        if "--reason" in sys.argv:
-            idx = sys.argv.index("--reason")
-            if idx + 1 < len(sys.argv):
-                reason = sys.argv[idx + 1]
+        if "--reason" in argv:
+            idx = argv.index("--reason")
+            if idx + 1 < len(argv):
+                reason = argv[idx + 1]
         success = abandon_task(reason)
         sys.exit(0 if success else 1)
 
@@ -717,10 +847,10 @@ def main():
         sys.exit(0 if success else 1)
 
     elif action == "resume":
-        if len(sys.argv) < 3:
+        if len(argv) < 2:
             print("用法: python task-lifecycle.py resume <task-name-or-archive-name>")
             sys.exit(1)
-        task_name = sys.argv[2]
+        task_name = argv[1]
         success = resume_task(task_name)
         sys.exit(0 if success else 1)
 
@@ -737,8 +867,8 @@ def main():
         sys.exit(0 if success else 1)
 
     elif action == "list":
-        show_active = "--archive" not in sys.argv
-        show_archive = "--active" not in sys.argv
+        show_active = "--archive" not in argv
+        show_archive = "--active" not in argv
         list_tasks(show_active, show_archive)
 
     elif action == "status":

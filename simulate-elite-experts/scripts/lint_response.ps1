@@ -106,8 +106,8 @@ $config = $profileConfig[$Profile]
 
 # Check heading count
 $headingMatches = [regex]::Matches($text, '(?m)^##\s*\d+\..+$')
-if ($headingMatches.Count -lt $config.expectedCount) {
-    $errors.Add("Profile '$Profile' expects at least $($config.expectedCount) top-level headings, found $($headingMatches.Count).")
+if ($headingMatches.Count -ne $config.expectedCount) {
+    $errors.Add("Profile '$Profile' expects exactly $($config.expectedCount) numbered top-level headings, found $($headingMatches.Count).")
 }
 
 # Check required headings in order
@@ -149,12 +149,47 @@ if ($rosterBulletCount -lt $config.minRosterBullets) {
     $errors.Add("Section 1 has fewer than $($config.minRosterBullets) roster bullets ($rosterBulletCount).")
 }
 
+$requiredSection1Patterns = @(
+    '(?i)(Decision frame|\u51B3\u7B56\u6846\u67B6)',
+    '(?i)(Execution mode|\u6267\u884C\u6A21\u5F0F)',
+    '(?i)(Context basis|\u4E0A\u4E0B\u6587\u4F9D\u636E)',
+    '(?i)(Roster score|\u4EBA\u9009\u8BC4\u5206)',
+    '(?i)(Roster diversity|\u4EBA\u7FA4\u591A\u6837\u6027)'
+)
+
+foreach ($pattern in $requiredSection1Patterns) {
+    if ($section1 -notmatch $pattern) {
+        $errors.Add("Section 1 is missing required field matching pattern: $pattern")
+    }
+}
+
+if ($section1 -notmatch '(?i)(Real Person A|\u73B0\u5B9E\u4EBA\u7269A)') {
+    $errors.Add("Section 1 is missing Real Person A.")
+}
+if ($section1 -notmatch '(?i)(Domain Expert Archetype|\u9886\u57DF\u4E13\u5BB6\u62BD\u8C61)') {
+    $errors.Add("Section 1 is missing Domain Expert Archetype.")
+}
+if ($Profile -ne "micro") {
+    if ($section1 -notmatch '(?i)(Real Person B|\u73B0\u5B9E\u4EBA\u7269B)') {
+        $errors.Add("Section 1 is missing Real Person B.")
+    }
+    if ($section1 -notmatch '(?i)(Omniscient Agent Archetype|\u5168\u77E5\u667A\u80FD\u4F53\u62BD\u8C61)') {
+        $errors.Add("Section 1 is missing Omniscient Agent Archetype.")
+    }
+}
+
 # Check turns per round
 for ($r = 0; $r -lt $config.roundHeaders.Count; $r++) {
     $block = Get-SectionBlock -InputText $text -HeaderRegex $config.roundHeaders[$r]
     $turnCount = ([regex]::Matches($block, '(?m)^-\s*`?\[')).Count
-    if ($turnCount -lt $config.minTurnsPerRound) {
-        $errors.Add("Round $($r + 1) has fewer than $($config.minTurnsPerRound) role turns ($turnCount).")
+    if ($turnCount -ne $config.minTurnsPerRound) {
+        $errors.Add("Round $($r + 1) expects exactly $($config.minTurnsPerRound) role turns, found $turnCount.")
+    }
+
+    $roundConfidenceTagCount = ([regex]::Matches($block, '(?i)\[confidence:\s*(high|medium|low)\]|\[\u7F6E\u4FE1\u5EA6:\s*(\u9AD8|\u4E2D|\u4F4E)\]')).Count
+    $minRoundConfidence = if ($Profile -eq "micro") { 1 } else { 2 }
+    if ($roundConfidenceTagCount -lt $minRoundConfidence) {
+        $errors.Add("Round $($r + 1) expected at least $minRoundConfidence real-person confidence tags, found $roundConfidenceTagCount.")
     }
 }
 
@@ -176,6 +211,16 @@ if ($confidenceTagCount -lt $totalExpectedConfidence) {
 # Check Post-Use Self-Check appendix
 if ($text -notmatch '(?i)(Post-Use Self-Check|\u4F7F\u7528\u540E\u81EA\u68C0\u6E05\u5355)') {
     $errors.Add("Missing mandatory Post-Use Self-Check appendix.")
+}
+else {
+    $selfCheckHeading = [regex]::Match($text, '(?im)^#{2,3}\s*(Post-Use Self-Check|\u4F7F\u7528\u540E\u81EA\u68C0\u6E05\u5355).*$')
+    if ($selfCheckHeading.Success) {
+        $selfCheckText = $text.Substring($selfCheckHeading.Index + $selfCheckHeading.Length)
+        $selfCheckQuestions = ([regex]::Matches($selfCheckText, '(?m)^\d+\.\s+')).Count
+        if ($selfCheckQuestions -ne 5) {
+            $errors.Add("Post-Use Self-Check expects exactly 5 numbered questions, found $selfCheckQuestions.")
+        }
+    }
 }
 
 # Check uncertainty snapshots in dialogue rounds (at least one per round for rounds that have them)

@@ -1,6 +1,6 @@
 # 示例：重构遗留订单模块
 
-> 触发方式：用户说"帮我重构订单模块"
+> 触发方式：用户明确说"使用 unified-taskflow 帮我重构订单模块"，或确认这是一个需要 anchor/checkpoint/design 的长任务。
 > 本示例展示 unified-taskflow 的工作流程
 
 ## Phase 0: 理解快照
