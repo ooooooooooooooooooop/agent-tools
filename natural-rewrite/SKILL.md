@@ -3,46 +3,35 @@ name: natural-rewrite
 description: 在保持事实、语气和含义的前提下，把消息、邮件、评论、解释、社交媒体内容或文案改写得自然流畅。用于中文或英文润色、去除机器翻译感、微信回复、私信、邮件草稿、评论和简洁改写；不得添加未经确认的事实。
 ---
 
-# Natural Rewrite
+# 自然改写
 
-Use this skill to make text sound natural, concise, and context-appropriate without changing the facts.
+## 适用范围
 
-## Rules
+把已有文本改得自然、简洁并符合渠道和关系，不改变事实、承诺、立场或确定性。默认使用中文；用户输入或要求明确使用其他语言时跟随用户。
 
-- Preserve the original meaning.
-- Do not add unconfirmed information.
-- Do not over-polish or expand without being asked.
-- Avoid template tone, translation tone, and excessive politeness.
-- Default to Chinese unless the input or user request indicates another language.
-- Match the relationship, channel, and stakes of the message.
-- If the user asks for one version, output only one version.
-- If the user does not specify a count, provide one to three versions.
+## 工作流程
 
-## Preservation Pass
+1. 识别并保留人名、机构、数字、日期、URL、否定、承诺、归属、不确定性和原始格式。
+2. 判断渠道、对象、关系、正式程度和长度要求。
+3. 只改写表达，不替用户补充事实、背景、建议或立场。
+4. 按用户要求输出一个版本；未指定数量时最多提供三个版本。
+5. 静默检查所有事实性约束仍然存在。
 
-Before polishing, identify and preserve named entities, numbers, dates, URLs, negation, commitments, attribution, uncertainty, and requested formatting. Keep the original level of certainty: do not turn “可能” into a fact, a question into a promise, or a personal opinion into an organizational position.
+## 默认风格
 
-If the source is ambiguous, preserve the ambiguity or flag it briefly; never resolve it by inventing context. For sensitive, legal, financial, medical, or interpersonal content, optimize wording only and do not broaden the claim or add advice unless requested.
+- 直接版：清楚、简洁、少客套。
+- 温和版：更柔和、更有分寸。
+- 轻松版：适合非正式渠道。
 
-## Default Versions
+不要默认使用“希望这封邮件找到你安好”“诚挚地”“非常荣幸”“期待您的回复”等模板化表达，除非语境确实正式且用户需要。
 
-- Direct: concise and clear.
-- Warm: slightly softer and more considerate.
-- Relaxed: more casual when the context allows it.
+## 安全边界
 
-## Avoid
+对于法律、金融、医疗或敏感人际内容，只优化措辞，不添加建议或扩大主张。原文含糊时保留含糊，必要时简短标出，不得自行补全语义。
 
-Avoid phrases such as:
-- "希望这封邮件找到你安好"
-- "诚挚地"
-- "非常荣幸"
-- "期待您的回复"
+## 输出契约
 
-Use them only when the context is genuinely formal and the user wants that tone.
-
-## Output
-
-When multiple versions are useful:
+多个版本时使用：
 
 ```text
 直接版：
@@ -52,4 +41,8 @@ When multiple versions are useful:
 轻松版：
 ```
 
-After rewriting, silently check that the meaning-bearing facts and constraints above are still present. If the user asks for a single version, do not expose this checklist or add alternatives.
+用户要求单一版本时只输出一个改写结果，不展示内部检查清单。
+
+## 验证
+
+检查事实、否定、数字、日期、URL、语气和格式是否保持；确认没有新增未经用户确认的信息。相关示例见 [chinese-message.md](examples/chinese-message.md)。

@@ -1,4 +1,25 @@
 {
+  "profiles": {
+    "core": [
+      "task-mode-router",
+      "clarify-before-change",
+      "minimal-implementation",
+      "skill-repository-maintainer",
+      "environment-bootstrap",
+      "skill-quality-gate"
+    ],
+    "full": [
+      "simulate-elite-experts",
+      "unified-taskflow",
+      "clarify-before-change",
+      "task-mode-router",
+      "natural-rewrite",
+      "minimal-implementation",
+      "skill-repository-maintainer",
+      "environment-bootstrap",
+      "skill-quality-gate"
+    ]
+  },
   "skills": [
     {
       "name": "simulate-elite-experts",
@@ -8,6 +29,7 @@
       "lang": ["en", "zh"],
       "category": "reasoning",
       "priority": "P1",
+      "tier": "optional",
       "depends_on": []
     },
     {
@@ -18,6 +40,7 @@
       "lang": ["zh"],
       "category": "workflow",
       "priority": "P0",
+      "tier": "conditional",
       "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
@@ -28,6 +51,7 @@
       "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
+      "tier": "core",
       "depends_on": ["task-mode-router"]
     },
     {
@@ -38,6 +62,7 @@
       "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
+      "tier": "core",
       "depends_on": []
     },
     {
@@ -48,6 +73,7 @@
       "lang": ["en", "zh"],
       "category": "writing",
       "priority": "P1",
+      "tier": "optional",
       "depends_on": []
     },
     {
@@ -58,16 +84,7 @@
       "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
-      "depends_on": []
-    },
-    {
-      "name": "weekly-work-summary",
-      "path": "./weekly-work-summary",
-      "version": "1.1.0",
-      "description": "基于工作区证据重建周报、状态总结和按日回顾，区分事实与推断",
-      "lang": ["en", "zh"],
-      "category": "reporting",
-      "priority": "P1",
+      "tier": "core",
       "depends_on": []
     },
     {
@@ -78,6 +95,7 @@
       "lang": ["en", "zh"],
       "category": "maintenance",
       "priority": "P0",
+      "tier": "core",
       "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
@@ -88,6 +106,18 @@
       "lang": ["en", "zh"],
       "category": "maintenance",
       "priority": "P0",
+      "tier": "core",
+      "depends_on": ["skill-repository-maintainer"]
+    },
+    {
+      "name": "skill-quality-gate",
+      "path": "./skill-quality-gate",
+      "version": "1.0.0",
+      "description": "评估 Skill 的触发边界、输出契约、验证方式和回归质量",
+      "lang": ["zh"],
+      "category": "maintenance",
+      "priority": "P0",
+      "tier": "core",
       "depends_on": ["skill-repository-maintainer"]
     }
   ]

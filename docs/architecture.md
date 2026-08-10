@@ -1,37 +1,48 @@
-# Repository Architecture
+# 仓库架构
 
-This repository is the source of truth for a small collection of Codex skills. It is a package registry plus validation and synchronization tooling; it is not a runtime workspace and it does not publish user data.
+本仓库是 Codex Skill 的源仓库和发布控制面，不是运行时工作区，也不发布用户数据。
 
-## Source of truth
+## 三层边界
 
-```mermaid
-flowchart LR
-    M[skills.json manifest] --> P[Skill packages]
-    P --> V[scripts/validate_repo.py]
-    P --> S[scripts/sync_skills.py]
-    V --> C[CI checks]
-    S --> D[Explicit destination
-    such as ~/.codex/skills]
-    R[Runtime and private files] -. ignored .-> X[Not published]
+```text
+源仓库层
+  skills.json + 根目录 Skill 包
+        |
+        v
+质量与发布层
+  scripts/ + tests/ + CI + install profiles
+        |
+        v
+运行时层
+  C:\Users\<user>\.codex\skills
 ```
 
-- `skills.json` is the registry. Each entry names one root-level package, its version, language, category, and dependencies.
-- A skill package is self-contained: `SKILL.md` is the instruction entry point; `agents/openai.yaml` is published UI metadata; `examples/` contains at least one representative case; `references/`, `scripts/`, and `assets/` are optional.
-- `scripts/validate_repo.py` checks the registry and package contract without third-party dependencies.
-- `scripts/sync_skills.py` compares or explicitly copies registered packages using SHA-256 and never deletes destination-only files.
-- `.taskflow/`, `.grepai/`, `node_modules/`, `Users/`, caches, temporary inspection files, and generated weekly reports are local runtime state and are excluded from publication.
+- `skills.json` 是注册表，包含包路径、版本、层级、依赖和安装 profile。
+- 根目录 Skill 包是发布源。保持根目录布局，以兼容 `npx skills add ... --skill <name>`。
+- `scripts/validate_repo.py` 检查结构、manifest、元数据、示例和链接。
+- `skill-quality-gate/scripts/quality_report.py` 检查触发边界、输出契约、验证信号和包内质量门槛。
+- `scripts/sync_skills.py` 使用 SHA-256 比较或复制已登记包，永不删除目标端额外文件。
+- `.taskflow/`、`.grepai/`、`.claude/`、`node_modules/`、私有记忆、临时文件和生成物属于本地运行状态。
 
-## Package boundaries
+## 安装 profile
 
-Keep each skill at the repository root so the existing `npx skills add ... --skill <name>` workflow remains compatible. Do not place private project-specific data under a published package. Long variant-specific guidance belongs in `references/`; deterministic repeated logic belongs in `scripts/`.
+- `core`：任务路由、修改边界、仓库维护、环境恢复和质量门禁。
+- `full`：所有已登记包，包括可选的专家模拟、自然改写和条件启用的重型任务流。
+- `conditional` Skill 不应因为普通请求自动启动；是否启用由触发门禁决定。
 
-## Change flow
+## Skill 包边界
 
-1. Update or add a package and its manifest entry.
-2. Run the strict repository validator.
-3. Run the relevant package smoke test and repository regression tests.
-4. Review the diff and generated-file boundary.
-5. Use `sync_skills.py --check` for a read-only destination audit.
-6. Use `sync_skills.py --apply` only when the destination is intentional, then run `--check` again.
+每个注册包必须自包含：`SKILL.md` 是入口，`agents/openai.yaml` 是 UI 元数据，`examples/` 至少有一个非空示例。详细规则放在 `references/`，确定性重复逻辑放在 `scripts/`，输出模板放在 `assets/`。
 
-Git commit, push, and PR creation are separate actions and are not performed by repository validation or synchronization.
+不要把私有记忆、缓存、依赖树、机器路径、周报产物或临时检查文件放入包内。仓库外的运行产物应放在单独的工作目录；当前仓库中的 `.taskflow/` 仅因任务流脚本约定而保留为被忽略状态。
+
+## 变更流程
+
+1. 修改或新增包，并更新 `skills.json` 与对应 profile。
+2. 运行严格仓库校验和 Skill 质量门禁。
+3. 运行相关包的 smoke test、回归测试和 Python 语法检查。
+4. 检查 Git 差异和运行时文件边界。
+5. 对目标设备运行 `scripts/sync_skills.py --check`。
+6. 只有用户明确要求时才运行 `--apply`，应用后立即再次 `--check`。
+
+Git 提交、推送、PR 创建和用户级同步是独立动作，不由仓库校验自动执行。

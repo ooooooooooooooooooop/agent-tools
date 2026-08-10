@@ -804,6 +804,10 @@ def parse_global_options(argv: List[str]) -> List[str]:
 
 
 def main():
+    if any(item in {"--help", "-h"} for item in sys.argv[1:]):
+        print(__doc__)
+        sys.exit(0)
+
     try:
         argv = parse_global_options(sys.argv[1:])
     except ValueError as exc:

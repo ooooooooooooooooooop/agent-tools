@@ -1,38 +1,37 @@
-# Synchronization and Release
+# 同步与发布
 
-The repository is authoritative. Synchronization is an explicit copy operation from registered packages to a destination such as `C:\Users\yexue\.codex\skills`.
+仓库是源端。同步是从已登记包到明确目的地的显式复制操作，例如 `C:\Users\<user>\.codex\skills`。
 
-## Read-only audit
+## 只读审计
 
 ```bash
 python3 scripts/validate_repo.py --strict
-python3 scripts/sync_skills.py --destination "$CODEX_HOME/skills" --check
+python3 skill-quality-gate/scripts/quality_report.py --root . --strict
+python3 scripts/sync_skills.py --destination "<destination>" --profile core --check
 ```
 
-If `CODEX_HOME` is unset on Windows, use the actual configured Codex directory explicitly. The check compares every publishable source file by SHA-256 and reports missing, different, and destination-only files.
+`--profile core` 只检查核心包；`--profile full` 检查完整集合；也可以使用一个或多个 `--skill` 做窄范围检查。脚本按文件 SHA-256 比较 missing、different、same 和 destination-only。
 
-## Apply and verify
+## 应用并复核
 
 ```bash
-python3 scripts/sync_skills.py --destination "$CODEX_HOME/skills" --apply
-python3 scripts/sync_skills.py --destination "$CODEX_HOME/skills" --check
+python3 scripts/sync_skills.py --destination "<destination>" --profile full --apply
+python3 scripts/sync_skills.py --destination "<destination>" --profile full --check
 ```
 
-Use `--skill <name>` one or more times for a narrow package sync. The script creates parent directories and replaces files atomically. It never deletes destination-only files, so stale files require a separate, explicitly reviewed cleanup decision.
+脚本会原子复制缺失或不同的源文件，但永远不删除目的地额外文件。已从仓库移除的旧 Skill 如果仍在目的地，只能作为 destination-only 单独审查；删除它是另一个明确的高风险动作。
 
-## Rollback
+## 回滚
 
-Before applying a material package change, preserve the destination state if rollback matters. A rollback is another intentional copy from a known-good source revision or a restored backup, followed by `--check`. Do not use recursive deletion or broad directory replacement as a rollback mechanism.
+需要回滚时，从已知稳定的仓库提交或备份重新复制，再运行 `--check`。不要使用递归删除或整目录替换作为回滚手段。
 
-## Release gate
+## 发布门禁
 
-Before commit or publishing:
+1. 严格仓库校验通过。
+2. Skill 质量门禁通过。
+3. 回归测试和相关包 smoke test 通过。
+4. Python 语法与 Markdown 检查通过。
+5. 目标设备的只读同步检查通过。
+6. `git diff --check` 和最终差异不包含私有/运行时文件。
 
-1. `python3 scripts/validate_repo.py --strict` passes.
-2. `python3 -m unittest discover -s tests -v` passes.
-3. Python syntax and Markdown lint pass.
-4. Relevant examples and package validators pass.
-5. `sync_skills.py --check` is clean for each intended destination.
-6. `git diff --check` and the final diff contain no private/runtime artifacts.
-
-Repository maintenance does not commit, push, open PRs, install plugins, or change global configuration unless the user requests those actions separately.
+仓库维护不会自动提交、推送、创建 PR、安装插件或修改全局配置。

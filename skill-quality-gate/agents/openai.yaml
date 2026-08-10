@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill 质量门禁"
+  short_description: "评估 Skill 的触发边界、输出契约、验证方式和回归质量。"
+  default_prompt: "使用 $skill-quality-gate 审查目标 Skill 的触发条件、边界、输出契约、证据和回归测试。"
