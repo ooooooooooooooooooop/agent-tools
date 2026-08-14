@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "skills.json"
+MCP_MANIFEST_PATH = ROOT / "mcp.json"
 FRONTMATTER_RE = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\s*\r?\n|$)", re.DOTALL)
 LOCAL_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -34,6 +35,12 @@ EXCLUDED_DIRS = {
     "__pycache__",
     "_template",
 }
+MCP_FORBIDDEN_NAMES = {
+    "config.json",
+    "state.sqlite",
+    "agent-broker.log",
+}
+MCP_FORBIDDEN_SUFFIXES = {".jsonl", ".log"}
 
 
 def rel(path: Path) -> str:
@@ -135,6 +142,124 @@ def check_local_links() -> Tuple[List[str], List[str]]:
             elif not target_path.exists():
                 errors.append(f"{rel(path)} links to missing path: {target}")
     return errors, warnings
+
+
+def validate_mcp_manifest() -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
+    """Validate MCP packages without imposing the Skill package contract."""
+    checked: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    warnings: List[str] = []
+    if not MCP_MANIFEST_PATH.is_file():
+        return checked, ["mcp.json is missing"], warnings
+    try:
+        manifest = json.loads(MCP_MANIFEST_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return checked, [f"mcp.json cannot be read as JSON: {exc}"], warnings
+
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        errors.append("mcp.json schema_version must be 1")
+    entries = manifest.get("mcp_servers") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        errors.append("mcp.json must contain a top-level mcp_servers array")
+        return checked, errors, warnings
+
+    names: set[str] = set()
+    required_text = (
+        "name",
+        "path",
+        "description",
+        "upstream_repository",
+        "upstream_commit",
+        "upstream_version",
+        "distribution_revision",
+        "entrypoint",
+        "installer",
+        "license",
+        "license_file",
+        "python",
+    )
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"mcp_servers[{index}] must be an object")
+            continue
+        for field in required_text:
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                errors.append(f"mcp_servers[{index}] is missing a valid {field}")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if not SKILL_NAME_RE.fullmatch(name):
+            errors.append(f"mcp_servers[{index}] has invalid hyphenated name: {name}")
+        if name in names:
+            errors.append(f"duplicate MCP name in mcp.json: {name}")
+        names.add(name)
+        if not CJK_RE.search(str(entry.get("description") or "")):
+            errors.append(f"{name} MCP description must contain Chinese")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(entry.get("upstream_commit") or "")):
+            errors.append(f"{name} upstream_commit must be a lowercase 40-character Git SHA")
+        platforms = entry.get("platforms")
+        if not isinstance(platforms, list) or not platforms or not all(
+            isinstance(item, str) and item.strip() for item in platforms
+        ):
+            errors.append(f"{name} must declare a non-empty platforms array")
+
+        package_path = entry.get("path")
+        if not isinstance(package_path, str) or not package_path:
+            continue
+        package = (ROOT / package_path).resolve()
+        if not inside_root(package):
+            errors.append(f"{name} points outside the repository: {package_path}")
+            continue
+        if not package.is_dir():
+            errors.append(f"{name} MCP package directory is missing: {package_path}")
+            continue
+
+        for field in ("entrypoint", "installer", "license_file"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                continue
+            target = (package / value).resolve()
+            if not inside_root(target) or not target.is_file():
+                errors.append(f"{name} {field} is missing or outside the repository: {value}")
+        readme = package / "README.md"
+        if not readme.is_file():
+            errors.append(f"{name} MCP package is missing README.md")
+        tests_dir = package / "tests"
+        if not tests_dir.is_dir() or not any(tests_dir.glob("test_*.py")):
+            warnings.append(f"{name} MCP package has no Python regression tests")
+
+        license_path = package / str(entry.get("license_file") or "LICENSE")
+        if license_path.is_file():
+            try:
+                license_text = license_path.read_text(encoding="utf-8-sig")
+            except UnicodeDecodeError as exc:
+                errors.append(f"{rel(license_path)} is not valid UTF-8: {exc}")
+            else:
+                if entry.get("license") == "PolyForm-Noncommercial-1.0.0":
+                    if "PolyForm Noncommercial License 1.0.0" not in license_text:
+                        errors.append(f"{name} license file does not contain the declared PolyForm license")
+                    if "Required Notice:" not in license_text:
+                        errors.append(f"{name} license file is missing the upstream Required Notice")
+
+        for path in package.rglob("*"):
+            if not path.is_file():
+                continue
+            lowered = path.name.lower()
+            if lowered in MCP_FORBIDDEN_NAMES or path.suffix.lower() in MCP_FORBIDDEN_SUFFIXES:
+                errors.append(f"{name} publishes forbidden runtime file: {rel(path)}")
+
+        checked.append(
+            {
+                "name": name,
+                "path": package_path,
+                "upstream_commit": entry.get("upstream_commit"),
+                "upstream_version": entry.get("upstream_version"),
+                "distribution_revision": entry.get("distribution_revision"),
+                "license": entry.get("license"),
+                "platforms": platforms,
+            }
+        )
+    return checked, errors, warnings
 
 
 def validate(strict: bool = False) -> Dict[str, Any]:
@@ -304,6 +429,10 @@ def validate(strict: bool = False) -> Dict[str, Any]:
         if name not in manifest_names:
             errors.append(f"skill directory is not registered in skills.json: {name}")
 
+    checked_mcp, mcp_errors, mcp_warnings = validate_mcp_manifest()
+    errors.extend(mcp_errors)
+    warnings.extend(mcp_warnings)
+
     link_errors, link_warnings = check_local_links()
     errors.extend(link_errors)
     warnings.extend(link_warnings)
@@ -316,6 +445,7 @@ def validate(strict: bool = False) -> Dict[str, Any]:
         "pass": not errors,
         "root": str(ROOT),
         "skills": checked_skills,
+        "mcp_servers": checked_mcp,
         "errors": errors,
         "warnings": warnings,
     }
@@ -332,7 +462,10 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         status = "PASS" if result["pass"] else "FAIL"
-        print(f"{status}: {len(result['skills'])} manifest skill(s) checked")
+        print(
+            f"{status}: {len(result['skills'])} manifest skill(s), "
+            f"{len(result.get('mcp_servers', []))} MCP server(s) checked"
+        )
         for message in result["errors"]:
             print(f"ERROR: {message}")
         for message in result["warnings"]:

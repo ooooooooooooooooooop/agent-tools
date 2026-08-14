@@ -49,6 +49,47 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("weekly-work-summary", names)
         self.assertEqual(len(names), len(manifest["skills"]))
 
+    def test_mcp_manifest_registers_real_server_package(self) -> None:
+        manifest = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema_version"], 1)
+        servers = {entry["name"]: entry for entry in manifest["mcp_servers"]}
+        self.assertIn("agent-switchboard", servers)
+        switchboard = servers["agent-switchboard"]
+        package = (ROOT / switchboard["path"]).resolve()
+        self.assertTrue((package / switchboard["entrypoint"]).is_file())
+        self.assertTrue((package / switchboard["installer"]).is_file())
+        self.assertFalse((package / "SKILL.md").exists())
+        self.assertEqual(switchboard["license"], "PolyForm-Noncommercial-1.0.0")
+
+    def test_switchboard_distribution_excludes_machine_state_and_identifiers(self) -> None:
+        package = ROOT / "mcp" / "agent-switchboard"
+        forbidden_files = {"state.sqlite", "config.json", "agent-broker.log"}
+        for path in package.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(path.name.lower(), forbidden_files, str(path))
+                self.assertNotEqual(path.suffix.lower(), ".jsonl", str(path))
+        source_text = "\n".join(
+            path.read_text(encoding="utf-8", errors="strict")
+            for path in package.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".py", ".md", ".json", ".ps1"}
+        )
+        self.assertNotRegex(source_text, re.compile(r"[A-Za-z]:\\Desktop\\", re.IGNORECASE))
+        self.assertNotRegex(
+            source_text,
+            re.compile(r"C:\\Users\\(?!Example(?:\\|$))", re.IGNORECASE),
+        )
+        self.assertNotRegex(
+            source_text,
+            re.compile(r"/c/Users/(?!Example User/)", re.IGNORECASE),
+        )
+
+    def test_switchboard_distribution_retains_upstream_license_notice(self) -> None:
+        license_text = (ROOT / "mcp" / "agent-switchboard" / "LICENSE").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PolyForm Noncommercial License 1.0.0", license_text)
+        self.assertIn("Required Notice:", license_text)
+
     def test_install_profiles_cover_registered_packages(self) -> None:
         manifest = json.loads((ROOT / "skills.json").read_text(encoding="utf-8"))
         names = {entry["name"] for entry in manifest["skills"]}

@@ -1,0 +1,548 @@
+"""Focused standard-library tests for cost-aware routing (Package D).
+
+Covers: Claude stream parsing/model attestation, Codex stdout parsing across two
+observed CLI versions, turn_context model/effort extraction, discover_codex /
+resolve_codex_path resolution order, and the required routing contract strings.
+
+Uses only unittest/tempfile/unittest.mock. No real home/config/DB is touched:
+every filesystem lookup that would otherwise hit Path.home() or the real broker
+home is redirected to a TemporaryDirectory for the duration of each test.
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import agent_broker_mcp as broker  # noqa: E402
+import agent_broker_entry  # noqa: E402
+import routing_gate  # noqa: E402
+import setup as broker_setup  # noqa: E402
+from switchboard_version import BROKER_VERSION  # noqa: E402
+
+
+class ClaudeStreamParserTests(unittest.TestCase):
+    def test_ignores_subagent_model_uses_main_thread_message_model(self):
+        stdout = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "parent_tool_use_id": "sub-1",
+                        "message": {"model": "claude-haiku-4-5-20251001", "content": [{"text": "sub work"}]},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"model": "claude-sonnet-5", "content": [{"text": "main answer"}]},
+                    }
+                ),
+                json.dumps({"type": "result", "result": "final response", "modelUsage": {"claude-opus-4-8": {}}}),
+            ]
+        )
+        parsed = broker.parse_claude_stream_output(stdout)
+        self.assertEqual(parsed.actual_model, "claude-sonnet-5")
+        self.assertEqual(parsed.response, "final response")
+
+    def test_ignores_result_model_usage_entirely(self):
+        stdout = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"model": "claude-sonnet-5", "content": [{"text": "hi"}]},
+                    }
+                ),
+                json.dumps({"type": "result", "result": "ok", "modelUsage": {"claude-opus-4-8": {"tokens": 999}}}),
+            ]
+        )
+        parsed = broker.parse_claude_stream_output(stdout)
+        self.assertEqual(parsed.actual_model, "claude-sonnet-5")
+
+    def test_family_alias_matches_dated_concrete_id(self):
+        self.assertTrue(broker.claude_model_attested("sonnet", "claude-sonnet-5"))
+        self.assertTrue(broker.claude_model_attested("haiku", "claude-haiku-4-5-20251001"))
+
+    def test_wrong_concrete_or_different_dated_id_fails(self):
+        self.assertFalse(broker.claude_model_attested("claude-sonnet-5", "claude-sonnet-4-20250514"))
+        self.assertFalse(broker.claude_model_attested("haiku", "claude-sonnet-5"))
+
+    def test_configured_provider_alias_attests_observed_runtime_model(self):
+        config = {
+            "claude_model_attestation_aliases": {
+                "opus": ["provider-model-x"],
+            }
+        }
+        with mock.patch.object(broker, "load_config", return_value=config):
+            self.assertTrue(broker.claude_model_attested("opus", "provider-model-x"))
+            self.assertFalse(broker.claude_model_attested("opus", "another-model"))
+
+    def test_configured_claude_model_is_family_default(self):
+        with mock.patch.object(broker, "load_config", return_value={"claude_model": "opus"}):
+            self.assertEqual(broker.family_frontier_model("claude"), "opus")
+
+
+CODEX_0146_STDOUT = "\n".join(
+    [
+        json.dumps({"type": "thread.started", "thread_id": "aaaaaaaa-0146-4a4a-8a8a-aaaaaaaaaaaa"}),
+        json.dumps(
+            {
+                "type": "token_count",
+                "usage": {
+                    "input_tokens": 120,
+                    "cached_input_tokens": 30,
+                    "cache_write_input_tokens": 12,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 15,
+                },
+            }
+        ),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "hello from 0.146"}}),
+    ]
+)
+
+CODEX_0144_STDOUT = "\n".join(
+    [
+        json.dumps({"type": "thread.started", "thread_id": "bbbbbbbb-0144-4b4b-8b8b-bbbbbbbbbbbb"}),
+        json.dumps(
+            {
+                "type": "token_count",
+                "usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 35,
+                },
+            }
+        ),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "hello from 0.144"}}),
+    ]
+)
+
+
+class CodexStreamParserTests(unittest.TestCase):
+    def test_parses_0146_stream_with_extra_usage_fields(self):
+        parsed = broker.parse_codex_stream_output(CODEX_0146_STDOUT)
+        self.assertEqual(parsed.thread_id, "aaaaaaaa-0146-4a4a-8a8a-aaaaaaaaaaaa")
+        self.assertEqual(parsed.response, "hello from 0.146")
+
+    def test_parses_0144_stream_without_cache_write_or_reasoning_tokens(self):
+        payload = json.loads(CODEX_0144_STDOUT.splitlines()[1])
+        self.assertNotIn("cache_write_input_tokens", payload["usage"])
+        self.assertNotIn("reasoning_output_tokens", payload["usage"])
+        parsed = broker.parse_codex_stream_output(CODEX_0144_STDOUT)
+        self.assertEqual(parsed.thread_id, "bbbbbbbb-0144-4b4b-8b8b-bbbbbbbbbbbb")
+        self.assertEqual(parsed.response, "hello from 0.144")
+
+
+class TurnContextExtractionTests(unittest.TestCase):
+    def _write_rollout(self, tmpdir: str, lines: list[dict]) -> Path:
+        path = Path(tmpdir) / "rollout-test.jsonl"
+        path.write_text("\n".join(json.dumps(line) for line in lines), encoding="utf-8")
+        return path
+
+    def test_extracts_model_and_effort_from_first_fixture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_rollout(
+                tmpdir,
+                [
+                    {"type": "session_meta", "payload": {"id": "1"}},
+                    {"type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "medium"}},
+                    {"type": "response_item", "payload": {"content": "irrelevant"}},
+                ],
+            )
+            model, effort = broker._codex_turn_context_model_effort(path)
+            self.assertEqual(model, "gpt-5.6-terra")
+            self.assertEqual(effort, "medium")
+
+    def test_extracts_model_and_effort_from_second_fixture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_rollout(
+                tmpdir,
+                [
+                    {"type": "turn_context", "payload": {"model": "gpt-5.6", "effort": "high"}},
+                ],
+            )
+            model, effort = broker._codex_turn_context_model_effort(path)
+            self.assertEqual(model, "gpt-5.6")
+            self.assertEqual(effort, "high")
+
+    def test_codex_exact_and_alias_matching(self):
+        self.assertTrue(broker.codex_model_attested("gpt-5.6-terra", "gpt-5.6-terra"))
+        self.assertTrue(broker.codex_model_attested("terra", "gpt-5.6-terra"))
+        self.assertTrue(broker.codex_model_attested("sol", "gpt-5.6-sol"))
+        self.assertTrue(broker.codex_model_attested("luna", "gpt-5.6-luna"))
+
+    def test_codex_missing_mismatch_fails(self):
+        self.assertFalse(broker.codex_model_attested("gpt-5.6-terra", "gpt-5.6-sol"))
+        self.assertFalse(broker.codex_model_attested("terra", None))
+        self.assertFalse(broker.codex_model_attested("terra", ""))
+
+
+class DiscoverCodexOrderTests(unittest.TestCase):
+    def test_valid_configured_path_wins_over_marker_and_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            configured = tmp / "configured-codex.exe"
+            configured.write_text("stub", encoding="utf-8")
+
+            codex_dir = tmp / "home" / ".codex"
+            codex_dir.mkdir(parents=True)
+            marker_target = tmp / "marker-codex.exe"
+            marker_target.write_text("stub", encoding="utf-8")
+            (codex_dir / "config.toml").write_text(
+                f'CODEX_CLI_PATH = "{marker_target}"', encoding="utf-8"
+            )
+
+            with mock.patch.object(Path, "home", return_value=tmp / "home"), \
+                 mock.patch.object(broker.shutil, "which", return_value=str(tmp / "path-codex.exe")):
+                result = broker.discover_codex({"codex_path": str(configured)})
+            self.assertEqual(result, str(configured))
+
+    def test_marker_wins_over_mocked_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            codex_dir = tmp / "home" / ".codex"
+            codex_dir.mkdir(parents=True)
+            marker_target = tmp / "marker-codex.exe"
+            marker_target.write_text("stub", encoding="utf-8")
+            (codex_dir / "config.toml").write_text(
+                f'CODEX_CLI_PATH = "{marker_target}"', encoding="utf-8"
+            )
+
+            with mock.patch.object(Path, "home", return_value=tmp / "home"), \
+                 mock.patch.object(broker.shutil, "which", return_value=str(tmp / "path-codex.exe")), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CODEX_PATH", None)
+                result = broker.discover_codex({})
+            self.assertEqual(result, str(marker_target))
+
+    def test_falls_back_to_mocked_path_when_no_configured_or_marker(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            home = tmp / "home"
+            home.mkdir()
+            path_codex = tmp / "path-codex.exe"
+            path_codex.write_text("stub", encoding="utf-8")
+
+            with mock.patch.object(Path, "home", return_value=home), \
+                 mock.patch.object(broker.shutil, "which", return_value=str(path_codex)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CODEX_PATH", None)
+                result = broker.discover_codex({})
+            self.assertEqual(result, str(path_codex))
+
+
+class ResolveCodexPathTests(unittest.TestCase):
+    def test_marker_wins_over_mocked_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            marker_target = tmp / "marker-codex.exe"
+            marker_target.write_text("stub", encoding="utf-8")
+            toml_path = tmp / "config.toml"
+            toml_path.write_text(f'CODEX_CLI_PATH = "{marker_target}"', encoding="utf-8")
+
+            with mock.patch.object(broker_setup, "CODEX_TOML", toml_path), \
+                 mock.patch.object(broker_setup.shutil, "which", return_value=str(tmp / "path-codex.exe")):
+                result = broker_setup.resolve_codex_path()
+            self.assertEqual(result, str(marker_target))
+
+    def test_stale_marker_falls_back_to_mocked_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            stale_target = tmp / "does-not-exist-codex.exe"
+            toml_path = tmp / "config.toml"
+            toml_path.write_text(f'CODEX_CLI_PATH = "{stale_target}"', encoding="utf-8")
+            path_codex = tmp / "path-codex.exe"
+            path_codex.write_text("stub", encoding="utf-8")
+
+            with mock.patch.object(broker_setup, "CODEX_TOML", toml_path), \
+                 mock.patch.object(broker_setup.shutil, "which", return_value=str(path_codex)):
+                result = broker_setup.resolve_codex_path()
+            self.assertEqual(result, str(path_codex))
+
+    def test_no_marker_file_falls_back_to_mocked_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            toml_path = tmp / ".codex-missing" / "config.toml"
+            path_codex = tmp / "path-codex.exe"
+            path_codex.write_text("stub", encoding="utf-8")
+
+            with mock.patch.object(broker_setup, "CODEX_TOML", toml_path), \
+                 mock.patch.object(broker_setup.shutil, "which", return_value=str(path_codex)):
+                result = broker_setup.resolve_codex_path()
+            self.assertEqual(result, str(path_codex))
+
+
+class RoutingContractStringsTests(unittest.TestCase):
+    def test_implementation_plan_contract_has_portable_lane_fields(self):
+        contract = broker.TASK_CONTRACTS["implementation_plan"]
+        matches = [line for line in contract if "Lane |" in line]
+        self.assertTrue(matches, "expected a portable Lane | ... work-package line")
+        route_line = matches[0]
+        for field in ("Lane", "mechanism", "model/effort", "deliverable", "verification", "escalation"):
+            self.assertIn(field, route_line)
+
+    def test_ascii_override_marker_present_and_ascii_only(self):
+        implementation_contract = broker.TASK_CONTRACTS["implementation"]
+        matches = [line for line in implementation_contract if "override: brain" in line]
+        self.assertTrue(matches, "expected an ASCII override marker line in the implementation contract")
+        for line in matches:
+            line.encode("ascii")
+
+        cost_aware_matches = [line for line in broker.COST_AWARE_ROUTING_RULES if "override: brain" in line]
+        self.assertTrue(cost_aware_matches)
+        for line in cost_aware_matches:
+            line.encode("ascii")
+
+    def test_mixed_native_and_broker_receipt_audit_required(self):
+        matches = [
+            line
+            for line in broker.COST_AWARE_ROUTING_RULES
+            if "native:<agent-id>" in line
+            and "broker:<uuid>" in line
+            and "structured per-package brain override" in line
+        ]
+        self.assertTrue(matches, "expected the mixed native/broker routing audit rule")
+
+    def test_plan_contract_defines_reader_located_decision_premise(self):
+        text = " ".join(broker.TASK_CONTRACTS["implementation_plan"]).lower()
+        self.assertIn("decision premise", text)
+        self.assertIn("reader to locate minimal primary evidence", text)
+        self.assertIn("adjudication for the brain", text)
+
+    def test_implementation_contract_caps_brain_context_ingress(self):
+        text = " ".join(broker.TASK_CONTRACTS["implementation"]).lower()
+        self.assertIn("field projection and output cap", text)
+        self.assertIn("8,000 characters", text)
+        self.assertIn("raw evidence external", text)
+
+    def test_global_rules_cover_premises_and_unplanned_direct_labour(self):
+        text = " ".join(broker.COST_AWARE_ROUTING_RULES).lower()
+        self.assertIn("brain-context ingress", text)
+        self.assertIn("decision premise", text)
+        self.assertIn("planned and unplanned packages", text)
+        self.assertIn("direct-brain-labour:", text)
+
+    def test_contracts_require_bounded_pretooluse_relief_and_return_cap(self):
+        implementation = " ".join(broker.TASK_CONTRACTS["implementation"]).lower()
+        global_rules = " ".join(broker.COST_AWARE_ROUTING_RULES).lower()
+        for text in (implementation, global_rules):
+            self.assertIn("pretooluse", text)
+            self.assertIn("ten direct", text)
+            self.assertIn("next bounded block", text)
+            self.assertIn("routing-override", text)
+        self.assertIn("registered overrides must appear in the final audit", global_rules)
+
+
+class EntryVersionTests(unittest.TestCase):
+    def test_all_version_aliases_print_shared_release_version(self):
+        for alias in ("--version", "version", "-v"):
+            with self.subTest(alias=alias), mock.patch.object(
+                sys, "argv", ["agent-switchboard.exe", alias]
+            ):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    result = agent_broker_entry.run()
+                self.assertEqual(result, 0)
+                self.assertEqual(stdout.getvalue().strip(), f"Agent Switchboard {BROKER_VERSION}")
+
+    def test_routing_override_entry_forwards_arguments(self):
+        argv = [
+            "agent-switchboard.exe",
+            "routing-override",
+            "--session",
+            "session-1",
+            "--package",
+            "WP2",
+            "--reason",
+            "architecture boundary requires brain review",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            routing_gate, "routing_override_cli", return_value=0
+        ) as override:
+            self.assertEqual(agent_broker_entry.run(), 0)
+        override.assert_called_once_with(argv[2:])
+
+    def test_routing_override_cli_rejects_invalid_package_and_short_reason(self):
+        cases = (
+            ["--session", "session-1", "--package", "bad-package", "--reason", "long enough reason"],
+            ["--session", "session-1", "--package", "WP2", "--reason", "short"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv), mock.patch.object(
+                routing_gate, "register_brain_override", return_value=False
+            ), mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(routing_gate.routing_override_cli(argv), 2)
+
+
+class NativeFirstBrokerGuardTests(unittest.TestCase):
+    def test_direct_same_vendor_codex_queue_is_rejected_before_enqueue(self):
+        with mock.patch.object(broker, "_MCP_CLIENT_NAME", "codex-vscode"), mock.patch.object(
+            broker, "queue_codex_request"
+        ) as enqueue:
+            with self.assertRaisesRegex(ValueError, "native subagents first"):
+                broker.handle_tool("queue_codex_request", {"prompt": "routine implementation"})
+        enqueue.assert_not_called()
+
+    def test_direct_same_vendor_claude_queue_allows_concrete_native_failure(self):
+        args = {
+            "prompt": "routine implementation",
+            "native_unavailable_reason": "economy-worker failed to start twice",
+        }
+        with mock.patch.object(broker, "_MCP_CLIENT_NAME", "claude-code"), mock.patch.object(
+            broker, "queue_claude_request", return_value={"queued": True}
+        ) as enqueue:
+            broker.handle_tool("queue_claude_request", args)
+        enqueue.assert_called_once()
+
+    def test_cross_vendor_queue_does_not_require_native_failure(self):
+        with mock.patch.object(broker, "_MCP_CLIENT_NAME", "claude-code"), mock.patch.object(
+            broker, "queue_codex_request", return_value={"queued": True}
+        ) as enqueue:
+            broker.handle_tool("queue_codex_request", {"prompt": "frontier consult"})
+        enqueue.assert_called_once()
+
+    def test_route_agent_task_cannot_bypass_same_vendor_guard(self):
+        resolved = {
+            "status": "resolved",
+            "target_agent": "codex_cli",
+            "target_model": "gpt-5.6-terra",
+            "effort": "medium",
+            "source": "explicit_request",
+        }
+        args = {
+            "prompt": "implement the approved mechanical package",
+            "target_agent": "codex",
+            "target_model": "gpt-5.6-terra",
+            "model_policy": "balanced",
+        }
+        with mock.patch.object(broker, "_MCP_CLIENT_NAME", "codex-vscode"), mock.patch.object(
+            broker, "resolve_model_request", return_value=resolved
+        ):
+            with self.assertRaisesRegex(ValueError, "native subagents first"):
+                broker.route_agent_task(args)
+
+
+class MCPContextSnapshotContractTests(unittest.TestCase):
+    def test_initialize_instructs_snapshot_before_heartbeat_diagnostics(self):
+        response = broker.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "clientInfo": {"name": "codex"},
+                },
+            }
+        )
+        instructions = response["result"]["instructions"]
+        self.assertIn("call request_context_snapshot first", instructions)
+        self.assertIn("do not require a live heartbeat", instructions)
+        self.assertIn("MUST NOT be interpreted as no readable session", instructions)
+
+    def test_live_surfaces_result_explicitly_does_not_test_session_readability(self):
+        connection = mock.MagicMock()
+        connection.execute.return_value.fetchall.return_value = []
+        connection_context = mock.MagicMock()
+        connection_context.__enter__.return_value = connection
+        with mock.patch.object(broker, "init_db"), mock.patch.object(
+            broker, "db_connect", return_value=connection_context
+        ):
+            result = broker.list_live_surfaces("sample-project", 300)
+        self.assertEqual(result["surfaces"], [])
+        self.assertEqual(result["scope"], "bridge_heartbeats_only")
+        self.assertEqual(result["session_readability"], "not_tested")
+        self.assertIn("request_context_snapshot", result["next_action_for_agent_activity"])
+
+    def test_scrub_surrogates_preserves_pairs_and_replaces_only_lone_values(self):
+        value = {
+            "text": "before" + chr(0xD83D) + chr(0xDE00) + "middle" + chr(0xDCAB) + "after"
+        }
+        normalized = broker.scrub_surrogates(value)
+        self.assertEqual(normalized["text"], "before\U0001f600middle\ufffdafter")
+        normalized["text"].encode("utf-8", errors="strict")
+
+    def test_claude_transcript_lone_surrogate_still_yields_utf8_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"role": "assistant", "content": "valid" + chr(0xDCAB) + "tail"},
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            turns = broker._claude_session_turns(transcript, last_n=1)
+        self.assertEqual(turns, [("assistant", "valid\ufffdtail")])
+        turns[0][1].encode("utf-8", errors="strict")
+
+    def test_mcp_stdio_decodes_raw_utf8_chinese_before_sqlite_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            env = os.environ.copy()
+            env["AGENT_BROKER_HOME"] = str(Path(tmp) / "broker-home")
+            messages = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "clientInfo": {"name": "raw-utf8-test"},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "request_context_snapshot",
+                        "arguments": {
+                            "project": str(project),
+                            "target_agent": "claude",
+                            "requester_agent": "codex",
+                            "topic": "unicode_test",
+                            "question": "请用紧凑快照说明当前会话正在做什么",
+                            "max_tokens": 120,
+                        },
+                    },
+                },
+            ]
+            payload = ("\n".join(json.dumps(item, ensure_ascii=False) for item in messages) + "\n").encode("utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "agent_broker_mcp.py")],
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", errors="replace"))
+        responses = [json.loads(line) for line in proc.stdout.decode("utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(responses), 2)
+        tool_result = responses[1]["result"]
+        self.assertNotIn("isError", tool_result)
+        snapshot_result = json.loads(tool_result["content"][0]["text"])
+        self.assertEqual(snapshot_result["status"], "pending")
+
+
+if __name__ == "__main__":
+    unittest.main()
