@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import model_roles
+import managed_claude
 from switchboard_version import BROKER_VERSION
 
 
@@ -48,10 +49,11 @@ MCP_SERVER_INSTRUCTIONS = (
     "heartbeat. list_live_surfaces reports bridge heartbeats only; an empty surfaces list "
     "MUST NOT be interpreted as no readable session or as disconnection. Use "
     "list_live_surfaces only for bridge/CDP routing diagnostics. To discuss with or assign work "
-    "to an already-running Claude Code --resume session, use send_to_claude_session; it binds "
-    "the exact process to its existing MSYS tty and mintty window, submits there without opening "
-    "another Claude process, and verifies request/reply ancestry in the transcript. Set interrupt_current=true "
-    "only when the existing session's active tool must be stopped before the new message is submitted. For a separate consultation or "
+    "When the managed-supervisor tools are present in tools/list, they provide silent supervised "
+    "work through a Switchboard-owned detached stream-json process and never "
+    "focuses a window or touches the clipboard. The legacy send_to_claude_session route controls "
+    "an already-running mintty window and requires foreground_control=true on every real send. "
+    "For a separate consultation or "
     "delegation, use route_agent_task and report requested_model and actual_model separately."
 )
 
@@ -8380,8 +8382,73 @@ TOOLS = [
         },
     },
     {
+        "name": "start_managed_claude_supervisor",
+        "description": "Start a detached Switchboard-owned Claude Code stream-json session for one project. The daemon inherits the current Claude/CCSwitch environment, does not pass a model flag, opens no terminal window, and never uses focus, clipboard, or simulated keys. decision_mode=record_only records material events for later inspection; decision_mode=codex invokes one ephemeral read-only Codex decision only at turn completion, repeated tool failure, exhausted API retries, or unexpected process exit. Starting the supervisor sends no model prompt by itself.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "supervisor_id": {"type": "string", "description": "Stable local id for this managed project/session."},
+                "objective": {"type": "string", "description": "Durable objective included only in material-event decisions."},
+                "policy": {"type": "string", "description": "Compact milestone, safety, and acceptance rules."},
+                "permission_mode": {"type": "string", "enum": ["plan", "manual", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]},
+                "decision_mode": {"type": "string", "enum": ["record_only", "codex"]},
+                "codex_model": {"type": "string", "description": "Optional per-decision model override. Omit to inherit the current Codex configuration."},
+                "codex_effort": {"type": "string", "description": "Optional per-decision effort override. Omit to inherit the current Codex configuration."},
+                "max_autonomous_actions": {"type": "integer", "minimum": 0, "maximum": 50},
+                "stall_timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 86400, "description": "Local no-token silence threshold before one stall event is created. This is not a polling model call."},
+                "dry_run": {"type": "boolean"},
+            },
+            "required": ["project", "supervisor_id", "objective"],
+        },
+    },
+    {
+        "name": "send_to_managed_claude_session",
+        "description": "Queue one message on a detached managed Claude stream. The request is called confirmed only after --replay-user-messages echoes its unique marker; otherwise the exact queued/submitted/failed state is returned. interrupt_current=true defaults to Claude's native streaming interrupt and waits for both its control receipt and the interrupted turn's terminal result before sending. interrupt_mode=hard is an explicit process-tree stop/resume choice; native failures never fall back to hard interruption.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "supervisor_id": {"type": "string"},
+                "prompt": {"type": "string"},
+                "interrupt_current": {"type": "boolean"},
+                "interrupt_mode": {"type": "string", "enum": ["native", "hard"], "description": "Used only with interrupt_current=true. Defaults to native; hard must be explicit."},
+                "confirm_timeout_seconds": {"type": "number", "minimum": 0, "maximum": 60},
+            },
+            "required": ["supervisor_id", "prompt"],
+        },
+    },
+    {
+        "name": "get_managed_claude_supervisor",
+        "description": "Read compact durable state and recent material events for one managed Claude supervisor. Prompt bodies, full transcripts, and tool inputs are not returned.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "supervisor_id": {"type": "string"},
+                "recent_events": {"type": "integer", "minimum": 0, "maximum": 50},
+            },
+            "required": ["supervisor_id"],
+        },
+    },
+    {
+        "name": "list_managed_claude_supervisors",
+        "description": "List local managed Claude supervisors and their process/status summaries without reading prompts or transcripts.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "stop_managed_claude_supervisor",
+        "description": "Stop one detached managed Claude supervisor and its owned Claude process tree. This does not touch human-owned interactive Claude sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "supervisor_id": {"type": "string"},
+                "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 60},
+            },
+            "required": ["supervisor_id"],
+        },
+    },
+    {
         "name": "send_to_claude_session",
-        "description": "Send a discussion message or task to an already-running Claude Code --resume session through its existing Git Bash/mintty terminal. Binds session id, project cwd, Claude PID, MSYS tty, mintty PID and HWND; never starts a second Claude process. With interrupt_current=true, sends one Claude-native Escape only when the active transcript branch proves an unfinished tool call, confirms the matching tool_result, revalidates the exact terminal, and only then submits; otherwise it fails closed. Confirms the request marker and its unique acknowledgement token on one parentUuid branch, so unrelated assistant output while Claude is busy cannot count as a reply. A recorded marker without that acknowledgement returns delivered_waiting_reply; no marker returns delivery_failed. Does not change models/settings or fall back to an inbox. Use dry_run=true to validate without sending.",
+        "description": "LEGACY FOREGROUND CONTROL for a human-owned Claude Code --resume session in Git Bash/mintty. Every real send requires foreground_control=true because this path necessarily focuses the exact window, uses the clipboard, and simulates keys. It never runs automatically or as a fallback from managed supervision. Use start/send_to_managed_claude_supervisor for silent background work. dry_run validates routing without focusing or sending.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -8391,6 +8458,7 @@ TOOLS = [
                 "prompt": {"type": "string", "description": "Discussion message or bounded task instruction to type into the existing Claude session."},
                 "confirm_timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 600, "description": "Maximum time to wait for the existing process to persist the request marker. A marker without a reply returns delivered_waiting_reply."},
                 "interrupt_current": {"type": "boolean", "description": "Before submitting, send exactly one Claude-native Escape if the active transcript branch has an unfinished tool call. Submission is blocked until the matching tool_result is recorded and the same terminal route is revalidated."},
+                "foreground_control": {"type": "boolean", "description": "Required true for a real legacy send. Explicitly authorizes the unavoidable focus, clipboard, and simulated-key effects for this call only."},
                 "dry_run": {"type": "boolean", "description": "Validate session/process/window routing without focusing the terminal or sending input."},
             },
             "required": ["project", "prompt"],
@@ -8546,6 +8614,11 @@ PUBLIC_TOOL_NAMES = CLAUDE_LITE_TOOL_NAMES | {
     "get_claude_requests",
     "request_status",
     "request_result",
+    "start_managed_claude_supervisor",
+    "send_to_managed_claude_session",
+    "get_managed_claude_supervisor",
+    "list_managed_claude_supervisors",
+    "stop_managed_claude_supervisor",
     "send_to_claude_session",
     "claim_claude_change",
     "ack_claude_change",
@@ -8582,7 +8655,12 @@ COMPACT_TOOL_DESCRIPTIONS = {
     "get_context_pack": "Return a compact project/topic context pack.",
     "retrieve_shared_context": "Retrieve stored large context by ref, optionally filtered by query.",
     "request_context_snapshot": "Request a compact snapshot of another open agent session.",
-    "send_to_claude_session": "Submit to one validated existing Claude terminal and verify its transcript branch.",
+    "start_managed_claude_supervisor": "Start a windowless Switchboard-owned Claude stream; no prompt is sent at startup.",
+    "send_to_managed_claude_session": "Queue and confirm one message on a managed Claude stream; no foreground UI.",
+    "get_managed_claude_supervisor": "Read compact managed Claude state and recent material events.",
+    "list_managed_claude_supervisors": "List managed Claude supervisors without prompt or transcript bodies.",
+    "stop_managed_claude_supervisor": "Stop one Switchboard-owned Claude supervisor and process tree.",
+    "send_to_claude_session": "Legacy explicit foreground mintty control; foreground_control=true is required.",
     "claim_claude_change": "Read one durable compact Claude delta; no_change is intentionally tiny.",
     "ack_claude_change": "Commit a claimed Claude delta cursor after it has been handled.",
     "get_latest_context_snapshot": "Read the latest completed snapshot, capped by max_tokens.",
@@ -9802,8 +9880,9 @@ def send_to_claude_session(
     confirm_timeout_seconds: Any = 240,
     dry_run: Any = None,
     interrupt_current: Any = None,
+    foreground_control: Any = None,
 ) -> dict[str, Any]:
-    """Submit one turn to a validated existing Claude process and verify its branch."""
+    """Explicit legacy foreground control for one validated Claude terminal."""
     clean_prompt = re.sub(r"\s+", " ", str(prompt or "")).strip()
     if not clean_prompt:
         raise ValueError("prompt is required")
@@ -9832,6 +9911,12 @@ def send_to_claude_session(
             "delivery_mode": "existing_mintty_terminal",
             **target,
         }
+    if not truthy(foreground_control):
+        raise RuntimeError(
+            "foreground_control_required: this legacy mintty route necessarily changes desktop "
+            "focus, clipboard content, and keyboard input. Pass foreground_control=true only for "
+            "an explicitly authorized foreground send, or use send_to_managed_claude_session."
+        )
     try:
         timeout = max(5, min(int(confirm_timeout_seconds or 240), 600))
     except (TypeError, ValueError):
@@ -9945,6 +10030,81 @@ def send_to_claude_session(
         "next_action": "Use request_context_snapshot to monitor Claude's response and progress.",
         **target,
     }
+
+
+def start_managed_claude_supervisor(
+    project: str | None,
+    supervisor_id: str,
+    objective: str,
+    policy: str | None = None,
+    permission_mode: str = "acceptEdits",
+    decision_mode: str = "record_only",
+    codex_model: str | None = None,
+    codex_effort: str | None = None,
+    max_autonomous_actions: Any = 4,
+    stall_timeout_seconds: Any = 900,
+    dry_run: Any = None,
+) -> dict[str, Any]:
+    project_info = resolve_project(project)
+    config = load_config()
+    return managed_claude.create_supervisor(
+        BROKER_DIR,
+        project_info.root_path,
+        supervisor_id,
+        objective,
+        permission_mode=permission_mode,
+        decision_mode=decision_mode,
+        policy=policy,
+        claude_path=find_executable(config, "claude_path", ["claude", "claude.cmd", "claude.ps1"]),
+        codex_path=discover_codex(config),
+        codex_model=codex_model,
+        codex_effort=codex_effort,
+        max_autonomous_actions=int(max_autonomous_actions if max_autonomous_actions is not None else 4),
+        stall_timeout_seconds=int(stall_timeout_seconds if stall_timeout_seconds is not None else 900),
+        dry_run=truthy(dry_run),
+    )
+
+
+def send_to_managed_claude_session(
+    supervisor_id: str,
+    prompt: str,
+    interrupt_current: Any = None,
+    interrupt_mode: str = "native",
+    confirm_timeout_seconds: Any = 5,
+) -> dict[str, Any]:
+    timeout = max(0.0, min(float(confirm_timeout_seconds or 0), 60.0))
+    return managed_claude.queue_command(
+        BROKER_DIR,
+        supervisor_id,
+        prompt,
+        interrupt_current=truthy(interrupt_current),
+        interrupt_mode=interrupt_mode,
+        confirmation_timeout_seconds=timeout,
+    )
+
+
+def get_managed_claude_supervisor(
+    supervisor_id: str, recent_events: Any = 10
+) -> dict[str, Any]:
+    return managed_claude.get_supervisor_status(
+        BROKER_DIR,
+        supervisor_id,
+        recent_events=max(0, min(int(recent_events if recent_events is not None else 10), 50)),
+    )
+
+
+def list_managed_claude_supervisors() -> dict[str, Any]:
+    return managed_claude.list_supervisors(BROKER_DIR)
+
+
+def stop_managed_claude_supervisor(
+    supervisor_id: str, timeout_seconds: Any = 30
+) -> dict[str, Any]:
+    return managed_claude.stop_supervisor(
+        BROKER_DIR,
+        supervisor_id,
+        timeout_seconds=max(1.0, min(float(timeout_seconds or 30), 60.0)),
+    )
 
 
 def _validate_claude_watcher_id(value: Any) -> str:
@@ -11523,11 +11683,33 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             args.get("project"), args.get("topic"), args.get("requester_agent"), args.get("requester_host"),
             args.get("target_agent"), args.get("target_model"), args.get("question"), args.get("scope"),
             int(args.get("max_tokens") or 0) or None, args.get("prefer_cached_age")))
+    if name == "start_managed_claude_supervisor":
+        return text_content(start_managed_claude_supervisor(
+            args.get("project"), str(args.get("supervisor_id") or ""),
+            str(args.get("objective") or ""), args.get("policy"),
+            str(args.get("permission_mode") or "acceptEdits"),
+            str(args.get("decision_mode") or "record_only"),
+            args.get("codex_model"), args.get("codex_effort"),
+            args.get("max_autonomous_actions"), args.get("stall_timeout_seconds"),
+            args.get("dry_run")))
+    if name == "send_to_managed_claude_session":
+        return text_content(send_to_managed_claude_session(
+            str(args.get("supervisor_id") or ""), str(args.get("prompt") or ""),
+            args.get("interrupt_current"), str(args.get("interrupt_mode") or "native"),
+            args.get("confirm_timeout_seconds")))
+    if name == "get_managed_claude_supervisor":
+        return text_content(get_managed_claude_supervisor(
+            str(args.get("supervisor_id") or ""), args.get("recent_events")))
+    if name == "list_managed_claude_supervisors":
+        return text_content(list_managed_claude_supervisors())
+    if name == "stop_managed_claude_supervisor":
+        return text_content(stop_managed_claude_supervisor(
+            str(args.get("supervisor_id") or ""), args.get("timeout_seconds")))
     if name == "send_to_claude_session":
         return text_content(send_to_claude_session(
             args.get("project"), str(args.get("prompt") or ""), args.get("session_id"),
             args.get("topic"), args.get("confirm_timeout_seconds"), args.get("dry_run"),
-            args.get("interrupt_current")))
+            args.get("interrupt_current"), args.get("foreground_control")))
     if name == "claim_claude_change":
         return text_content(claim_claude_change(
             args.get("project"), str(args.get("session_id") or ""),

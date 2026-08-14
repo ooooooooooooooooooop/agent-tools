@@ -24,6 +24,8 @@
 - `mcp/<name>/` 是可独立验证的源码发行包；第三方修改版使用自己的子目录许可证。
 - `scripts/validate_repo.py` 同时检查两类注册表、包结构、许可证、链接和运行时文件边界。
 - `scripts/sync_skills.py` 仍只同步 Skills，不安装 MCP。
+- `agent-switchboard` 的受管 Claude 守护进程属于设备运行层：源码随 MCP 发布，队列、事件、决策账本和 PID 状态只写入 `~/.agent-broker/supervisors/`。
+- 定时 Codex 自动任务不是监督控制面。受管监督从 Claude 结构化流生成本地事件，仅在回合终态、重复失败、重试耗尽或进程异常退出时启动一次临时 Codex 判断。
 
 ## 状态边界
 
@@ -31,6 +33,7 @@
 
 - `.taskflow/`、`.grepai/`、`.claude/`、`node_modules/`；
 - `state.sqlite`、会话 JSONL、日志、响应文件；
+- `supervisors/` 下的命令、事件、决策账本和进程状态；
 - 用户路径、会话/任务 ID、模型选择和认证信息；
 - 从某台设备导出的 Codex 自动化状态。
 

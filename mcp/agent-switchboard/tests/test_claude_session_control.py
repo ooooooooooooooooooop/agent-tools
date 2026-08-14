@@ -186,6 +186,18 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
         self.assertEqual(result["terminal_pid"], 70)
         send.assert_not_called()
 
+    def test_real_legacy_send_requires_explicit_foreground_authorization(self):
+        project = broker.ProjectInfo(PROJECT_NAME, PROJECT_ROOT)
+        target = self.target(Path("unused.jsonl"))
+        with mock.patch.object(broker, "resolve_project", return_value=project), mock.patch.object(
+            broker, "active_claude_resume_sessions", return_value=[target]
+        ), mock.patch.object(
+            broker, "_claude_terminal_target", return_value=self.terminal()
+        ), mock.patch.object(broker, "_send_to_existing_mintty") as send:
+            with self.assertRaisesRegex(RuntimeError, "foreground_control_required"):
+                broker.send_to_claude_session(project.root_path, "task", SESSION_ID)
+        send.assert_not_called()
+
     def test_delivery_uses_existing_terminal_and_branch_confirmed_reply(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             transcript = Path(tmpdir) / f"{SESSION_ID}.jsonl"
@@ -209,6 +221,7 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                     "first line\nsecond line",
                     SESSION_ID,
                     topic="m1",
+                    foreground_control=True,
                 )
         self.assertEqual(result["status"], "delivered")
         self.assertTrue(result["confirmed_on_target_branch"])
@@ -347,6 +360,7 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                     "stop old work and do this",
                     SESSION_ID,
                     interrupt_current=True,
+                    foreground_control=True,
                 )
         self.assertEqual(order, ["escape", "confirmed", "submit"])
         self.assertEqual(terminal.call_count, 2)
@@ -383,6 +397,7 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                         "new task",
                         SESSION_ID,
                         interrupt_current=True,
+                        foreground_control=True,
                     )
         send.assert_not_called()
 
@@ -464,6 +479,7 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                         "new task",
                         SESSION_ID,
                         interrupt_current=True,
+                        foreground_control=True,
                     )
         send.assert_not_called()
 
@@ -521,6 +537,7 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                     "new task",
                     SESSION_ID,
                     interrupt_current=True,
+                    foreground_control=True,
                 )
         interrupt.assert_not_called()
         self.assertEqual(result["interrupt_result"]["status"], "not_needed")
@@ -638,7 +655,8 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
                 broker.time, "sleep"
             ):
                 result = broker.send_to_claude_session(
-                    project.root_path, "task", SESSION_ID, confirm_timeout_seconds=5
+                    project.root_path, "task", SESSION_ID, confirm_timeout_seconds=5,
+                    foreground_control=True,
                 )
         self.assertEqual(result["status"], "delivered_waiting_reply")
         self.assertEqual(event.call_args.args[3], "claude_session_message_waiting_reply")
@@ -672,7 +690,8 @@ class ClaudeSessionDeliveryTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "delivery_failed"):
                     broker.send_to_claude_session(
-                        project.root_path, "task", SESSION_ID, confirm_timeout_seconds=5
+                        project.root_path, "task", SESSION_ID, confirm_timeout_seconds=5,
+                        foreground_control=True,
                     )
         self.assertEqual(event.call_args.args[3], "claude_session_delivery_failed")
 

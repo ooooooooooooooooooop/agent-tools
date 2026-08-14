@@ -11,6 +11,7 @@ The one binary is dual-mode so a GitHub user needs no Python at all:
   agent-switchboard.exe bridge <args>   -> broker CLI used by the bridge extension
   agent-switchboard.exe --version       -> print the packaged release version
   agent-switchboard.exe routing-override -> register a package-specific gate override
+  agent-switchboard.exe managed-claude-daemon -> own one detached Claude stream
 
 `broker_command()` in setup.py registers `<this-exe> serve` with every host, so the
 exact same binary that installs the broker is also the broker server.
@@ -36,6 +37,9 @@ def run() -> int:
     if first == "routing-hook":
         import routing_gate
         return routing_gate.main(sys.argv[2:])
+    if first == "managed-claude-daemon":
+        import managed_claude
+        return managed_claude.daemon_main(sys.argv[2:])
     if first in SERVE_ALIASES:
         import setup
         try:

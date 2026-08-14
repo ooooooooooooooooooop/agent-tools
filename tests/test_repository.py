@@ -58,6 +58,10 @@ class RepositoryContractTests(unittest.TestCase):
         package = (ROOT / switchboard["path"]).resolve()
         self.assertTrue((package / switchboard["entrypoint"]).is_file())
         self.assertTrue((package / switchboard["installer"]).is_file())
+        self.assertTrue((package / "managed_claude.py").is_file())
+        self.assertTrue((package / "smoke-managed-claude.py").is_file())
+        spec = (package / "agent-broker.spec").read_text(encoding="utf-8")
+        self.assertIn('"managed_claude"', spec)
         self.assertFalse((package / "SKILL.md").exists())
         self.assertEqual(switchboard["license"], "PolyForm-Noncommercial-1.0.0")
 
