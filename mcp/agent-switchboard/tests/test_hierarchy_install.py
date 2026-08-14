@@ -1,0 +1,427 @@
+"""Tests for installer-managed hierarchy files and hooks."""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import hierarchy_install  # noqa: E402
+
+
+CODEX_ROLES = {
+    "frontier": {"id": "gpt-next-sol"},
+    "workhorse": {"id": "gpt-next-terra"},
+    "reader": {"id": "gpt-next-luna"},
+}
+CLAUDE_ROLES = {"frontier": ["best", "fable", "opus"], "workhorse": "sonnet", "reader": "haiku"}
+
+
+class HierarchyInstallTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.paths = hierarchy_install.HierarchyPaths(root / "home", root / "broker")
+        self.backups = []
+
+    def backup(self, path: Path) -> None:
+        self.backups.append(path)
+
+    def refresh(self):
+        return hierarchy_install.refresh(
+            self.paths,
+            CODEX_ROLES,
+            CLAUDE_ROLES,
+            '"C:\\Agent Switchboard\\agent-switchboard.exe" routing-hook',
+            self.backup,
+        )
+
+    def seed_legacy_files(self):
+        self.paths.codex_agents_md.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.codex_agents_md.write_text(
+            "# Global\n\n## Cost-aware model routing\nold rules\n\n## Response rules\nkeep me\n",
+            encoding="utf-8",
+        )
+        self.paths.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.claude_md.write_text(
+            "# Cost-aware model routing\n\nold Claude rules\n", encoding="utf-8"
+        )
+        self.paths.codex_explorer.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.codex_explorer.write_text(
+            'name = "explorer"\ndescription = "Cost-efficient old role"\n', encoding="utf-8"
+        )
+        self.paths.codex_worker.write_text(
+            'name = "worker"\ndescription = "Cost-efficient old role"\n', encoding="utf-8"
+        )
+        self.paths.codex_hooks.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SubagentStart": [
+                            {
+                                "matcher": "user-agent",
+                                "hooks": [
+                                    {"type": "command", "command": "user-subagent-start.ps1"}
+                                ],
+                            }
+                        ],
+                        "SubagentStop": [
+                            {
+                                "matcher": "user-agent",
+                                "hooks": [
+                                    {"type": "command", "command": "user-subagent-stop.ps1"}
+                                ],
+                            }
+                        ],
+                        "PreToolUse": [
+                            {
+                                "matcher": "legacy-switchboard",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": '"C:\\Agent Switchboard\\agent-switchboard.exe" routing-hook PreToolUse agent-switchboard claude',
+                                    }
+                                ],
+                            },
+                            {
+                                "matcher": "user-pre",
+                                "hooks": [
+                                    {"type": "command", "command": "user-pre-tool.ps1"}
+                                ],
+                            }
+                        ],
+                        "PostToolUse": [
+                            {
+                                "matcher": "user-post",
+                                "hooks": [
+                                    {"type": "command", "command": "user-post-tool.ps1"}
+                                ],
+                            }
+                        ],
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        self.paths.claude_explore.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.claude_explore.write_text(
+            "---\nname: Explore\ndescription: Cost-efficient old role\n---\n", encoding="utf-8"
+        )
+        self.paths.claude_worker.write_text(
+            "---\nname: economy-worker\ndescription: Cost-efficient old role\n---\n", encoding="utf-8"
+        )
+        self.paths.claude_settings.write_text(
+            json.dumps(
+                {
+                    "model": "user-selected-brain",
+                    "effortLevel": "max",
+                    "hooks": {
+                        "Stop": [
+                            {
+                                "hooks": [
+                                    {"type": "command", "command": "shutdown-if-armed.ps1"}
+                                ]
+                            }
+                        ],
+                        "PreToolUse": [
+                            {
+                                "matcher": "user-pre",
+                                "hooks": [
+                                    {"type": "command", "command": "user-pre-tool.ps1"}
+                                ],
+                            }
+                        ],
+                        "PostToolUse": [
+                            {
+                                "matcher": "user-post",
+                                "hooks": [
+                                    {"type": "command", "command": "user-post-tool.ps1"}
+                                ],
+                            }
+                        ],
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_refresh_migrates_legacy_preserves_user_settings_and_is_idempotent(self):
+        self.seed_legacy_files()
+        first = self.refresh()
+        self.assertTrue(all(not value.startswith("ERROR") for value in first.values()), first)
+        codex_text = self.paths.codex_agents_md.read_text(encoding="utf-8")
+        self.assertEqual(codex_text.count("agent-switchboard:cost-routing:begin"), 1)
+        self.assertIn("## Response rules\nkeep me", codex_text)
+        self.assertNotIn("old rules", codex_text)
+        claude_text = self.paths.claude_md.read_text(encoding="utf-8")
+        self.assertEqual(claude_text.count("agent-switchboard:cost-routing:begin"), 1)
+        self.assertIn("gpt-next-sol", claude_text)
+
+        self.assertIn('model = "gpt-next-luna"', self.paths.codex_explorer.read_text(encoding="utf-8"))
+        self.assertIn('model = "gpt-next-terra"', self.paths.codex_worker.read_text(encoding="utf-8"))
+        self.assertIn("model: haiku", self.paths.claude_explore.read_text(encoding="utf-8"))
+        self.assertIn("model: sonnet", self.paths.claude_worker.read_text(encoding="utf-8"))
+
+        settings = json.loads(self.paths.claude_settings.read_text(encoding="utf-8"))
+        self.assertEqual(settings["model"], "user-selected-brain")
+        self.assertEqual(settings["effortLevel"], "max")
+        stop_handlers = [
+            item
+            for group in settings["hooks"]["Stop"]
+            for item in group.get("hooks", [])
+        ]
+        self.assertIn("shutdown-if-armed.ps1", [item["command"] for item in stop_handlers])
+        owned_stop = [
+            item for item in stop_handlers if hierarchy_install.routing_gate.is_owned_hook_entry(item)
+        ]
+        self.assertEqual(
+            owned_stop,
+            [
+                {
+                    "type": "command",
+                    "command": "C:\\Agent Switchboard\\agent-switchboard.exe",
+                    "args": ["routing-hook", "Stop", "agent-switchboard", "claude"],
+                }
+            ],
+        )
+        self.assertTrue(
+            any(
+                "Read" in str(group.get("matcher", ""))
+                and "mcp__.*" in str(group.get("matcher", ""))
+                for group in settings["hooks"]["PostToolUse"]
+            )
+        )
+        for event, user_command in (
+            ("PreToolUse", "user-pre-tool.ps1"),
+            ("PostToolUse", "user-post-tool.ps1"),
+        ):
+            handlers = [
+                item
+                for group in settings["hooks"][event]
+                for item in group.get("hooks", [])
+            ]
+            self.assertIn(user_command, [item["command"] for item in handlers])
+            owned = [
+                item for item in handlers if hierarchy_install.routing_gate.is_owned_hook_entry(item)
+            ]
+            self.assertEqual(
+                owned,
+                [
+                    {
+                        "type": "command",
+                        "command": "C:\\Agent Switchboard\\agent-switchboard.exe",
+                        "args": ["routing-hook", event, "agent-switchboard", "claude"],
+                    }
+                ],
+            )
+        self.assertTrue(
+            any(
+                "Read" in str(group.get("matcher", ""))
+                and "mcp__.*" in str(group.get("matcher", ""))
+                for group in settings["hooks"]["PreToolUse"]
+            )
+        )
+
+        codex_hooks = json.loads(self.paths.codex_hooks.read_text(encoding="utf-8"))["hooks"]
+        for event, user_command in (
+            ("SubagentStart", "user-subagent-start.ps1"),
+            ("SubagentStop", "user-subagent-stop.ps1"),
+        ):
+            commands = [
+                item["command"]
+                for group in codex_hooks[event]
+                for item in group.get("hooks", [])
+            ]
+            self.assertIn(user_command, commands)
+            self.assertTrue(
+                any(item.endswith(f"routing-hook {event} agent-switchboard codex") for item in commands)
+            )
+        self.assertTrue(
+            any(
+                "Read" in str(group.get("matcher", ""))
+                and "mcp__.*" in str(group.get("matcher", ""))
+                for group in codex_hooks["PostToolUse"]
+            )
+        )
+        for event, user_command in (
+            ("PreToolUse", "user-pre-tool.ps1"),
+            ("PostToolUse", "user-post-tool.ps1"),
+        ):
+            commands = [
+                item["command"]
+                for group in codex_hooks[event]
+                for item in group.get("hooks", [])
+            ]
+            self.assertIn(user_command, commands)
+            self.assertTrue(
+                any(item.endswith(f"routing-hook {event} agent-switchboard codex") for item in commands)
+            )
+        self.assertTrue(
+            any(
+                "Read" in str(group.get("matcher", ""))
+                and "mcp__.*" in str(group.get("matcher", ""))
+                for group in codex_hooks["PreToolUse"]
+            )
+        )
+
+        hierarchy_lower = codex_text.lower()
+        self.assertIn("same-vendor", hierarchy_lower)
+        self.assertIn("native subagents first", hierarchy_lower)
+        self.assertIn("agent switchboard", hierarchy_lower)
+        self.assertIn("opposite-vendor", hierarchy_lower)
+        self.assertIn("fallback", hierarchy_lower)
+        self.assertIn("imported", hierarchy_lower)
+        self.assertIn("semantic", hierarchy_lower)
+        self.assertIn("resolve", hierarchy_lower)
+        self.assertIn("execution", hierarchy_lower)
+        self.assertIn("brain-context ingress", hierarchy_lower)
+        self.assertIn("decision premise", hierarchy_lower)
+        self.assertIn("reader locates", hierarchy_lower)
+        self.assertIn("every planned and unplanned package", hierarchy_lower)
+        self.assertIn("direct-brain-labour", hierarchy_lower)
+        self.assertIn("pretooluse", hierarchy_lower)
+        self.assertIn("first ten direct labour calls", hierarchy_lower)
+        self.assertIn("each native start or registered override opens the next bounded block", hierarchy_lower)
+        self.assertIn("reconcile every claude-managed background", hierarchy_lower)
+        self.assertIn("launching or detaching a job is never verification", hierarchy_lower)
+
+        codex_reader = self.paths.codex_explorer.read_text(encoding="utf-8").lower()
+        claude_reader = self.paths.claude_explore.read_text(encoding="utf-8").lower()
+        for reader_text in (codex_reader, claude_reader):
+            self.assertIn("observed fact from interpretation", reader_text)
+            self.assertIn("decision premise", reader_text)
+            self.assertIn("never adjudicate", reader_text)
+            self.assertIn("no more than 8,000 characters", reader_text)
+
+        codex_worker = self.paths.codex_worker.read_text(encoding="utf-8").lower()
+        claude_worker = self.paths.claude_worker.read_text(encoding="utf-8").lower()
+        for worker_text in (codex_worker, claude_worker):
+            self.assertIn("return no more than 8,000 characters", worker_text)
+            self.assertIn("large logs/artifacts outside the brain context", worker_text)
+        self.assertIn("reconcile every background bash/powershell/monitor job", claude_worker)
+        self.assertIn("launching or detaching a job is never verification", claude_worker)
+
+        before = {path: path.read_bytes() for path in (
+            self.paths.codex_agents_md,
+            self.paths.claude_md,
+            self.paths.codex_explorer,
+            self.paths.codex_worker,
+            self.paths.claude_explore,
+            self.paths.claude_worker,
+            self.paths.codex_hooks,
+            self.paths.claude_settings,
+        )}
+        second = self.refresh()
+        self.assertTrue(all(value == "unchanged" for value in second.values()), second)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+
+    def test_edited_managed_block_is_refused(self):
+        self.seed_legacy_files()
+        self.refresh()
+        original = self.paths.codex_agents_md.read_text(encoding="utf-8")
+        tampered = original.replace("The model selected", "THE model selected", 1)
+        self.paths.codex_agents_md.write_text(tampered, encoding="utf-8")
+        result = self.refresh()["Codex global hierarchy"]
+        self.assertTrue(result.startswith("ERROR"), result)
+        self.assertEqual(self.paths.codex_agents_md.read_text(encoding="utf-8"), tampered)
+
+    def test_invalid_settings_json_is_left_untouched(self):
+        self.paths.claude_settings.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.claude_settings.write_text("{invalid", encoding="utf-8")
+        before = self.paths.claude_settings.read_bytes()
+        result = self.refresh()["Claude routing hooks"]
+        self.assertTrue(result.startswith("ERROR"), result)
+        self.assertEqual(self.paths.claude_settings.read_bytes(), before)
+
+    def test_catalog_failure_keeps_last_known_roles_and_never_installs_stale_ids(self):
+        empty_roles = {"frontier": None, "workhorse": None, "reader": None}
+        first = hierarchy_install.refresh(
+            self.paths,
+            empty_roles,
+            CLAUDE_ROLES,
+            '"C:\\Agent Switchboard\\agent-switchboard.exe" routing-hook',
+            self.backup,
+        )
+        self.assertIn("no stale model installed", first["Codex explorer role"])
+        self.assertIn("no stale model installed", first["Codex worker role"])
+        self.assertFalse(self.paths.codex_explorer.exists())
+        self.assertFalse(self.paths.codex_worker.exists())
+
+        self.refresh()
+        explorer_before = self.paths.codex_explorer.read_bytes()
+        worker_before = self.paths.codex_worker.read_bytes()
+        second = hierarchy_install.refresh(
+            self.paths,
+            empty_roles,
+            CLAUDE_ROLES,
+            '"C:\\Agent Switchboard\\agent-switchboard.exe" routing-hook',
+            self.backup,
+        )
+        self.assertIn("kept last-known managed role", second["Codex explorer role"])
+        self.assertIn("kept last-known managed role", second["Codex worker role"])
+        self.assertEqual(explorer_before, self.paths.codex_explorer.read_bytes())
+        self.assertEqual(worker_before, self.paths.codex_worker.read_bytes())
+
+    def test_catalog_failure_never_trusts_tampered_or_user_owned_role(self):
+        empty_roles = {"frontier": None, "workhorse": None, "reader": None}
+        self.refresh()
+        explorer = self.paths.codex_explorer.read_text(encoding="utf-8")
+        tampered = explorer.replace('model = "gpt-next-luna"', 'model = "user-edited"')
+        self.paths.codex_explorer.write_text(tampered, encoding="utf-8")
+        user_worker = 'name = "worker"\nmodel = "user-owned"\n'
+        self.paths.codex_worker.write_text(user_worker, encoding="utf-8")
+
+        result = hierarchy_install.refresh(
+            self.paths,
+            empty_roles,
+            CLAUDE_ROLES,
+            '"C:\\Agent Switchboard\\agent-switchboard.exe" routing-hook',
+            self.backup,
+        )
+
+        self.assertTrue(result["Codex explorer role"].startswith("ERROR"))
+        self.assertIn("user-owned", result["Codex worker role"])
+        self.assertEqual(self.paths.codex_explorer.read_text(encoding="utf-8"), tampered)
+        self.assertEqual(self.paths.codex_worker.read_text(encoding="utf-8"), user_worker)
+
+    def test_uninstall_removes_owned_content_and_preserves_existing_hook(self):
+        self.seed_legacy_files()
+        self.refresh()
+        result = hierarchy_install.uninstall(self.paths, self.backup)
+        self.assertTrue(all(not value.startswith("ERROR") for value in result.values()), result)
+        self.assertIn("## Response rules\nkeep me", self.paths.codex_agents_md.read_text(encoding="utf-8"))
+        self.assertFalse(self.paths.codex_explorer.exists())
+        self.assertFalse(self.paths.codex_worker.exists())
+        self.assertFalse(self.paths.claude_explore.exists())
+        self.assertFalse(self.paths.claude_worker.exists())
+        settings = json.loads(self.paths.claude_settings.read_text(encoding="utf-8"))
+        stop_commands = [
+            item["command"]
+            for group in settings["hooks"]["Stop"]
+            for item in group.get("hooks", [])
+        ]
+        self.assertEqual(stop_commands, ["shutdown-if-armed.ps1"])
+        remaining_handlers = [
+            item
+            for groups in settings.get("hooks", {}).values()
+            for group in groups
+            for item in group.get("hooks", [])
+        ]
+        self.assertFalse(
+            any(
+                hierarchy_install.routing_gate.is_owned_hook_entry(item)
+                for item in remaining_handlers
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
