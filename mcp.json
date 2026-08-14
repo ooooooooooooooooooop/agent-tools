@@ -4,11 +4,11 @@
     {
       "name": "agent-switchboard",
       "path": "./mcp/agent-switchboard",
-      "description": "本地 MCP 协作桥：读取 Agent 会话、控制既有 Claude Code 会话并以增量游标监控变化",
+      "description": "本地 MCP 协作桥：读取 Agent 会话、后台托管 Claude Code，并以事件驱动方式协作和监督",
       "upstream_repository": "https://github.com/FutureisinPast/mcp-agent-switchboard",
       "upstream_commit": "821ef987bc7037bb18ce3a55e07b3dade88c8432",
       "upstream_version": "1.0.30",
-      "distribution_revision": "2026.08.14.1",
+      "distribution_revision": "2026.08.14.2",
       "entrypoint": "agent_broker_mcp.py",
       "installer": "install-agent-broker.ps1",
       "license": "PolyForm-Noncommercial-1.0.0",

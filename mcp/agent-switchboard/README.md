@@ -1,6 +1,6 @@
 # Agent Switchboard
 
-> **This repository distribution:** this directory is a modified source distribution based on upstream commit `821ef987bc7037bb18ce3a55e07b3dade88c8432` (version `1.0.30`). It adds exact existing-session control, transcript-branch confirmation, Unicode transport repair and acknowledged incremental monitoring. See [DISTRIBUTION.md](./DISTRIBUTION.md). The package remains under the PolyForm Noncommercial License; the parent repository's MIT license does not apply to this directory.
+> **This repository distribution:** this directory is a modified source distribution based on upstream commit `821ef987bc7037bb18ce3a55e07b3dade88c8432` (version `1.0.30`). It adds windowless managed Claude supervision, exact existing-session foreground control, transcript-branch confirmation, Unicode transport repair and acknowledged incremental monitoring. See [DISTRIBUTION.md](./DISTRIBUTION.md). The package remains under the PolyForm Noncommercial License; the parent repository's MIT license does not apply to this directory.
 
 **Use Claude Code, Codex, Gemini, Antigravity, and VS Code together — without copy-pasting context between them.**
 
@@ -126,6 +126,7 @@ There is a real difference between **delivered** (a file/prompt reached the surf
 | **Antigravity** (in-app Gemini/Claude) | `antigravity.sendPromptToAgentPanel` (+ optional CDP model select) | delivered → submitted → **completed back to broker** (`complete_antigravity_request`) — the only structured round-trip |
 | **Claude extension** | `claude-inbox` markdown, **auto-opened** + best-effort CDP auto-submit | delivered → auto-opened → (often) submitted → **recorded back to broker**: the request now has a durable `claude_requests` row, so a reply via `respond_to_request` lands on it, or a file written to `claude-responses/` is ingested by `bridge claude-responses` |
 | **Claude CLI** | `claude -p` headless (prompt via stdin) | **completed** — full headless round-trip |
+| **Managed Claude supervisor** | detached `claude -p --input-format stream-json --output-format stream-json` owned by Switchboard | **persistent and windowless** — durable message queue, replay confirmation, structured events, Claude-native interrupt receipts, explicit hard interrupt/resume, and optional event-gated Codex decisions |
 | **Codex extension / inbox** | `codex-inbox` markdown, **auto-opened**, plus bounded Codex CLI worker when available | delivered → auto-opened for visibility; the worker records **completed/failed** back to broker state so polling does not hang forever. Extension-only/no-CLI installs remain manual via `respond_to_request` |
 | **Codex CLI** | `codex exec` headless | **completed** — full headless round-trip |
 | **Gemini** | `gemini` CLI (`-m <model>` honored) or `GEMINI_API_KEY` | **completed** via CLI; the API path is an off-by-default escape hatch |
@@ -137,6 +138,22 @@ There is a real difference between **delivered** (a file/prompt reached the surf
 > **Model + effort on the CLIs:** model and reasoning effort are **separate inputs**, never folded together. Pass **`effort`** and the broker sets the CLI's own effort flag. A bare family request defaults to the live Codex frontier at `max`, Claude's moving `fable` alias at `max` (then `opus` only when unavailable), or Antigravity `gemini-3.6-flash-high`/`high`. Explicit `cheap_read` and `balanced` policies select dynamically discovered Codex reader/workhorse models or Claude `haiku`/`sonnet`; prompt keywords never guess. The selected main-session model is never rewritten. Queued implementation routes preserve `acceptEdits`; permission bypass is never implicit.
 
 > The broker is **target-driven** when a target is named. If a Codex/Claude caller leaves the target completely empty, Switchboard uses the caller only as a fallback: Codex defaults to Claude, and Claude defaults to Codex. A named target or prompt phrase like "consult with Claude" still wins.
+
+### Background Claude supervision
+
+Use `start_managed_claude_supervisor` for work that Switchboard must discuss, redirect, and supervise without disturbing the desktop. Startup creates a detached daemon and Claude stream but sends no prompt, so startup and idle time produce no model call. `send_to_managed_claude_session` reports `confirmed` only after Claude's `--replay-user-messages` stream echoes the unique request marker.
+
+When `interrupt_current=true`, Switchboard uses Claude's bidirectional streaming `interrupt` control request, waits for its matching receipt **and** the interrupted turn's terminal `result`, and only then sends the new message. A missing/error receipt or missing terminal result fails the command; it never silently kills the process instead. Process-tree interruption remains available only as the explicit `interrupt_mode=hard` choice and resumes the same managed session before delivery.
+
+`decision_mode=record_only` never starts Codex. `decision_mode=codex` starts one ephemeral, read-only Codex decision only for a material event: a completed Claude turn, two tool failures, exhausted API retries, unexpected Claude process exit, or a configurable period of silence while a command is busy. The silence timer is local and creates at most one event per command; it does not call a model on each interval. Assistant progress, tool starts, file activity, and idle time remain local records and consume no Codex tokens. The durable action limit stops autonomous SEND/INTERRUPT chains and exposes `attention_required` instead of looping.
+
+The older `claim_claude_change` cursor remains available for manual/on-demand inspection, but it is not a scheduler and should not be wrapped in a periodic model automation. The legacy `send_to_claude_session` mintty route necessarily focuses a window and uses the clipboard; every real call now requires `foreground_control=true`, and managed supervision never falls back to it.
+
+Startup-only smoke test (no Claude or Codex prompt is sent):
+
+```powershell
+python smoke-managed-claude.py --project C:\path\to\project
+```
 
 ---
 
@@ -177,6 +194,11 @@ broker/bridge version drift and prints actionable next steps.
 ---
 
 ## Changelog
+
+### v1.1.0 (windowless event-driven Claude supervision)
+- Added a detached stream-json daemon with durable commands, explicit replay confirmation, compact event/state ledgers, Claude-native interrupt receipts, and explicit process-tree interrupt/resume. It never focuses a desktop window or touches the clipboard.
+- Added optional event-gated ephemeral Codex decisions. Idle time and ordinary progress produce zero Codex calls; autonomous control chains have a durable hard limit.
+- Reclassified mintty injection as explicit legacy foreground control and removed it from all managed fallback behavior.
 
 ### v1.0.30 (Windows-safe Claude hook execution)
 - Claude Code routing hooks now use executable-plus-argument-array form, preventing `/usr/bin/bash` from stripping backslashes out of Windows executable paths. Install/repair migrates legacy string-form Switchboard hooks without changing other user hooks; Codex hooks keep their existing command-string format.
@@ -413,27 +435,13 @@ Register it with an MCP client by pointing the client's MCP config at:
 
 **MCP tools exposed:**
 
-- Full profile: 36 tools.
-- Claude/default lite profile: 18 compact user-facing tools (`consult_codex`, `route_agent_task`, Codex queue/status, model listing, compact history/memory/context/snapshot reads, memory/event recording, retrieval, live-surface status, request ledger, and `respond_to_request`).
+- Full profile: 50 tools.
+- Public profile: 43 compact tools.
+- Claude/default lite profile: 24 compact cross-agent and context tools.
+- Compact profile: all 50 tools with shortened descriptions.
 - Override with `AGENT_BROKER_TOOL_PROFILE=full|public|lite|compact` or `mcp_tool_profile` in `~/.agent-broker/config.json`.
 
-Full profile:
-
-```text
-register_project, route_agent_task, resolve_model_request, list_agent_models,
-set_model_default, get_model_defaults,
-consult_codex, consult_claude, consult_gemini, get_consultation_history,
-queue_antigravity_request, claim_antigravity_request, complete_antigravity_request,
-get_antigravity_requests, queue_codex_request, get_codex_requests,
-record_agent_event, get_topic_timeline, get_topic_status,
-respond_to_request, get_request_ledger,
-get_work_memory, record_work_memory,
-get_context_pack, record_context_event, compact_topic,
-store_shared_context, retrieve_shared_context, get_shared_context_stats,
-get_chat_bootstrap,
-request_context_snapshot, claim_context_snapshot_request, complete_context_snapshot_request,
-get_latest_context_snapshot, list_live_surfaces, record_surface_heartbeat
-```
+The MCP `tools/list` response is the canonical name/schema catalog for the selected profile.
 
 **Antigravity model auto-selection (experimental, off by default)** requires launching Antigravity with a debug port so the bridge can drive the model picker over Chrome DevTools Protocol, then enabling `agentBrokerBridge.useCdpModelSelection`:
 

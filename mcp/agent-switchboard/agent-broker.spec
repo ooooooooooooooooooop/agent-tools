@@ -55,6 +55,7 @@ a = Analysis(
     datas=_datas(),
     hiddenimports=[
         "agent_broker_mcp", "setup", "model_roles", "routing_gate", "atomic_io", "hierarchy_install",
+        "managed_claude",
         "tiktoken", "tiktoken_ext", "tiktoken_ext.openai_public",
     ],
     hookspath=[],
