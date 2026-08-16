@@ -155,6 +155,48 @@ Startup-only smoke test (no Claude or Codex prompt is sent):
 python smoke-managed-claude.py --project C:\path\to\project
 ```
 
+### Codex Goal supervision (Phase 1: observability)
+
+A durable Codex Goal objective is not the same as governed long-horizon
+execution — persistence alone does not prevent drift, repeated low-value work,
+local artifacts being treated as overall progress, or unbounded budget use. The
+broker owns a deterministic, local supervision layer around an existing Goal run
+(**Codex remains the worker; the broker owns control state**):
+
+```powershell
+python agent_broker_mcp.py bridge goal probe                 # honest capability report
+python agent_broker_mcp.py bridge goal contract --objective "<text>" --criteria "<json>" [--budgets "<json>"] [--unbudgeted]
+python agent_broker_mcp.py bridge goal create   --objective "<text>" --criteria "<json>" [--budgets "<json>"] [--unbudgeted] [--thread <id>]
+python agent_broker_mcp.py bridge goal list
+python agent_broker_mcp.py bridge goal status  <goal_ref>
+python agent_broker_mcp.py bridge goal evidence <goal_ref> <criterion> <evidence...> [--status blocked|inconclusive|...]
+python agent_broker_mcp.py bridge goal complete <goal_ref>
+```
+
+- **Honest capability probe** (`goal probe` / `doctor`): reads Codex's own Goal
+  DB (`~/.codex/goals_1.sqlite`, read-only) to report whether goal state and
+  usage telemetry are readable, whether `codex exec --resume` dispatch is
+  available, and whether completion is enforceable. When the installed surface
+  only exposes observation, it reports `observability_only` and never claims
+  enforcement.
+- **Contract validation** (`goal contract`): requires one immutable objective,
+  bounded mandatory criteria with required evidence + a verifier + a stopping
+  test, protected boundaries, and a real token/time/action budget — or an
+  explicit user-approved `--unbudgeted` mode. Unbounded objectives ("find the
+  best X until a winner exists") are rejected as `goal_contract_unbounded`.
+- **Broker-owned criterion ledger** (`goal create` / `status` / `evidence`):
+  persisted under `~/.agent-broker/goals/<ref>/`, survives restart, and is the
+  single source of truth for completion — a worker's prose claim is never
+  accepted. Live Goal usage folds into `goal status` when readable.
+- **Host-computed completion** (`goal complete`): completion requires the
+  original objective hash unchanged, every mandatory criterion verified,
+  resolvable evidence, protected boundaries intact, and no unresolved blocker.
+
+Phase 1 is **observability only** — no work-unit dispatch, verifier advancement,
+action fingerprinting, or budget enforcement yet. It adds **no MCP tools**
+(CLI-only), so ordinary one-turn and bounded requests are unaffected, and idle
+time consumes zero supervision tokens.
+
 ---
 
 ## Diagnostics: `doctor`
