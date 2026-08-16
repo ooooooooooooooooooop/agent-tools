@@ -8,7 +8,7 @@
       "upstream_repository": "https://github.com/FutureisinPast/mcp-agent-switchboard",
       "upstream_commit": "821ef987bc7037bb18ce3a55e07b3dade88c8432",
       "upstream_version": "1.0.30",
-      "distribution_revision": "2026.08.14.2",
+      "distribution_revision": "2026.08.14.3",
       "entrypoint": "agent_broker_mcp.py",
       "installer": "install-agent-broker.ps1",
       "license": "PolyForm-Noncommercial-1.0.0",

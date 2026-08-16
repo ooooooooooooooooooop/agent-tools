@@ -4,7 +4,7 @@ This directory is a modified source distribution of [FutureisinPast/mcp-agent-sw
 
 - Upstream commit: `821ef987bc7037bb18ce3a55e07b3dade88c8432`
 - Upstream version: `1.0.30`
-- Distribution revision: `2026.08.14.2`
+- Distribution revision: `2026.08.14.3`
 - License: `PolyForm Noncommercial License 1.0.0`
 
 The upstream `LICENSE` and Required Notice are retained unchanged. This directory is not covered by the repository root MIT license. Commercial use requires a separate written license from the upstream licensor.
@@ -21,6 +21,7 @@ The upstream `LICENSE` and Required Notice are retained unchanged. This director
 - Add event-gated supervision: routine progress is recorded locally, while optional ephemeral Codex decisions run only for material terminal/failure events and are bounded by an autonomous-action limit.
 - Require per-call foreground authorization for the legacy mintty sender; managed supervision never falls back to that route.
 - Keep configured provider aliases explicit instead of changing user model settings.
+- Add broker-owned supervision state for Codex Goal runs (Phase 1: observability): a deterministic capability probe (`bridge goal probe`, honest about enforcement vs observation-only), Goal contract validation (unbounded objectives rejected `goal_contract_unbounded`, budgets or explicit `unbudgeted`), a persisted criterion ledger under `~/.agent-broker/goals/`, and host-computed completion. Codex Goal state is read from `~/.codex/goals_1.sqlite` read-only; no second manager agent, no periodic model calls.
 
 ## Publication boundary
 

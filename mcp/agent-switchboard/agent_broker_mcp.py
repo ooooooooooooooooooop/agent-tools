@@ -30,6 +30,7 @@ from typing import Any
 
 import model_roles
 import managed_claude
+import goal_supervisor
 from switchboard_version import BROKER_VERSION
 
 
@@ -11970,6 +11971,48 @@ def _nerve_system_report() -> dict[str, Any]:
     }
 
 
+def _probe_goal_surface(config: dict[str, Any]) -> dict[str, Any]:
+    """Fail-open Goal capability probe for doctor. Never crashes the report:
+    any probe failure reports ``not_available`` instead of raising."""
+    try:
+        return goal_supervisor.probe_goal_capabilities(config.get("codex_path"))
+    except Exception:  # noqa: BLE001
+        return {
+            "goal_state_readable": False,
+            "goal_usage_readable": False,
+            "goal_pause_resume_available": None,
+            "goal_work_dispatch_available": False,
+            "goal_completion_enforceable": False,
+            "observability_only": False,
+            "not_available": True,
+            "detail": {"error": "goal_probe_failed"},
+        }
+
+
+def _render_goal_capability(goal: dict[str, Any]) -> str:
+    """Compact one-line render of a Codex Goal capability dict for doctor."""
+    if not isinstance(goal, dict):
+        return "unknown"
+    if goal.get("not_available"):
+        detail = goal.get("detail") or {}
+        error = detail.get("error")
+        return "NOT AVAILABLE" + (f" ({error})" if error else "")
+    if goal.get("observability_only"):
+        mode = "observability-only"
+    elif goal.get("goal_completion_enforceable"):
+        mode = "enforceable"
+    else:
+        mode = "unknown"
+    pause = goal.get("goal_pause_resume_available")
+    pause_label = "yes" if pause is True else ("unknown" if pause is None else "no")
+    return (
+        f"state={'yes' if goal.get('goal_state_readable') else 'no'} "
+        f"usage={'yes' if goal.get('goal_usage_readable') else 'no'} "
+        f"dispatch={'yes' if goal.get('goal_work_dispatch_available') else 'no'} "
+        f"pause_resume={pause_label} mode={mode}"
+    )
+
+
 def broker_doctor() -> dict[str, Any]:
     """Assemble a read-only, per-surface capability report for this machine."""
     config = load_config()
@@ -11999,6 +12042,7 @@ def broker_doctor() -> dict[str, Any]:
         "routes": codex_routes,
         "reply_path": ("stdout" if codex_full else ("respond_to_request" if codex_ext is not False else "none")),
         "best_quality": ("full" if codex_full else ("partial" if codex_ext is not False else "handoff")),
+        "goal": _probe_goal_surface(config),
     }
     if codex_cli["found"] and not codex_cli["smoke_ok"]:
         recommendations.append("Codex binary found but `--version` failed; verify the install.")
@@ -12006,6 +12050,11 @@ def broker_doctor() -> dict[str, Any]:
         recommendations.append(
             "Codex CLI not found on PATH - install it for a full headless round-trip "
             "(the extension still delivers, but auto-submit is best-effort)."
+        )
+    if surfaces["codex"]["goal"].get("not_available"):
+        recommendations.append(
+            "Codex Goal state is not readable on this machine - `bridge goal probe` "
+            "can't supervise Goal runs until ~/.codex/goals_1.sqlite exposes thread_goals."
         )
 
     # --- Claude ---
@@ -12144,6 +12193,9 @@ def render_doctor(report: dict[str, Any]) -> str:
         for route in s.get("routes", []):
             lines.append(f"  route      : {route}")
         lines.append(f"  reply_path : {s.get('reply_path')}")
+        goal = s.get("goal")
+        if goal is not None:
+            lines.append(f"  goal       : {_render_goal_capability(goal)}")
         lines.append("")
     d = report["debate"]
     lines.append("[debate readiness]")
@@ -12200,6 +12252,7 @@ def handle_bridge_cli(argv: list[str]) -> int:
             "snapshot-complete-file <request_id> <source_surface> <path> [model] | snapshot-release <request_id> | "
             "snapshot-latest [project] [topic] [target_agent] | live-surfaces [project] [max_age] | "
             "heartbeat <host> [project] [capabilities-csv] [visible_app] [cdp_port] | "
+            "goal (probe | contract | create | list | status <ref> | evidence <ref> <criterion> <evidence...> | complete <ref>) | "
             "doctor [--json])"
         )
         return 0
@@ -12211,6 +12264,8 @@ def handle_bridge_cli(argv: list[str]) -> int:
         else:
             print(render_doctor(report))
         return 0
+    if command == "goal":
+        return goal_supervisor.handle_goal_cli(argv[1:])
     if command == "claim":
         result = claim_antigravity_request(
             argv[1] if len(argv) > 1 else "antigravity-bridge",

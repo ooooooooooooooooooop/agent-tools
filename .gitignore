@@ -8,6 +8,8 @@ node_modules/
 .grepai/
 .taskflow/
 Users/
+.venv/
+venv/
 
 # Temporary inspection and generated deliverables
 .tmp_*
