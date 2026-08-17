@@ -11,7 +11,7 @@
 
 | MCP | 简介 | 平台 | 许可证 |
 |---|---|---|---|
-| [agent-switchboard](./mcp/agent-switchboard) | 读取本地会话、后台托管 Claude Code，并仅在实质事件发生时启动监督判断 | broker 跨平台；安装、后台进程控制与旧 mintty 兼容路径以 Windows 10/11 为主 | PolyForm Noncommercial 1.0.0 |
+| [agent-switchboard](./mcp/agent-switchboard) | 读取本地会话、后台托管 Claude Code、池化多会话并发控制（并发上限/孤儿回收/项目写锁）、Codex Goal 有界监督（验证器驱动的完成判定、依赖图局部阻塞、预算强制），且仅在实质事件发生时启动监督判断 | broker 跨平台；安装、后台进程控制与旧 mintty 兼容路径以 Windows 10/11 为主 | PolyForm Noncommercial 1.0.0 |
 
 MCP 的机器可读登记信息位于 [mcp.json](./mcp.json)。`agent-switchboard` 是上游项目的修改发行版，许可证不受仓库根 MIT 许可证覆盖；详见子项目内的 `LICENSE` 与 `DISTRIBUTION.md`。
 
