@@ -32,9 +32,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# A vendored SDK install (e.g. `pip install --target ./_sdk_probe_deps claude-agent-sdk`)
-# is picked up first so the broker source stays SDK-free; then any site import.
+# The vendored SDK install is kept OUT of the repository (it can be hundreds of MB and
+# contains a bundled claude.exe). The default location is the user cache; an environment
+# override points at another dir, and project-local paths are kept as a last resort for
+# machines that cache in-tree. The broker source stays SDK-free regardless.
 _SDK_DEPS_CANDIDATES = (
+    Path(os.environ.get("AGENT_BROKER_CLAUDE_SDK_DEPS", Path.home() / ".cache" / "agent-switchboard-sdk")),
     Path(__file__).resolve().parent / "_sdk_probe_deps",
     Path(__file__).resolve().parent / "sdk_deps",
 )
