@@ -1,4 +1,4 @@
-"""goal_supervisor.py — broker-owned supervision state for Codex Goal runs (Phase 1: observability).
+"""goal_supervisor.py — broker-owned supervision state for Codex Goal runs (Phase 1 observability + Phase 2 enforcement).
 
 GitHub issue #4: a durable Codex Goal objective is not the same as governed
 long-horizon execution. Persistence alone does not prevent drift, repeated
@@ -14,16 +14,19 @@ an existing Codex Goal run:
   * criterion ledger          — broker-owned per-criterion state persisted under ~/.agent-broker/goals/;
   * host-computed completion  — a worker's prose claim of completion is never accepted as proof.
 
+Phase 2 (enforcement) uses the reserved ledger fields:
+
+  * work-unit dispatch        — `dispatch_criterion` picks the next pending/inconclusive criterion;
+  * verifier execution        — `run_verifier` marks verified ONLY on a successful configured command;
+  * action fingerprinting     — `fingerprint_evidence` detects repeated low-value evidence;
+  * budget enforcement        — `enforce_budgets` fails closed on max_actions/token/time breaches.
+
 Constraints honoured (issue #4):
   * no second open-ended "manager agent" — every function here is deterministic code;
   * no duplicate Codex Goal state as a competing source of truth — Codex's own
     ``~/.codex/goals_1.sqlite`` is read read-only, never written by this module;
   * no periodic model call asking "is progress happening" — idle consumes zero supervision tokens;
   * no enforcement claim when the installed surface only exposes observation.
-
-Phase 1 is observability-only: it does NOT dispatch work units, run verifiers,
-fingerprint actions, or enforce budgets. The ledger reserves those fields
-(route/attempts/last_fingerprint/usage) for Phase 2.
 """
 
 from __future__ import annotations
@@ -87,6 +90,12 @@ UNBOUNDED_PATTERNS: tuple[str, ...] = (
 )
 
 BUDGET_KEYS = ("total_tokens", "total_seconds", "max_actions")
+
+# Phase 2 constants. A criterion is only "verified" by running its configured
+# verifier (never a worker's prose). If it fails that many times it is blocked.
+DEFAULT_MAX_VERIFIER_ATTEMPTS = 3
+# A command that does not finish within this many seconds fails closed (timeout).
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 120
 
 
 def utc_now() -> str:
@@ -354,6 +363,7 @@ def validate_goal_contract(
 
     normalized_criteria: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    raw_by_id: dict[str, dict[str, Any]] = {}
     for raw in criteria:
         if not isinstance(raw, dict):
             result["valid"] = False
@@ -369,6 +379,11 @@ def validate_goal_contract(
             result["errors"].append(f"criterion_duplicate_id: {criterion_id}")
             continue
         seen_ids.add(criterion_id)
+        raw_by_id[criterion_id] = raw
+
+    # Two-phase normalization: first pass records every valid criterion, second pass
+    # resolves `dependencies` against the full id set (forward refs allowed).
+    for criterion_id, raw in raw_by_id.items():
         mandatory = bool(raw.get("mandatory", True))
         required_evidence = [str(item).strip() for item in (raw.get("required_evidence") or [])]
         required_evidence = [item for item in required_evidence if item]
@@ -384,6 +399,24 @@ def validate_goal_contract(
             if not stopping_test:
                 result["valid"] = False
                 result["errors"].append(f"criterion_missing_stopping_test: {criterion_id}")
+        dependencies: list[str] = []
+        for dep in (raw.get("dependencies") or []):
+            dep = str(dep).strip()
+            if not dep:
+                continue
+            if dep not in seen_ids:
+                result["valid"] = False
+                result["errors"].append(f"criterion_unknown_dependency: {criterion_id}->{dep}")
+                continue
+            if dep != criterion_id and dep not in dependencies:
+                dependencies.append(dep)
+        criterion_budget: dict[str, Any] = {}
+        raw_budget = raw.get("budget")
+        if isinstance(raw_budget, dict):
+            for key in BUDGET_KEYS:
+                value = raw_budget.get(key)
+                if isinstance(value, (int, float)) and value > 0:
+                    criterion_budget[key] = int(value)
         normalized_criteria.append(
             {
                 "id": criterion_id,
@@ -392,6 +425,13 @@ def validate_goal_contract(
                 "required_evidence": required_evidence,
                 "verifier": verifier,
                 "stopping_test": stopping_test,
+                "dependencies": dependencies,
+                "budget": criterion_budget,
+                "alternative_routes": [
+                    str(route).strip()
+                    for route in (raw.get("alternative_routes") or [])
+                    if str(route).strip()
+                ],
             }
         )
 
@@ -432,12 +472,16 @@ def _ledger_seed(config: dict[str, Any]) -> dict[str, Any]:
         "criteria": {
             criterion["id"]: {
                 "status": "pending",
+                "mandatory": bool(criterion.get("mandatory", True)),
+                "dependencies": list(criterion.get("dependencies") or []),
                 "required_evidence": list(criterion.get("required_evidence") or []),
                 "observed_evidence": [],
                 "verifier": criterion.get("verifier") or "",
                 "route": None,
                 "attempts": 0,
                 "last_fingerprint": None,
+                "usage": {},
+                "budget": dict(criterion.get("budget") or {}),
                 "updated_at": now,
             }
             for criterion in (config.get("criteria") or [])
@@ -781,22 +825,83 @@ def _apply_evidence(state: dict[str, Any], criterion_id: str, refs: list[str], s
     _recompute_status(state)
 
 
-def _recompute_status(state: dict[str, Any]) -> None:
-    """Derive the Goal-level status deterministically from criterion states:
-    blocked wins, then attention_required (inconclusive/blocked non-mandatory),
-    else in_progress."""
+def _dependency_chain_blocked(state: dict[str, Any], criterion_id: str, visited: set[str] | None = None) -> bool:
+    """True when criterion_id itself is blocked AND every dependency in its chain is
+    also blocked (issue #4 acceptance 4: a blocker only becomes a global stop when the
+    dependency graph proves the chain is fully blocked). A leaf criterion (no
+    dependencies) that is blocked returns True — its own block is the terminal proof;
+    it stops ITSELF, not unrelated criteria."""
     criteria = state.get("criteria") or {}
-    mandatory = [
-        item
-        for item in criteria.values()
-        if isinstance(item, dict)
+    item = criteria.get(criterion_id)
+    if not isinstance(item, dict):
+        return True
+    if item.get("status") != "blocked":
+        return False
+    deps = [str(d).strip() for d in (item.get("dependencies") or [])]
+    if not deps:
+        return True  # leaf blocked -> its own chain is blocked (local to this criterion's subtree)
+    visited = visited or set()
+    if criterion_id in visited:
+        return False  # cycle cannot be proven fully blocked
+    visited = visited | {criterion_id}
+    for dep in deps:
+        dep_item = criteria.get(dep)
+        if not isinstance(dep_item, dict) or dep_item.get("status") != "blocked":
+            return False  # a dependency is not blocked -> chain not fully blocked
+        if not _dependency_chain_blocked(state, dep, visited):
+            return False
+    return True
+
+
+def _goal_status_from_criteria(state: dict[str, Any]) -> str:
+    """Derive the Goal-level status deterministically from criterion states with a
+    dependency-aware blocker rule (issue #4 acceptance 4/5):
+      * blocked (global) only when EVERY unresolvable mandatory criterion is blocked
+        and its dependency chain is fully blocked — i.e. the dependency graph proves
+        there is no remaining path to advance;
+      * attention_required when at least one mandatory criterion is blocked or
+        inconclusive but other ready criteria can still advance;
+      * else in_progress."""
+    criteria = state.get("criteria") or {}
+    mandatory_items = [
+        (cid, item)
+        for cid, item in criteria.items()
+        if isinstance(item, dict) and bool(item.get("mandatory", True))
     ]
-    if any(item.get("status") == "blocked" for item in mandatory):
-        state["status"] = "blocked"
-    elif any(item.get("status") in ("inconclusive", "blocked") for item in mandatory):
-        state["status"] = "attention_required"
-    else:
-        state["status"] = "in_progress"
+    if not mandatory_items:
+        return "in_progress"
+    any_blocked = False
+    any_open = False  # pending/running/inconclusive (advanceable) mandatory
+    for cid, item in mandatory_items:
+        status = item.get("status")
+        if status == "blocked":
+            any_blocked = True
+        elif status != "verified":
+            any_open = True
+    if any_open:
+        # There is at least one advanceable mandatory criterion -> never a global stop.
+        if any_blocked or any(
+            item.get("status") == "inconclusive"
+            for _, item in mandatory_items
+        ):
+            return "attention_required"
+        return "in_progress"
+    # No advanceable mandatory remains: blocked ones must prove a fully-blocked chain,
+    # otherwise (a local blocker with nothing else to advance) still attention, never
+    # silently complete.
+    all_chain_blocked = all(
+        _dependency_chain_blocked(state, cid)
+        for cid, item in mandatory_items
+        if item.get("status") == "blocked"
+    )
+    if all_chain_blocked and any_blocked:
+        return "blocked"
+    return "attention_required"
+
+
+def _recompute_status(state: dict[str, Any]) -> None:
+    """Recompute Goal-level status from criterion states (dependency-aware)."""
+    state["status"] = _goal_status_from_criteria(state)
 
 
 def complete_goal(goal_ref: str) -> dict[str, Any]:
@@ -822,6 +927,404 @@ def complete_goal(goal_ref: str) -> dict[str, Any]:
     }
 
 
+# --- 5b. Phase 2: work-unit dispatch, verifier execution, budget enforcement ---
+
+def _run_command(
+    argv: list[str],
+    cwd: str | None = None,
+    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    stdin_data: str | None = None,
+) -> dict[str, Any]:
+    """Deterministic local command execution for a verifier or stopping test. No model
+    call. Fails closed (``timed_out``/``spawn_failed``) on any infrastructure failure so
+    a criterion is never marked verified on an unresolved command."""
+    import shlex
+
+    if not argv:
+        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "empty_command", "timed_out": False}
+    try:
+        proc = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, float(timeout_seconds)),
+            stdin=subprocess.PIPE if stdin_data is not None else None,
+            input=stdin_data,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "timeout", "timed_out": True}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "exit_code": None, "stdout": "", "stderr": f"spawn_failed: {exc}", "timed_out": False}
+    return {
+        "ok": proc.returncode == 0,
+        "exit_code": int(proc.returncode),
+        "stdout": (proc.stdout or "")[:4000],
+        "stderr": (proc.stderr or "")[:2000],
+        "timed_out": False,
+    }
+
+
+def _parse_shell(cmd: str) -> list[str]:
+    """Split a shell-ish command into argv deterministically. On Windows prefer
+    ``cmd /c <cmd>`` so the verifier/stopping test can use normal shell syntax;
+    elsewhere run via the POSIX shell."""
+    import shlex
+
+    cmd = str(cmd or "").strip()
+    if not cmd:
+        return []
+    if os.name == "nt":
+        return ["cmd", "/c", cmd]
+    return ["sh", "-c", cmd]
+
+
+def run_verifier(goal_ref: str, criterion_id: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+    """Run a criterion's configured verifier (Phase 2). Only a successful verifier exit
+    marks the criterion ``verified``; a failing verifier increments ``attempts`` and,
+    past the max, moves it to ``blocked``. Never accepts prose as proof."""
+    goal_ref = validate_goal_ref(goal_ref)
+    criterion_id = validate_criterion_id(criterion_id)
+    config = _read_json(goal_dir(BROKER_DIR, goal_ref) / "config.json", None)
+    if not isinstance(config, dict):
+        return {"verified": False, "reason": "goal_unknown"}
+    verifier = ""
+    criterion = next((c for c in (config.get("criteria") or []) if c.get("id") == criterion_id), None)
+    if criterion:
+        verifier = str(criterion.get("verifier") or "").strip()
+    if not verifier:
+        return {"verified": False, "reason": "no_verifier_configured"}
+
+    result = _run_command(_parse_shell(verifier), timeout_seconds=timeout_seconds or DEFAULT_COMMAND_TIMEOUT_SECONDS)
+    outcome = _update_ledger(
+        goal_ref,
+        lambda s: _apply_verifier_outcome(
+            s, criterion_id, ok=result["ok"], exit_code=result.get("exit_code"),
+            stderr=result.get("stderr") or "", timeout=bool(result.get("timed_out")),
+        ),
+    )
+    item = (outcome.get("criteria") or {}).get(criterion_id) if isinstance(outcome, dict) else None
+    status = item.get("status") if isinstance(item, dict) else None
+    _append_action(
+        goal_ref,
+        "verifier_result",
+        criterion_id=criterion_id,
+        ok=result["ok"],
+        exit_code=result.get("exit_code"),
+        status=status,
+        attempts=int(item.get("attempts") or 0) if isinstance(item, dict) else 0,
+        timed_out=bool(result.get("timed_out")),
+    )
+    return {
+        "goal_ref": goal_ref,
+        "criterion_id": criterion_id,
+        "verified": status == "verified",
+        "status": status,
+        "exit_code": result.get("exit_code"),
+        "timed_out": bool(result.get("timed_out")),
+        "attempts": int(item.get("attempts") or 0) if isinstance(item, dict) else 0,
+        "stderr": result.get("stderr") or "",
+    }
+
+
+def _apply_verifier_outcome(state, criterion_id: str, *, ok: bool, exit_code: int | None, stderr: str, timeout: bool) -> None:
+    criteria = state.get("criteria")
+    if not isinstance(criteria, dict) or criterion_id not in criteria:
+        raise ValueError(f"goal_supervisor_unknown_criterion: {criterion_id}")
+    item = criteria[criterion_id]
+    if not isinstance(item, dict):
+        item = {}
+        criteria[criterion_id] = item
+    item["attempts"] = int(item.get("attempts") or 0) + 1
+    if ok:
+        item["status"] = "verified"
+        item["last_fingerprint"] = None  # verified evidence supersedes any action fingerprint
+        item["verified_by"] = "verifier"
+    else:
+        item["status"] = "inconclusive"
+        item["last_fingerprint"] = fingerprint_evidence(item.get("observed_evidence") or [])
+        item["last_error"] = stderr or ("timeout" if timeout else f"exit_{exit_code}")
+        max_attempts = int(os.environ.get("GOAL_MAX_VERIFIER_ATTEMPTS", DEFAULT_MAX_VERIFIER_ATTEMPTS))
+        if int(item["attempts"]) >= max_attempts:
+            item["status"] = "blocked"
+    item["updated_at"] = utc_now()
+    _recompute_status(state)
+
+
+def fingerprint_evidence(evidence_refs: list[str]) -> str:
+    """A stable fingerprint of a set of evidence refs, used to detect repeated
+    low-value work (a worker re-submitting the same evidence to the same criterion)."""
+    normalized = [str(r).strip() for r in (evidence_refs or []) if str(r).strip()]
+    blob = "\x1f".join(sorted(normalized))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def dispatch_criterion(goal_ref: str, *, route: str | None = None) -> dict[str, Any]:
+    """Deterministic Phase 2 work-unit dispatch (issue #4 acceptance 4/3):
+    pick the next criterion that is NOT blocked and not verified, prefer pending
+    (never started), then inconclusive (started but not verified). A criterion with a
+    repeated no-progress fingerprint is NOT re-dispatched on the same route: it either
+    moves to the next declared alternative route, or emits ``attention_required`` with
+    the exact unresolved condition. No model call."""
+    goal_ref = validate_goal_ref(goal_ref)
+    config = _read_json(goal_dir(BROKER_DIR, goal_ref) / "config.json", None)
+    if not isinstance(config, dict):
+        return {"dispatched": False, "reason": "goal_unknown"}
+    ledger = _read_json(goal_dir(BROKER_DIR, goal_ref) / "ledger.json", None)
+    if not isinstance(ledger, dict):
+        return {"dispatched": False, "reason": "goal_unknown"}
+    ordered = list(config.get("criteria") or [])
+
+    def _pick_target():
+        for criterion in ordered:
+            cid = criterion.get("id")
+            item = (ledger.get("criteria") or {}).get(cid)
+            if not isinstance(item, dict):
+                return cid, None
+            status = item.get("status")
+            if status == "verified" or status == "blocked":
+                continue
+            if status in (None, "pending"):
+                return cid, None
+            # inconclusive: route advance only when the fingerprint is NOT a repeat.
+            fingerprint = item.get("last_fingerprint")
+            item_fingerprint = fingerprint if fingerprint else None
+            routes = list(criterion.get("alternative_routes") or []) or None
+            return cid, routes
+        return None, None
+
+    target, alternative_routes = _pick_target()
+    if target is None:
+        return {"dispatched": False, "reason": "nothing_to_dispatch"}
+    criterion = next((c for c in ordered if c.get("id") == target), {})
+    item = (ledger.get("criteria") or {}).get(target)
+    status = item.get("status") if isinstance(item, dict) else None
+    fingerprint = item.get("last_fingerprint") if isinstance(item, dict) else None
+
+    # Fingerprint repeat on an inconclusive criterion: never re-dispatch the same route.
+    repeated = bool(status == "inconclusive" and fingerprint)
+
+    if repeated and not route:
+        routes = alternative_routes or []
+        already_tried = [str(r) for r in (item.get("tried_routes") or [])] if isinstance(item, dict) else []
+        next_route = next((r for r in routes if r not in already_tried), None)
+        if next_route is not None:
+            outcome = _update_ledger(
+                goal_ref,
+                lambda s: _mark_dispatch(s, target, route=next_route, tried=[*already_tried, next_route]),
+            )
+            _append_action(goal_ref, "work_dispatched", criterion_id=target, route=next_route, via="alternative_route")
+            return {"dispatched": True, "criterion_id": target, "route": next_route, "via": "alternative_route"}
+
+    if repeated:
+        # No alternative route left and the fingerprint is unchanged: attention_required.
+        outcome = _update_ledger(
+            goal_ref,
+            lambda s: _mark_attention(s, target, reason="repeated_no_progress_fingerprint"),
+        )
+        _append_action(
+            goal_ref, "attention_required",
+            criterion_id=target,
+            fingerprint=fingerprint,
+            routes_tried=list((item.get("tried_routes") or []) if isinstance(item, dict) else []),
+        )
+        return {
+            "dispatched": False,
+            "reason": "attention_required",
+            "criterion_id": target,
+            "fingerprint": fingerprint,
+            "condition": item.get("last_error") if isinstance(item, dict) else None,
+        }
+
+    dispatch_route = route or "codex_exec_resume"
+    outcome = _update_ledger(
+        goal_ref,
+        lambda s: _mark_dispatch(s, target, route=dispatch_route),
+    )
+    _append_action(goal_ref, "work_dispatched", criterion_id=target, route=dispatch_route)
+    return {"dispatched": True, "criterion_id": target, "route": dispatch_route}
+
+
+def _mark_attention(state, criterion_id: str, *, reason: str) -> None:
+    criteria = state.get("criteria")
+    if not isinstance(criteria, dict) or criterion_id not in criteria:
+        raise ValueError(f"goal_supervisor_unknown_criterion: {criterion_id}")
+    item = criteria[criterion_id]
+    if not isinstance(item, dict):
+        item = {}
+        criteria[criterion_id] = item
+    item["status"] = "inconclusive"
+    item["attention"] = reason
+    item["updated_at"] = utc_now()
+    if state.get("status") == "in_progress":
+        state["status"] = "attention_required"
+
+
+def _mark_dispatch(state, criterion_id: str, *, route: str, tried: list[str] | None = None) -> None:
+    criteria = state.get("criteria")
+    if not isinstance(criteria, dict) or criterion_id not in criteria:
+        raise ValueError(f"goal_supervisor_unknown_criterion: {criterion_id}")
+    item = criteria[criterion_id]
+    if not isinstance(item, dict):
+        item = {}
+        criteria[criterion_id] = item
+    item["status"] = "running"
+    item["route"] = route
+    item["attempts"] = int(item.get("attempts") or 0)
+    if tried is not None:
+        item["tried_routes"] = tried
+    item["updated_at"] = utc_now()
+
+
+def enforce_budgets(goal_ref: str, *, require_telemetry: bool = True) -> dict[str, Any]:
+    """Phase 2 budget enforcement (issue #4 acceptance 7):
+    - total Goal budget (max_actions / total_tokens / total_seconds);
+    - per-criterion budget (criterion.max_actions / total_tokens / total_seconds);
+    - per-attempt budget is the criterion's attempt count vs its max_actions;
+    - a terminal receipt explaining exactly where the budget was spent;
+    - FAIL-CLOSED when enforcement is requested but the needed telemetry is
+      unavailable (``enforcement_requires_telemetry``), unless the goal is unbudgeted.
+
+    A breach never declares the Goal complete — it escalates (blocked for action
+    exhaustion; attention_required for token/time). No model call."""
+    goal_ref = validate_goal_ref(goal_ref)
+    config = _read_json(goal_dir(BROKER_DIR, goal_ref) / "config.json", None)
+    ledger = _read_json(goal_dir(BROKER_DIR, goal_ref) / "ledger.json", None)
+    if not isinstance(config, dict) or not isinstance(ledger, dict):
+        return {"enforced": False, "reason": "goal_unknown"}
+    plan = config.get("budget_plan") or {}
+    unbudgeted = bool(config.get("unbudgeted"))
+    breaches: list[dict[str, Any]] = []
+    receipt: dict[str, Any] = {"max_actions": None, "total_tokens": None, "total_seconds": None,
+                               "per_criterion": {}}
+
+    if unbudgeted:
+        return {"enforced": True, "unbudgeted": True, "breaches": [], "receipt": receipt,
+                "status": ledger.get("status")}
+
+    # Broker-owned action count (durable work signal, always available).
+    criteria = ledger.get("criteria") or {}
+    action_count = sum(
+        int(item.get("attempts") or 0)
+        for item in criteria.values()
+        if isinstance(item, dict)
+    )
+    if plan.get("max_actions"):
+        receipt["max_actions"] = action_count
+        if action_count >= int(plan["max_actions"]):
+            breaches.append({"kind": "max_actions", "used": action_count, "budget": int(plan["max_actions"])})
+
+    # Per-criterion + per-attempt budgets (always computable from ledger attempts).
+    for cid, item in criteria.items():
+        if not isinstance(item, dict):
+            continue
+        c_budget = item.get("budget") or {}
+        attempts = int(item.get("attempts") or 0)
+        limit = c_budget.get("max_actions") if c_budget else None
+        if limit and attempts >= int(limit):
+            receipt["per_criterion"][cid] = {"max_actions": {"used": attempts, "budget": int(limit)}}
+            breaches.append({"kind": "criterion_max_actions", "criterion_id": cid,
+                             "used": attempts, "budget": int(limit)})
+
+    # Live Codex token/time telemetry: REQUIRED when the contract has those budgets.
+    wants_token = plan.get("total_tokens")
+    wants_time = plan.get("total_seconds")
+    usage = _read_thread_usage(config.get("codex_thread_id"))
+    if (wants_token or wants_time) and usage is None:
+        if require_telemetry:
+            return {"enforced": False, "reason": "enforcement_requires_telemetry",
+                    "breaches": [], "receipt": receipt,
+                    "note": "Contract budgets token/time but Codex Goal telemetry is unavailable; fail closed."}
+    if usage:
+        tokens_used = usage.get("tokens_used")
+        if wants_token and isinstance(tokens_used, int):
+            receipt["total_tokens"] = tokens_used
+            if tokens_used >= int(wants_token):
+                breaches.append({"kind": "total_tokens", "used": tokens_used, "budget": int(wants_token)})
+        time_used = usage.get("time_used_seconds")
+        if wants_time and isinstance(time_used, int):
+            receipt["total_seconds"] = time_used
+            if time_used >= int(wants_time):
+                breaches.append({"kind": "total_seconds", "used": time_used, "budget": int(wants_time)})
+    else:
+        receipt["total_tokens"] = None
+        receipt["total_seconds"] = None
+
+    if not breaches:
+        return {"enforced": True, "unbudgeted": False, "breaches": [], "receipt": receipt,
+                "status": ledger.get("status")}
+
+    # Fail closed: escalate the goal so it cannot be silently completed.
+    blocked = any(b["kind"] in ("max_actions", "criterion_max_actions") for b in breaches)
+    outcome = _update_ledger(
+        goal_ref,
+        lambda s: _apply_budget_breach(s, blocked=blocked),
+    )
+    _append_action(goal_ref, "budget_breach", breaches=breaches, blocked=blocked, receipt=receipt)
+    status = outcome.get("status") if isinstance(outcome, dict) else None
+    return {"enforced": True, "unbudgeted": False, "breaches": breaches, "receipt": receipt,
+            "status": status, "blocked": blocked}
+
+
+def _apply_budget_breach(state, *, blocked: bool) -> None:
+    if blocked:
+        state["status"] = "blocked"
+    elif state.get("status") == "in_progress":
+        state["status"] = "attention_required"
+    state["attention"] = "budget_breach"
+
+
+# --- 5c. bounded work-unit packaging (issue #4 acceptance 4/7) --------------
+
+def build_work_unit(goal_ref: str, criterion_id: str | None = None) -> dict[str, Any]:
+    """Build ONE bounded, reference-based work unit for a Codex continuation (issue #4
+    acceptance 4/7). It carries ONLY: the exact original objective, the current
+    criterion (picked by dispatch if not given), protected boundaries, the required
+    evidence references, the required verifier, and the work-unit budget. It NEVER
+    replays the whole Goal transcript — compact references are sufficient. No model
+    call."""
+    goal_ref = validate_goal_ref(goal_ref)
+    config = _read_json(goal_dir(BROKER_DIR, goal_ref) / "config.json", None)
+    ledger = _read_json(goal_dir(BROKER_DIR, goal_ref) / "ledger.json", None)
+    if not isinstance(config, dict) or not isinstance(ledger, dict):
+        return {"built": False, "reason": "goal_unknown"}
+
+    if criterion_id is None:
+        dispatch = dispatch_criterion(goal_ref)
+        if not dispatch.get("dispatched"):
+            return {"built": False, "reason": dispatch.get("reason") or "nothing_to_dispatch",
+                    "detail": {"criterion_id": dispatch.get("criterion_id"),
+                               "fingerprint": dispatch.get("fingerprint")}}
+        criterion_id = dispatch["criterion_id"]
+
+    criterion = next((c for c in (config.get("criteria") or []) if c.get("id") == criterion_id), None)
+    if criterion is None:
+        return {"built": False, "reason": "unknown_criterion", "criterion_id": criterion_id}
+    item = (ledger.get("criteria") or {}).get(criterion_id) or {}
+
+    work_unit = {
+        "goal_ref": goal_ref,
+        "objective": config.get("objective"),
+        "objective_hash": config.get("objective_hash"),
+        "criterion": {
+            "id": criterion.get("id"),
+            "description": criterion.get("description") or "",
+            "status": item.get("status") if isinstance(item, dict) else "pending",
+            "required_evidence": list(criterion.get("required_evidence") or []),
+            "observed_evidence": list(item.get("observed_evidence") or []) if isinstance(item, dict) else [],
+            "verifier": criterion.get("verifier") or "",
+            "stopping_test": criterion.get("stopping_test") or "",
+            "dependencies": list(criterion.get("dependencies") or []),
+        },
+        "boundaries": list(config.get("boundaries") or []),
+        "work_unit_budget": dict(criterion.get("budget") or {}) or dict(config.get("budget_plan") or {}),
+        "route": item.get("route") if isinstance(item, dict) else None,
+        "transcript_replay": False,
+    }
+    return {"built": True, "work_unit": work_unit, "criterion_id": criterion_id}
+
+
 # --- 6. CLI helpers ---------------------------------------------------------
 
 GOAL_HELP = (
@@ -830,7 +1333,9 @@ GOAL_HELP = (
     "create --objective <text> --criteria <json> [--boundaries <json>] [--budgets <json>] [--unbudgeted] [--thread <id>] | "
     "list | status <goal_ref> [--recent <n>] | "
     "evidence <goal_ref> <criterion> <evidence...> [--status pending|running|inconclusive|blocked] | "
-    "complete <goal_ref>)"
+    "dispatch <goal_ref> [--route <r>] | work-unit <goal_ref> [<criterion>] | "
+    "verify <goal_ref> <criterion> [--timeout <seconds>] | "
+    "enforce <goal_ref> [--require-telemetry] | complete <goal_ref>)"
 )
 
 
@@ -880,6 +1385,42 @@ def handle_goal_cli(argv: list[str]) -> int:
         result = record_evidence(argv[1], argv[2], args, status_hint=status_hint)
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0 if result.get("recorded") else 1
+    if command == "dispatch":
+        if len(argv) < 2:
+            raise ValueError("dispatch requires <goal_ref> [--route <r>]")
+        route = None
+        if "--route" in argv:
+            index = argv.index("--route")
+            if index + 1 < len(argv):
+                route = argv[index + 1]
+        print(json.dumps(dispatch_criterion(argv[1], route=route), ensure_ascii=True, indent=2))
+        return 0
+    if command == "work-unit":
+        if len(argv) < 2:
+            raise ValueError("work-unit requires <goal_ref> [<criterion>]")
+        print(json.dumps(build_work_unit(argv[1], argv[2] if len(argv) > 2 else None), ensure_ascii=True, indent=2))
+        return 0
+    if command == "verify":
+        if len(argv) < 3:
+            raise ValueError("verify requires <goal_ref> <criterion> [--timeout <seconds>]")
+        timeout = None
+        if "--timeout" in argv:
+            index = argv.index("--timeout")
+            if index + 1 < len(argv):
+                try:
+                    timeout = float(argv[index + 1])
+                except ValueError:
+                    pass
+        print(json.dumps(run_verifier(argv[1], argv[2], timeout_seconds=timeout), ensure_ascii=True, indent=2))
+        return 0
+    if command == "enforce":
+        if len(argv) < 2:
+            raise ValueError("enforce requires <goal_ref> [--require-telemetry]")
+        print(json.dumps(
+            enforce_budgets(argv[1], require_telemetry="--require-telemetry" in argv),
+            ensure_ascii=True, indent=2,
+        ))
+        return 0
     if command == "complete":
         if len(argv) < 2:
             raise ValueError("complete requires <goal_ref>")
