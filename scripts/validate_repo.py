@@ -83,12 +83,37 @@ def parse_frontmatter(path: Path) -> Tuple[Dict[str, str], List[str]]:
 
 
 def discover_skill_dirs() -> List[Path]:
+    """Locate Skill package directories (a dir containing SKILL.md).
+
+    The canonical layout nests packages under ``skills/<name>/`` (Skills CLI
+    convention). For backward compatibility a package directly under the root is
+    still recognised. ``EXCLUDED_DIRS`` and dotted dirs are never treated as Skill
+    packages."""
     result: List[Path] = []
+
+    def consider(dir_candidate: Path) -> bool:
+        if not dir_candidate.is_dir() or dir_candidate.name in EXCLUDED_DIRS:
+            return False
+        if dir_candidate.name.startswith("."):
+            return False
+        return (dir_candidate / "SKILL.md").is_file()
+
+    # Canonical: skills/<name>/
+    skills_root = ROOT / "skills"
+    if (skills_root / "SKILL.md").is_dir():  # defensive; normally skills/ has no own SKILL.md
+        pass
+    if skills_root.is_dir():
+        for child in skills_root.iterdir():
+            if consider(child):
+                result.append(child)
+
+    # Legacy compatibility: a package directly at the repo root.
     for child in ROOT.iterdir():
-        if not child.is_dir() or child.name in EXCLUDED_DIRS or child.name.startswith("."):
+        if child == skills_root:
             continue
-        if (child / "SKILL.md").is_file():
+        if consider(child):
             result.append(child)
+
     return sorted(result, key=lambda item: item.name.lower())
 
 

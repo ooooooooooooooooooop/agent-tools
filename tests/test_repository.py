@@ -17,8 +17,19 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 VALIDATOR = SCRIPTS / "validate_repo.py"
 SYNC = SCRIPTS / "sync_skills.py"
-TASKFLOW = ROOT / "unified-taskflow" / "scripts" / "task-lifecycle.py"
-QUALITY = ROOT / "skill-quality-gate" / "scripts" / "quality_report.py"
+
+
+def _skill_path(skill_name: str) -> Path:
+    """Resolve a Skill package path from the manifest (tolerance to layout changes)."""
+    manifest = json.loads((ROOT / "skills.json").read_text(encoding="utf-8-sig"))
+    for entry in manifest.get("skills", []):
+        if entry.get("name") == skill_name:
+            return (ROOT / str(entry["path"])).resolve()
+    raise FileNotFoundError(f"skill not in skills.json: {skill_name}")
+
+
+TASKFLOW = _skill_path("unified-taskflow") / "scripts" / "task-lifecycle.py"
+QUALITY = _skill_path("skill-quality-gate") / "scripts" / "quality_report.py"
 
 
 class RepositoryContractTests(unittest.TestCase):
