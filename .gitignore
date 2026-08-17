@@ -1,6 +1,9 @@
 __pycache__/
 .claude/
 
+# Switchboard task milestone receipts (executor -> controller handoff)
+output/
+
 # Local runtimes, indexes, and dependency trees
 *.py[cod]
 **/__pycache__/

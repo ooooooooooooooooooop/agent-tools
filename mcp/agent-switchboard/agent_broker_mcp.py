@@ -8566,6 +8566,46 @@ TOOLS = [
             "required": ["host"],
         },
     },
+    {
+        "name": "wait_supervisor_event",
+        "description": "For the controlling side: block until a managed Claude supervisor records a material event with seq greater than since_seq (turn_completed, api_retry_exhausted, stall_timeout, or an attention-class event), then return its summary. Zero-poll signal pickup: the controller ends its turn empty-handed only on timeout. event_types optionally narrows the watched set; 0/omitted wait_seconds checks once.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "supervisor_id": {"type": "string"},
+                "since_seq": {"type": "integer", "minimum": 0, "description": "Only events with seq strictly greater than this are returned. Start at 0 to pick up the first material event."},
+                "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional narrow set of event types to watch. Omitted = the default material set (turn_completed, api_retry_exhausted, stall_timeout, tool_failure_threshold, autonomous_action_limit_reached, codex_decision_failed, turn_interrupted)."},
+                "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 180, "description": "Long-poll up to this many seconds (bounded to the MCP window) for a material event. 0/omitted = return immediately."},
+            },
+            "required": ["supervisor_id"],
+        },
+    },
+    {
+        "name": "wait_task_receipt",
+        "description": "For the controlling side: block watching a JSON task-receipt file (receipt protocol v1). Returns a receipt summary once its status field enters terminal_statuses (default ready_for_review / blocked / pushed), or as soon as a valid receipt object appears when terminal_statuses is empty. Absent/invalid JSON/missing-status files are tolerated and re-checked until wait_seconds passes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "receipt_path": {"type": "string", "description": "Filesystem path to the JSON receipt file to watch."},
+                "terminal_statuses": {"type": "array", "items": {"type": "string"}, "description": "Status values that satisfy the wait. Omitted = ['ready_for_review','blocked','pushed']."},
+                "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 180, "description": "Long-poll up to this many seconds (bounded to the MCP window). 0/omitted = return immediately."},
+            },
+            "required": ["receipt_path"],
+        },
+    },
+    {
+        "name": "close_supervisor",
+        "description": "Idempotently stop a managed Claude supervisor and archive a closing summary (plus an optional task-receipt summary) into the supervisor's topic work-memory / timeline, returning the archive record id. Only stops the supervisor it owns; never pushes anything.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "supervisor_id": {"type": "string"},
+                "archive_summary": {"type": "string", "description": "Closing summary to archive into the supervisor's topic work-memory / timeline."},
+                "receipt_path": {"type": "string", "description": "Optional path to a task-receipt JSON file whose summary should also be archived."},
+            },
+            "required": ["supervisor_id", "archive_summary"],
+        },
+    },
 ]
 
 
@@ -8622,6 +8662,9 @@ PUBLIC_TOOL_NAMES = CLAUDE_LITE_TOOL_NAMES | {
     "get_managed_claude_supervisor",
     "list_managed_claude_supervisors",
     "stop_managed_claude_supervisor",
+    "wait_supervisor_event",
+    "wait_task_receipt",
+    "close_supervisor",
     "send_to_claude_session",
     "claim_claude_change",
     "ack_claude_change",
@@ -8663,6 +8706,9 @@ COMPACT_TOOL_DESCRIPTIONS = {
     "get_managed_claude_supervisor": "Read compact managed Claude state and recent material events.",
     "list_managed_claude_supervisors": "List managed Claude supervisors without prompt or transcript bodies.",
     "stop_managed_claude_supervisor": "Stop one Switchboard-owned Claude supervisor and process tree.",
+    "wait_supervisor_event": "Block until a supervisor records a material event after since_seq.",
+    "wait_task_receipt": "Block watching a task-receipt file until its status is terminal.",
+    "close_supervisor": "Stop a supervisor and archive a closing summary to its topic.",
     "send_to_claude_session": "Legacy explicit foreground mintty control; foreground_control=true is required.",
     "claim_claude_change": "Read one durable compact Claude delta; no_change is intentionally tiny.",
     "ack_claude_change": "Commit a claimed Claude delta cursor after it has been handled.",
@@ -10108,6 +10154,301 @@ def stop_managed_claude_supervisor(
         supervisor_id,
         timeout_seconds=max(1.0, min(float(timeout_seconds or 30), 60.0)),
     )
+
+
+# --- supervisor event long-poll, task receipt watch, and close/archive ----------
+# These tools give the controlling side a zero-poll signal path off a detached
+# managed Claude supervisor (see managed_claude.py for the event/seq storage).
+
+# Material events a controller should act on without polling. These are the
+# event *types* emitted by ManagedClaudeDaemon that deserve a signal: a finished
+# turn, exhausted API retries, a stall, or an attention-required condition.
+MATERIAL_SUPERVISOR_EVENT_TYPES = frozenset(
+    {
+        "turn_completed",
+        "api_retry_exhausted",
+        "stall_timeout",
+        "tool_failure_threshold",
+        "autonomous_action_limit_reached",
+        "codex_decision_failed",
+        "turn_interrupted",
+    }
+)
+
+# Task-receipt protocol v1 schema keys. Kept lenient on purpose: a receipt is
+# considered valid for waiting purposes once it is a JSON object carrying a
+# `status` field; every other key is optional for the wait decision.
+RECEIPT_PROTOCOL_VERSION = 1
+RECEIPT_TERMINAL_STATUSES = ("ready_for_review", "blocked", "pushed")
+
+
+def _read_supervisor_events(state_dir: Path, cap_bytes: int = 4 * 1024 * 1024) -> list[dict[str, Any]]:
+    """Parse one supervisor's events.jsonl newest-last. Tolerates a corrupt tail
+    line and trims to the last `cap_bytes` when the log has grown large, mirroring
+    the bounded-read stance of managed_claude._recent_jsonl."""
+    path = Path(state_dir) / "events.jsonl"
+    if not path.exists():
+        return []
+    try:
+        if path.stat().st_size > cap_bytes:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - cap_bytes))
+                data = handle.read().decode("utf-8", errors="replace")
+            lines = data.splitlines()
+        else:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        raise RuntimeError(f"managed_claude_state_unavailable: {path}") from exc
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def _validate_event_types(value: Any) -> set[str]:
+    """Normalize the optional event_types filter to a set of non-empty strings."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    result: set[str] = set()
+    for item in raw_items:
+        cleaned = str(item or "").strip()
+        if cleaned:
+            result.add(cleaned)
+    return result
+
+
+def wait_supervisor_event(
+    supervisor_id: str,
+    since_seq: Any = 0,
+    event_types: Any = None,
+    wait_seconds: Any = None,
+) -> dict[str, Any]:
+    """Block until the given supervisor records a *material* event with seq >
+    `since_seq`, then return its summary. `event_types` optionally narrows the
+    set of types to watch (default: all material types). Times out with a
+    `timeout` status after the bounded `wait_seconds` (0/omitted = check once)."""
+    sid = managed_claude.validate_supervisor_id(supervisor_id)
+    try:
+        base_seq = max(0, int(since_seq or 0))
+    except (TypeError, ValueError):
+        base_seq = 0
+    wanted = _validate_event_types(event_types)
+    if not wanted:
+        wanted = set(MATERIAL_SUPERVISOR_EVENT_TYPES)
+    wait = _bounded_wait_seconds(wait_seconds)
+    state_dir = managed_claude.supervisor_dir(Path(BROKER_DIR), sid)
+    state = managed_claude._read_json(state_dir / "state.json", {}) or {}
+    if not state:
+        raise ValueError(f"managed_claude_unknown_supervisor: {sid}")
+    deadline = time.monotonic() + wait
+
+    def _found():
+        for event in _read_supervisor_events(state_dir):
+            try:
+                seq = int(event.get("seq") or 0)
+            except (TypeError, ValueError):
+                continue
+            if seq <= base_seq:
+                continue
+            if str(event.get("type") or "") in wanted:
+                return event
+        return None
+
+    while True:
+        event = _found()
+        if event is not None:
+            return {
+                "supervisor_id": sid,
+                "timeout": False,
+                "status": "event",
+                "seq": int(event.get("seq") or 0),
+                "type": str(event.get("type") or ""),
+                "since_seq": base_seq,
+                "event": event,
+            }
+        if time.monotonic() >= deadline:
+            all_events = _read_supervisor_events(state_dir)
+            last_seq = 0
+            for event in all_events:
+                try:
+                    last_seq = max(last_seq, int(event.get("seq") or 0))
+                except (TypeError, ValueError):
+                    continue
+            return {
+                "supervisor_id": sid,
+                "timeout": True,
+                "status": "timeout",
+                "since_seq": base_seq,
+                "last_seq": last_seq,
+            }
+        time.sleep(min(0.75, max(0.0, deadline - time.monotonic())))
+
+
+def _read_receipt_file(receipt_path: str | Path) -> dict[str, Any] | None:
+    """Tolerantly parse a task-receipt JSON file. Returns None when missing,
+    unreadable, empty, or not a JSON object — the caller keeps waiting."""
+    path = Path(receipt_path).expanduser()
+    try:
+        if not path.is_file():
+            return None
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
+    """A compact, schema-safe summary of a receipt object (tolerates missing keys)."""
+    return {
+        "protocol_version": receipt.get("protocol_version"),
+        "status": receipt.get("status"),
+        "completed_items": receipt.get("completed_items") if isinstance(receipt.get("completed_items"), list) else None,
+        "current_item": receipt.get("current_item"),
+        "test_summary": receipt.get("test_summary") if isinstance(receipt.get("test_summary"), dict) else None,
+        "commit": receipt.get("commit"),
+        "pushed": receipt.get("pushed"),
+        "blocker": receipt.get("blocker"),
+        "updated_at": receipt.get("updated_at"),
+    }
+
+
+def wait_task_receipt(
+    receipt_path: str,
+    terminal_statuses: Any = None,
+    wait_seconds: Any = None,
+) -> dict[str, Any]:
+    """Block watching a JSON task-receipt file. Returns a summary once its
+    `status` field enters `terminal_statuses` (default ready_for_review /
+    blocked / pushed). A file that is absent, invalid JSON, or missing the
+    `status` field is tolerated and re-checked until the deadline; an empty
+    `terminal_statuses` accepts any valid receipt object."""
+    raw_path = str(receipt_path or "").strip()
+    if not raw_path:
+        raise ValueError("receipt_path is required")
+    resolved = Path(raw_path).expanduser()
+    if isinstance(terminal_statuses, str):
+        terminal_items = [terminal_statuses]
+    elif isinstance(terminal_statuses, (list, tuple, set)) and terminal_statuses is not None:
+        terminal_items = list(terminal_statuses)
+    else:
+        terminal_items = list(RECEIPT_TERMINAL_STATUSES)
+    terminal = {str(item).strip() for item in terminal_items if str(item).strip()}
+    wait = _bounded_wait_seconds(wait_seconds)
+    deadline = time.monotonic() + wait
+
+    def _satisfied(receipt: dict[str, Any] | None) -> bool:
+        if receipt is None:
+            return False
+        status = str(receipt.get("status") or "").strip()
+        # Accept any valid receipt object when no terminal statuses are configured.
+        return bool(status) if not terminal else status in terminal
+
+    while True:
+        receipt = _read_receipt_file(resolved)
+        if _satisfied(receipt):
+            return {
+                "receipt_path": str(resolved),
+                "timeout": False,
+                "status": "found",
+                "receipt": _receipt_summary(receipt),
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "receipt_path": str(resolved),
+                "timeout": True,
+                "status": "timeout",
+                "terminal_statuses": sorted(terminal) if terminal else list(RECEIPT_TERMINAL_STATUSES),
+                "file_exists": resolved.is_file(),
+            }
+        time.sleep(min(0.75, max(0.0, deadline - time.monotonic())))
+
+
+def close_supervisor(
+    supervisor_id: str,
+    archive_summary: str,
+    receipt_path: str | None = None,
+) -> dict[str, Any]:
+    """Idempotently stop a managed supervisor and archive a closing summary (and,
+    optionally, a task-receipt summary) into the supervisor's topic work-memory /
+    timeline. Returns the archive record id. Never pushes anything itself."""
+    sid = managed_claude.validate_supervisor_id(supervisor_id)
+    clean_summary = str(archive_summary or "").strip()
+    if not clean_summary:
+        raise ValueError("archive_summary is required")
+    state_dir = managed_claude.supervisor_dir(Path(BROKER_DIR), sid)
+    state = managed_claude._read_json(state_dir / "state.json", {}) or {}
+    if not state:
+        raise ValueError(f"managed_claude_unknown_supervisor: {sid}")
+
+    # Idempotent stop: only stop when the daemon is actually alive.
+    stop_result: dict[str, Any] = {"status": "already_stopped"}
+    if managed_claude.pid_is_alive(state.get("daemon_pid")):
+        try:
+            stop_result = managed_claude.stop_supervisor(Path(BROKER_DIR), sid, timeout_seconds=30)
+        except RuntimeError as exc:
+            stop_result = {"status": "stop_error", "error": str(exc)}
+
+    config = managed_claude._read_json(state_dir / "config.json", {}) or {}
+    project_root = str(config.get("project_root") or state.get("project_root") or "")
+    receipt = _read_receipt_file(receipt_path) if receipt_path else None
+    details = {
+        "closed": True,
+        "stop_result_status": stop_result.get("status"),
+        "receipt_path": str(receipt_path) if receipt_path else None,
+    }
+    if receipt:
+        details["receipt"] = _receipt_summary(receipt)
+    # Write the closing record into the supervisor's topic timeline (carrying the
+    # receipt summary), and a work-memory continuation entry exactly like other
+    # record_work_memory handoffs. Both are the same agent_events table, so one
+    # topic captures both the timeline and work memory views.
+    timeline_result = record_agent_event(
+        project_root or None,
+        sid,
+        "switchboard-manager",
+        "supervisor_closed",
+        clean_summary,
+        json.dumps(details, ensure_ascii=False),
+    )
+    memory_result = record_work_memory(
+        project_root or None,
+        sid,
+        "switchboard-manager",
+        clean_summary,
+        why=[f"supervisor {sid} closed via close_supervisor"],
+        checks=[f"stop_status={stop_result.get('status')}"],
+        risks=[f"receipt_present={bool(receipt)}"],
+        next_step=["await controlling-side acceptance before push" if receipt else "no receipt supplied"],
+        status=["closed"],
+    )
+    return {
+        "supervisor_id": sid,
+        "archive_id": memory_result.get("id"),
+        "timeline_id": timeline_result.get("id"),
+        "stop_status": stop_result.get("status"),
+        "stop_error": stop_result.get("error"),
+        "archived": bool(memory_result.get("id")),
+        "memory_file": memory_result.get("memory_file"),
+        "receipt_recorded": bool(receipt),
+    }
 
 
 def _validate_claude_watcher_id(value: Any) -> str:
@@ -11708,6 +12049,18 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     if name == "stop_managed_claude_supervisor":
         return text_content(stop_managed_claude_supervisor(
             str(args.get("supervisor_id") or ""), args.get("timeout_seconds")))
+    if name == "wait_supervisor_event":
+        return text_content(wait_supervisor_event(
+            str(args.get("supervisor_id") or ""), args.get("since_seq"),
+            args.get("event_types"), args.get("wait_seconds")))
+    if name == "wait_task_receipt":
+        return text_content(wait_task_receipt(
+            str(args.get("receipt_path") or ""), args.get("terminal_statuses"),
+            args.get("wait_seconds")))
+    if name == "close_supervisor":
+        return text_content(close_supervisor(
+            str(args.get("supervisor_id") or ""), str(args.get("archive_summary") or ""),
+            args.get("receipt_path")))
     if name == "send_to_claude_session":
         return text_content(send_to_claude_session(
             args.get("project"), str(args.get("prompt") or ""), args.get("session_id"),
