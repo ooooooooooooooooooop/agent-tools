@@ -49,17 +49,33 @@ npx skills add https://github.com/ooooooooooooooooooop/skills --skill <skill-nam
 
 ## 仓库结构
 
+根目录按四类组织。前三类随仓库发布；第四类**永远仅存在于本地，不进入发布**。
+
 ```text
-<skill-name>/              # 已登记 Skill 包，保持根目录布局
-mcp/<server-name>/         # MCP 源码发行包
-skills.json                # Skill 注册表与安装 profile
-mcp.json                   # MCP 注册表、入口、版本与许可证
-scripts/                   # 仓库级校验与 Skill 同步工具
-tests/                     # 仓库级回归测试
-docs/                      # 架构与发布规则
+# ① Skill 包（根目录平铺，受 skills.json + validate_repo.py 契约约束）
+<skill-name>/            # 每个含 SKILL.md 的目录即一个 Skill 包，必须登记在 skills.json
+                         # 布局统一：SKILL.md + agents/openai.yaml + examples/*.md
+
+# ② MCP 源码发行包
+mcp/<server-name>/       # 可独立验证的第三方/修改版 MCP 包，自持子目录许可证
+                         # 登记在 mcp.json（入口、版本、平台、上游基线）
+
+# ③ 质量与发布脚手架
+scripts/                 # 仓库级校验（validate_repo.py）与 Skill 同步（sync_skills.py）
+tests/                   # 仓库级回归测试
+skill-quality-gate/      # Skill 质量门禁（也是 Skill 包）
+docs/                    # 架构与发布规则（architecture.md / skill-contract.md / sync-and-release.md）
+.github/workflows/       # CI：严格校验 + Skill 门禁 + markdown/py 语法 + 回归测试
+_template/               # 新建包的模板种子（validate_repo 显式排除，非 Skill）
+
+# ④ 设备运行层（本地，永不发布）
+.taskflow/  .grepai/  .claude/  node_modules/  state.sqlite  会话 JSONL  日志  用户配置  生成报告
 ```
 
-`.taskflow/`、`.grepai/`、`node_modules/`、私有记忆、会话 JSONL、SQLite、用户配置和生成报告属于本地运行状态，不进入发布包。
+- **为何 Skill 平铺在根目录**：`scripts/validate_repo.py` 的 `discover_skill_dirs()` 只扫描根目录下含 `SKILL.md` 的目录，这是 Skills CLI 的既定契约。把 Skill 收入 `skills/*` 子目录会导致校验器判 FAIL。真正的"干净"体现在每类内部统一，而非强制改目录层级。
+- 详尽的层级、状态边界、许可证边界与发布门禁见 [`docs/architecture.md`](./docs/architecture.md)。
+
+`agent-switchboard` 是上游项目的修改发行版，许可证不受仓库根 MIT 许可证覆盖；详见子项目内的 `LICENSE` 与 `DISTRIBUTION.md`。
 
 ## 验证
 
