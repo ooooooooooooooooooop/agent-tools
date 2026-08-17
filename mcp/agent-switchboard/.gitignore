@@ -41,5 +41,11 @@ build/
 *.spec
 !agent-broker.spec
 
+# Optional vendored Claude Agent SDK (installed with `pip install --target`, see
+# claude_sdk_backend.py). The broker keeps a zero-dependency CLI path by default, so
+# these deps are a local opt-in probe cache and must not be published.
+_sdk_probe_deps/
+sdk_deps/
+
 # Release notes are pasted into the GitHub Release page, not tracked here
 RELEASE_NOTES*.md
