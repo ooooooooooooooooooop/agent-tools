@@ -197,6 +197,129 @@ action fingerprinting, or budget enforcement yet. It adds **no MCP tools**
 (CLI-only), so ordinary one-turn and bounded requests are unaffected, and idle
 time consumes zero supervision tokens.
 
+**Phase 2 (enforcement)** turns those reserved ledger fields into real controls:
+
+```powershell
+python agent_broker_mcp.py bridge goal dispatch  <goal_ref> [--route <r>]                    # pick the next advanceable criterion, mark it running
+python agent_broker_mcp.py bridge goal work-unit <goal_ref> [<criterion>]                    # build one bounded, reference-based Codex work unit
+python agent_broker_mcp.py bridge goal verify    <goal_ref> <criterion> [--timeout <seconds>] # run the configured verifier
+python agent_broker_mcp.py bridge goal enforce   <goal_ref> [--require-telemetry]            # compare usage/attempts against every budget
+```
+
+- **Verifier execution** — `verify` runs the criterion's configured command. A
+  successful exit marks it `verified` (the ONLY way); a failing exit increments
+  `attempts`, and past the max (`GOAL_MAX_VERIFIER_ATTEMPTS`, default 3) the
+  criterion is `blocked`. Timeouts/spawn failures fail closed — a criterion is
+  never marked verified on an unresolved command.
+- **Work-unit dispatch (bounded, no transcript replay)** — `dispatch` picks the
+  next advanceable criterion and marks it `running`. `work-unit` packages the
+  bounded continuation: the exact original objective, the current criterion, the
+  protected boundaries, required evidence refs, the verifier, and the work-unit
+  budget — never the whole Goal transcript (`transcript_replay: false`).
+- **Local blockers, not global stops** — a blocked criterion does NOT stop
+  unrelated ready criteria: the Goal becomes `attention_required` and other
+  criteria keep dispatching. It is a global `blocked` only when the dependency
+  graph proves every mandatory path is fully blocked (criterion `dependencies`).
+- **Repeated no-progress fingerprint** — `dispatch` never re-runs the same route
+  on an unchanged `last_fingerprint`: it advances to a declared
+  `alternative_routes` entry, or emits `attention_required` with the exact
+  unresolved condition. No "analyze why it loops" meta-agent is ever started.
+- **Budget enforcement** — `enforce` checks the total Goal budget, per-criterion
+  budgets (`criterion.budget.max_actions`), and runtime-observed token/time
+  telemetry from Codex's Goal DB (read-only). `max_actions`/`criterion_max_actions`
+  exhaustion blocks; token/time breaches raise `attention_required`; a terminal
+  `receipt` explains exactly where budget went. **Fail closed**: if the contract
+  budgets token/time but telemetry is unavailable, `enforce --require-telemetry`
+  returns `enforcement_requires_telemetry` instead of silently passing. Unbudgeted
+  goals are never silently enforced.
+
+Phase 2 adds **no MCP tools** and still calls **no model**: verifiers are local
+commands, dispatch/fingerprint/enforce are deterministic code, and idle time
+consumes zero supervision tokens. The 10 acceptance criteria of
+[issue #4](https://github.com/ooooooooooooooooooop/skills/issues/4) (bounded
+objective, visible budgets, no repeated no-progress model calls, local blockers,
+host-computed completion, hash integrity, restart resume, honest `doctor`,
+unaffected ordinary requests, zero idle supervision tokens) are each covered by
+focused tests.
+
+### Managed Claude supervision over the CLI
+
+The same detached supervisors you drive over MCP tools (`start_managed_claude_supervisor`,
+`send_to_managed_claude_session`, `get_managed_claude_supervisor`, ...) are also exposed as
+deterministic `bridge` verbs, so a headless caller without an MCP client can supervise too:
+
+```powershell
+python agent_broker_mcp.py bridge managed-claude create <supervisor_id> [--project <dir>] [--objective "<text>"] [--permission-mode acceptEdits] [--decision-mode record_only]
+python agent_broker_mcp.py bridge managed-claude send    <supervisor_id> "<prompt>" [--interrupt-current] [--confirm-timeout <seconds>]
+python agent_broker_mcp.py bridge managed-claude status  <supervisor_id> [--recent <n>]
+python agent_broker_mcp.py bridge managed-claude list
+python agent_broker_mcp.py bridge managed-claude stop    <supervisor_id> [--timeout <seconds>]
+```
+
+`create` launches the daemon without sending a prompt (zero tokens until `send`).
+`send` queues the message and reports `confirmed` only after the daemon echoes the
+unique request marker in Claude's stream; `--interrupt-current` uses Claude's native
+interrupt control request (receipt + terminal result) and never silently kills the
+process. `status` renders the same state/events ledger the MCP path returns, and
+`list` shows every supervisor on the machine.
+
+### Claude pool (broker-owned multi-session concurrency)
+
+Multiple Claude Code sessions can legitimately run at once — direct `claude -p`
+consults, detached supervisors, async CLI workers, and existing mintty terminals.
+Each path used to guard only its own supervisor_id or request row. The broker now
+owns a **machine-wide orchestration layer** (`claude_pool.py`) shared by every
+Claude control path:
+
+```powershell
+python agent_broker_mcp.py bridge claude-pool status                       # machine view + enforced ceilings
+python agent_broker_mcp.py bridge claude-pool list    [--status running]    # registered sessions
+python agent_broker_mcp.py bridge claude-pool register <session_id> <kind> <owner_pid> [--claude-pid <pid>] [--project <dir>]
+python agent_broker_mcp.py bridge claude-pool unregister <session_id>
+python agent_broker_mcp.py bridge claude-pool claim-slot --owner-kind <k> --owner-pid <pid> --session <id> [--project <dir>]
+python agent_broker_mcp.py bridge claude-pool reap    [--skip <session-csv>]
+```
+
+- **Machine-wide register** — a SQLite pool (`~/.agent-broker/claude_pool.db`)
+  records every Claude-owned process group (owner kind, owner/claude pids, project
+  scope, status), so concurrent controls are visible as one pool, not isolated dirs.
+- **Bounded ceilings, fail closed** — `claim-slot` enforces a machine-wide
+  `AGENT_BROKER_CLAUDE_POOL_MAX` (default 8) and a per-project
+  `AGENT_BROKER_CLAUDE_POOL_MAX_PER_PROJECT` (default 3). Exceeding either returns
+  `claude_pool_full` / `claude_pool_project_full` instead of silently degrading.
+- **Orphan reaping** — `reap` finds a live `claude` process whose owning pid (daemon
+  or worker) died, flags the session `attention_required` with a durable record, and
+  releases its slot. It never silently reuses a dead-owner session.
+- **Workspace write lease** — the `ProjectWriteLease` serializes write-class
+  supervision on ONE project (cross-process, crash-safe FileLock), matching the
+  routing gate's "parallel reads / serial writes" rule.
+- **Doctor integration** — `doctor` reports pool schema health, enforced ceilings,
+  and the live session summary.
+
+Pool state is derived from real process state and the existing
+`~/.agent-broker/supervisors/` ledger — it never claims to own the command queues
+daemons already own, and idle supervision consumes zero model tokens.
+
+### Claude Agent SDK backend (experimental, opt-in)
+
+The default Claude Code path stays the **zero-dependency** raw stream-json CLI. The
+official `claude-agent-sdk` (Python) is an optional backend with first-party
+controls the CLI path doesn't expose uniformly — live `set_model`/interrupt/`stop_task`
+on a client, `fork_session`/`resume`/session-store, and typed usage introspection.
+`claude_sdk_backend.py` is a deterministic **feasibility probe**, never the default:
+
+```powershell
+pip install --target ./_sdk_probe_deps claude-agent-sdk        # opt-in vendored deps (gitignored)
+python agent_broker_mcp.py bridge probe sdk                     # free capability report, no model call
+python agent_broker_mcp.py bridge probe sdk --run-prompt "..." [--model <name>]   # OPT-IN real driver
+```
+
+The probe reports whether the SDK imports, which surface it exposes, and how it
+compares with the CLI (runtime model switch, native interrupt, resume, but not
+zero-dependency). It spends zero tokens unless `--run-prompt` is passed. `doctor`
+shows a `claude-agent-sdk` block with the same honesty: "available" only when it
+actually imports, and the default route unchanged.
+
 ---
 
 ## Diagnostics: `doctor`
@@ -236,6 +359,13 @@ broker/bridge version drift and prints actionable next steps.
 ---
 
 ## Changelog
+
+### Unreleased (broker-owned Claude concurrency pool + managed-claude CLI + SDK probe)
+- Added a broker-owned **Claude pool** (`claude_pool.py`, `bridge claude-pool`): a machine-wide SQLite register of every Claude-owned process group, atomic `claim-slot` ceilings (machine-wide `AGENT_BROKER_CLAUDE_POOL_MAX` default 8, per-project `AGENT_BROKER_CLAUDE_POOL_MAX_PER_PROJECT` default 3) that fail closed, orphan reaping that flags dead-owner sessions `attention_required` without silent reuse, and a cross-process `ProjectWriteLease` serializing write-class supervision per project (matching "parallel reads / serial writes"). `doctor` now reports pool schema health, ceilings, and the live session summary. CLI-only, no MCP tools, zero idle tokens.
+- Exposed the detached managed Claude supervisor over the CLI: `bridge managed-claude create|send|status|list|stop` mirrors the existing MCP tools, so a headless caller without an MCP client can supervise detached Claude Code sessions.
+- Added an **experimental, opt-in Claude Agent SDK backend probe**: `claude_sdk_backend.py` reports whether `claude-agent-sdk` is importable and which control surface it exposes (`bridge probe sdk`), plus an `--run-prompt` real-model driver that is never the default. `doctor` shows a `claude-agent-sdk` block. The default Claude route stays zero-dependency.
+- **Codex Goal supervision Phase 2 (enforcement)**: `bridge goal dispatch|work-unit|verify|enforce` — verifier-driven `verified`, bounded reference-based work-unit packaging (no transcript replay), dependency-aware local blockers (a blocked criterion never stops unrelated ready criteria), repeated no-progress fingerprint routing to alternative routes or `attention_required`, and fail-closed budget enforcement (total + per-criterion `max_actions`, token/time telemetry with `enforcement_requires_telemetry` when unavailable). Addresses [issue #4](https://github.com/ooooooooooooooooooop/skills/issues/4) acceptance criteria 3/4/7. Still CLI-only, still zero model calls.
+- New focused tests: `tests/test_claude_pool.py` (13), `tests/test_claude_sdk_backend.py` (6), `tests/test_goal_supervisor_phase2.py` (21).
 
 ### v1.1.0 (windowless event-driven Claude supervision)
 - Added a detached stream-json daemon with durable commands, explicit replay confirmation, compact event/state ledgers, Claude-native interrupt receipts, and explicit process-tree interrupt/resume. It never focuses a desktop window or touches the clipboard.

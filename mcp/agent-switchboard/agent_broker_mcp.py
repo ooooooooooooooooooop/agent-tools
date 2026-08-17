@@ -30,6 +30,8 @@ from typing import Any
 
 import model_roles
 import managed_claude
+import claude_pool
+import claude_sdk_backend
 import goal_supervisor
 from switchboard_version import BROKER_VERSION
 
@@ -12148,6 +12150,35 @@ def broker_doctor() -> dict[str, Any]:
             "(it can then PUSH context, though it still can't be read on disk like Claude Code/Codex)."
         )
 
+    # --- Claude pool (broker-owned concurrency control) ---
+    try:
+        claude_pool_report = claude_pool.pool_status(claude_pool.default_db_path())
+    except Exception as exc:  # noqa: BLE001
+        claude_pool_report = {
+            "enabled": True,
+            "exists": False,
+            "schema_ok": False,
+            "errors": [f"claude_pool_unreadable: {type(exc).__name__}: {exc}"],
+            "sessions": [],
+            "summary": {"total": 0, "running": 0},
+        }
+    if claude_pool_report.get("exists") and not claude_pool_report.get("schema_ok"):
+        recommendations.append(
+            "Claude pool DB schema mismatch - `bridge claude-pool status` cannot enforce the "
+            "concurrency ceiling until the schema is repaired (fail closed)."
+        )
+
+    # --- Claude Agent SDK (experimental, opt-in backend probe) ---
+    try:
+        sdk_report = claude_sdk_backend.probe_sdk_capabilities()
+    except Exception as exc:  # noqa: BLE001
+        sdk_report = {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    if sdk_report.get("available"):
+        recommendations.append(
+            "Claude Agent SDK detected - the experimental `bridge probe sdk --run-prompt <text>` "
+            "backend is available, but the default zero-dependency CLI route is unchanged."
+        )
+
     return {
         "broker_version": BROKER_VERSION,
         "bridge_version": bridge_version,
@@ -12156,6 +12187,8 @@ def broker_doctor() -> dict[str, Any]:
         "surfaces": surfaces,
         "debate": debate,
         "nerve_system": nerve,
+        "claude_pool": claude_pool_report,
+        "claude_sdk": sdk_report,
         "recommendations": recommendations or ["All core surfaces look healthy."],
     }
 
@@ -12218,10 +12251,134 @@ def render_doctor(report: dict[str, Any]) -> str:
         for spot in nerve.get("blind_spots", []):
             lines.append(f"  ! blind spot: {spot}")
         lines.append("")
+    pool = report.get("claude_pool")
+    if pool:
+        lines.append("[claude pool: broker-owned multi-session concurrency]")
+        if not pool.get("exists"):
+            lines.append("  no pool DB yet - no supervised Claude sessions registered; "
+                         "`bridge claude-pool` will create it on first use.")
+        else:
+            lines.append(f"  schema      : {'OK' if pool.get('schema_ok') else 'MISMATCH (fail closed)'}")
+            lines.append(f"  max active  : {pool['max_active_processes']}   max/project: {pool['max_per_project']}")
+            lines.append(f"  sessions    : {pool['summary']['total']} total, {pool['summary']['running']} running")
+            for s in pool.get("sessions", [])[:10]:
+                lines.append(f"    {s['session_id'][:8]} {s['owner_kind']:<18} pid={s['owner_pid']} "
+                             f"status={s['status']}")
+        for err in pool.get("errors", []) or []:
+            lines.append(f"  ! {err}")
+        lines.append("")
+    sdk = report.get("claude_sdk")
+    if sdk:
+        lines.append("[claude-agent-sdk (experimental opt-in backend)]")
+        if sdk.get("available"):
+            lines.append(f"  sdk        : available ({sdk.get('sdk_source')})")
+            lines.append(f"  driver     : {sdk.get('sdk_driver')}")
+            for name in (sdk.get("sdk_exposes") or {}).keys():
+                lines.append(f"  exposes    : {name}")
+            lines.append("  NOTE       : default route stays the zero-dependency CLI; "
+                         "use `bridge probe sdk --run-prompt <text>` to test the SDK driver.")
+        else:
+            lines.append(f"  sdk        : not importable - {sdk.get('note') or sdk.get('error') or ''}".rstrip())
+        lines.append("")
     lines.append("[recommendations]")
     for rec in report["recommendations"]:
         lines.append(f"  - {rec}")
     return "\n".join(lines)
+
+
+MANAGED_CLAUDE_CLI_HELP = (
+    "Usage: agent_broker_mcp.py bridge managed-claude (\n"
+    "  create <supervisor_id> [--project <dir>] [--objective <text>] [--permission-mode planned|manual|acceptEdits|auto|dontAsk|bypassPermissions] [--decision-mode record_only|codex]\n"
+    "  send <supervisor_id> <prompt> [--interrupt-current] [--interrupt-mode native|hard] [--confirm-timeout <seconds>] [--origin <name>]\n"
+    "  status <supervisor_id> [--recent <n>]\n"
+    "  list | stop <supervisor_id> [--timeout <seconds>]\n"
+    ")"
+)
+
+
+def handle_managed_claude_cli(argv: list[str]) -> int:
+    """bridge managed-claude subcommand dispatch. Deterministic; never calls a model
+    itself (a ``send`` only delivers the queued prompt to the already-running daemon)."""
+    config = load_config()
+
+    def _arg(name: str) -> str | None:
+        if name not in argv:
+            return None
+        index = argv.index(name)
+        return argv[index + 1] if index + 1 < len(argv) else None
+
+    if not argv or argv[0] in {"help", "-h", "--help"}:
+        print(MANAGED_CLAUDE_CLI_HELP)
+        return 0
+    command = argv[0]
+    if command == "list":
+        result = list_managed_claude_supervisors()
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0
+    if not argv[1:]:
+        raise ValueError(f"managed-claude {command} requires a supervisor_id")
+
+    if command == "create":
+        if len(argv) < 2:
+            raise ValueError("create requires <supervisor_id>")
+        sid = argv[1]
+        project = _arg("--project") or "."
+        objective = _arg("--objective") or ""
+        permission = _arg("--permission-mode") or "acceptEdits"
+        decision = _arg("--decision-mode") or "record_only"
+        result = start_managed_claude_supervisor(
+            project,
+            sid,
+            objective,
+            policy=_arg("--policy"),
+            permission_mode=permission,
+            decision_mode=decision,
+            codex_model=_arg("--codex-model"),
+            codex_effort=_arg("--codex-effort"),
+        )
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0 if result.get("status") in {"ready", "idle", "attention_required", "launching"} else 1
+    if command == "send":
+        if len(argv) < 3:
+            raise ValueError("send requires <supervisor_id> <prompt>")
+        confirm = _arg("--confirm-timeout")
+        try:
+            confirm_seconds = float(confirm) if confirm is not None else 5.0
+        except ValueError as exc:
+            raise ValueError("--confirm-timeout must be a number") from exc
+        result = send_to_managed_claude_session(
+            argv[1],
+            argv[2],
+            interrupt_current="--interrupt-current" in argv,
+            interrupt_mode=_arg("--interrupt-mode") or "native",
+            confirm_timeout_seconds=confirm_seconds,
+        )
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0 if result.get("status") not in {"failed", "delivery_unconfirmed"} else 1
+    if command == "status":
+        if len(argv) < 2:
+            raise ValueError("status requires <supervisor_id>")
+        recent = 10
+        if "--recent" in argv:
+            try:
+                recent = int(_arg("--recent"))
+            except (TypeError, ValueError):
+                pass
+        result = get_managed_claude_supervisor(argv[1], recent)
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0
+    if command == "stop":
+        if len(argv) < 2:
+            raise ValueError("stop requires <supervisor_id>")
+        timeout = _arg("--timeout")
+        try:
+            timeout_seconds = float(timeout) if timeout is not None else 20.0
+        except ValueError as exc:
+            raise ValueError("--timeout must be a number") from exc
+        result = stop_managed_claude_supervisor(argv[1], timeout_seconds)
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0
+    raise ValueError(f"unknown managed-claude subcommand: {command}")
 
 
 def handle_bridge_cli(argv: list[str]) -> int:
@@ -12253,6 +12410,11 @@ def handle_bridge_cli(argv: list[str]) -> int:
             "snapshot-latest [project] [topic] [target_agent] | live-surfaces [project] [max_age] | "
             "heartbeat <host> [project] [capabilities-csv] [visible_app] [cdp_port] | "
             "goal (probe | contract | create | list | status <ref> | evidence <ref> <criterion> <evidence...> | complete <ref>) | "
+            "claude-pool (status | list [--status <s>] | register <session> <kind> <pid> [--claude-pid <n>] [--project <dir>] | "
+            "unregister <session> | claim-slot --owner-kind <k> --owner-pid <n> --session <id> [--project <dir>] | reap [--skip <csv>]) | "
+            "managed-claude (create <supervisor_id> [--project <dir>] [--objective <text>] [--permission-mode <m>] [--decision-mode record_only|codex] | "
+            "send <supervisor_id> <prompt> [--interrupt-current] [--confirm-timeout <s>] | status <supervisor_id> [--recent <n>] | list | stop <supervisor_id> [--timeout <s>]) | "
+            "probe sdk [--json] [--run-prompt <text>] [--model <name>] | "
             "doctor [--json])"
         )
         return 0
@@ -12266,6 +12428,14 @@ def handle_bridge_cli(argv: list[str]) -> int:
         return 0
     if command == "goal":
         return goal_supervisor.handle_goal_cli(argv[1:])
+    if command == "claude-pool":
+        return claude_pool.handle_claude_pool_cli(argv[1:])
+    if command == "managed-claude":
+        return handle_managed_claude_cli(argv[1:])
+    if command == "probe":
+        if argv[1:2] == ["sdk"]:
+            return claude_sdk_backend.handle_sdk_probe_cli(argv[1:])
+        raise ValueError("probe currently supports only 'sdk' (bridge probe sdk [--json] [--run-prompt <text>])")
     if command == "claim":
         result = claim_antigravity_request(
             argv[1] if len(argv) > 1 else "antigravity-bridge",

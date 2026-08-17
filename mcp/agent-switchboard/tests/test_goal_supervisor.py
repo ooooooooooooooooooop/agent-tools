@@ -280,7 +280,9 @@ class GoalSupervisorTests(unittest.TestCase):
         self.assertEqual(status["criteria"]["C-01"]["status"], "blocked")
         self.assertEqual(status["criteria"]["C-02"]["status"], "pending")
         self.assertEqual(status["criteria"]["C-02"]["observed_evidence"], ["tests/b.py"])
-        self.assertEqual(status["status"], "blocked")
+        # Acceptance 4 (dependency-aware): a local blocker must not stop the unrelated
+        # ready criterion C-02, so the Goal is attention_required, not globally blocked.
+        self.assertEqual(status["status"], "attention_required")
 
         completion = goal_supervisor.complete_goal(goal_ref)
         self.assertFalse(completion["completed"])
