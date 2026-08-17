@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +33,29 @@ import managed_claude  # noqa: E402
 SUPERVISOR_ID = "sup-signals"
 SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 PROJECT_NAME = "signals-project"
+
+
+def closing_db_connect(db_path: Path):
+    """A db_connect stand-in that closes the underlying sqlite connection on
+    context exit. The real broker.db_connect opens a connection that Python's
+    `with sqlite3.Connection` context manager commits but does NOT close, which
+    on Windows leaves state.sqlite locked and makes TemporaryDirectory teardown
+    fail with PermissionError [WinError 32]. Closing on exit releases the file
+    handle before the temp dir is removed."""
+    @contextmanager
+    def _cm():
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    return _cm
 
 
 def make_supervisor(project_root: Path, state_dir: Path) -> None:
@@ -97,6 +122,7 @@ class SupervisionSignalTests(unittest.TestCase):
             mock.patch.object(broker, "BROKER_DIR", self.home),
             mock.patch.object(broker, "DB_PATH", self.db_path),
             mock.patch.object(broker, "CONFIG_PATH", self.home / "config.json"),
+            mock.patch.object(broker, "db_connect", closing_db_connect(self.db_path)),
         ]
         for patcher in self.patches:
             patcher.start()
