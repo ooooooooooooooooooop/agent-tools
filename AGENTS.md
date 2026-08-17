@@ -10,22 +10,22 @@
 
 | 层 | 目录 | 可否改动 | 改动要点 |
 |---|---|---|---|
-| ① Skill 包 | 根目录含 `SKILL.md` 的目录（9 个） | ✅ | 必须登记在 `skills.json`；布局统一 `SKILL.md + agents/openai.yaml + examples/*.md` |
+| ① Skill 包 | `skills/<name>/`（9 个） | ✅ | 必须登记在 `skills.json`；布局统一 `SKILL.md + agents/openai.yaml + examples/*.md` |
 | ② MCP 包 | `mcp/<name>/` | ✅ | 登记在 `mcp.json`；自持子目录许可证；`agent-switchboard` 是修改版，非 MIT |
-| ③ 质量脚手架 | `scripts/` `tests/` `docs/` `skill-quality-gate/` `_template/` `.github/workflows/` | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
+| ③ 质量脚手架 | `scripts/` `tests/` `docs/` `_template/` `.github/workflows/`（`skill-quality-gate` 是 ① 中的 Skill 包，位于 `skills/skill-quality-gate/`） | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
 | ④ 设备运行层 | `.taskflow/` `.grepai/` `.claude/` `node_modules/` 等 | ❌ 禁改/禁提交 | 本地运行态，发布门禁拒绝 |
 
 ## 硬约束（改目录结构的红线）
 
-1. **Skill 必须在根目录平铺**。`scripts/validate_repo.py::discover_skill_dirs()` 只扫描根目录下含 `SKILL.md` 的目录。把 Skill 收进 `skills/*` 子目录会让 `--strict` 校验判 **FAIL**。改目录层级属于破坏契约，若要改必须先同步改校验器 + `skills.json` + CI。
-2. **两个注册表必须与目录一致**：`skills.json` ↔ 顶层 Skill 目录；`mcp.json` ↔ `mcp/*`。校验器逐一核对。
-3. **发布门禁**：`git diff --check`、`python scripts/validate_repo.py --strict`、`skill-quality-gate/scripts/quality_report.py --root . --strict`、仓库回归、MCP 回归全绿才可合并。
+1. **Skill 统一收在 `skills/<name>/` 下**。`scripts/validate_repo.py::discover_skill_dirs()` 识别 `skills/` 子目录里含 `SKILL.md` 的目录（为兼容也认可根目录平铺的旧包）。新增 Skill 放进 `skills/` 并登记到 `skills.json` 的 `path`（`./skills/<name>`）；两处不同步会让 `--strict` 判 FAIL。
+2. **两个注册表必须与目录一致**：`skills.json` ↔ `skills/*`；`mcp.json` ↔ `mcp/*`。校验器逐一核对。
+3. **发布门禁**：`git diff --check`、`python scripts/validate_repo.py --strict`、`python skills/skill-quality-gate/scripts/quality_report.py --root . --strict`、仓库回归、MCP 回归全绿才可合并。
 
 ## 改动后必须跑的检查
 
 ```bash
 python scripts/validate_repo.py --strict          # 结构 + 注册表 + 许可证 + 链接 + 运行时文件边界
-python skill-quality-gate/scripts/quality_report.py --root . --strict   # Skill 门禁
+python skills/skill-quality-gate/scripts/quality_report.py --root . --strict   # Skill 门禁
 python -m unittest discover -s tests -v           # 仓库回归
 python -m unittest discover -s mcp/agent-switchboard/tests -v           # MCP 回归
 git diff --check                                  # 空白错误

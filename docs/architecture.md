@@ -6,7 +6,7 @@
 
 ```text
 源码仓库层
-  skills.json + 根目录 Skill 包
+  skills.json + skills/<name>/ Skill 包
   mcp.json + mcp/ 下 MCP 包
           |
           v
@@ -20,7 +20,7 @@
 
 - `skills.json` 只登记 Skill，不承担 MCP 安装信息。
 - `mcp.json` 登记 MCP 入口、安装器、版本、平台、上游基线和许可证。
-- 根目录 Skill 包保留当前布局，以兼容 Skills CLI。
+- Skill 包收在 `skills/<name>/` 下；`scripts/validate_repo.py::discover_skill_dirs()` 识别该目录下的 `SKILL.md`（为兼容仍认可根目录平铺的旧包）。`skills.json` 的 `path` 写 `./skills/<name>`。
 - `mcp/<name>/` 是可独立验证的源码发行包；第三方修改版使用自己的子目录许可证。
 - `scripts/validate_repo.py` 同时检查两类注册表、包结构、许可证、链接和运行时文件边界。
 - `scripts/sync_skills.py` 仍只同步 Skills，不安装 MCP。

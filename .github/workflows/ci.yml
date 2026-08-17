@@ -16,7 +16,7 @@ jobs:
         run: python3 scripts/validate_repo.py --strict
 
       - name: Run Skill quality gate
-        run: python3 skill-quality-gate/scripts/quality_report.py --root . --strict
+        run: python3 skills/skill-quality-gate/scripts/quality_report.py --root . --strict
 
       - name: Lint Markdown
         uses: DavidAnson/markdownlint-cli2-action@v19
@@ -43,4 +43,4 @@ jobs:
         run: python3 -m unittest discover -s mcp/agent-switchboard/tests -v
 
       - name: Run portable elite-experts smoke tests
-        run: python3 simulate-elite-experts/scripts/run_examples.py
+        run: python3 skills/simulate-elite-experts/scripts/run_examples.py

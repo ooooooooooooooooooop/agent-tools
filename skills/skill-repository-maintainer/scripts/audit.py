@@ -82,11 +82,19 @@ def audit(root: Path) -> dict[str, object]:
             warnings.append(f"{name}: no Markdown example")
 
     registered = seen
-    for child in root.iterdir():
-        if child.name in IGNORED_DIRS:
+    # Skill packages live under skills/ (canonical) — scan there; also check legacy
+    # root-level packages for unregistered SKILL.md dirs.
+    scan_roots = [root / "skills"] if (root / "skills").is_dir() else [root]
+    if root / "skills" != root:
+        scan_roots.append(root)
+    for base in scan_roots:
+        if not base.is_dir():
             continue
-        if child.is_dir() and (child / "SKILL.md").is_file() and child.name not in registered:
-            errors.append(f"unregistered skill directory: {child.name}")
+        for child in base.iterdir():
+            if child.name in IGNORED_DIRS:
+                continue
+            if child.is_dir() and (child / "SKILL.md").is_file() and child.name not in registered:
+                errors.append(f"unregistered skill directory: {child.name}")
 
     return {"pass": not errors, "errors": errors, "warnings": warnings, "skill_count": len(entries)}
 
