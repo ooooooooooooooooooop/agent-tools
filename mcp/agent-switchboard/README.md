@@ -155,6 +155,36 @@ Startup-only smoke test (no Claude or Codex prompt is sent):
 python smoke-managed-claude.py --project C:\path\to\project
 ```
 
+### Supervisor signals, task receipts, and close/archive
+
+Three MCP tools give the **controlling side** a zero-poll signal path off a
+detached managed supervisor — the executor never has to reverse-request the
+controller, and the controller never has to spin a polling loop.
+
+- **`wait_supervisor_event(supervisor_id, since_seq=0, event_types=None, wait_seconds<=180)`**
+  blocks until the supervisor records a *material* event with `seq > since_seq`
+  (`turn_completed`, `api_retry_exhausted`, `stall_timeout`, or an attention-class
+  event: tool-failure threshold, action-limit reached, codex-decision failure,
+  interrupted turn) and returns its summary — or `status: "timeout"` when the
+  bounded wait passes with nothing new. `event_types` optionally narrows the set.
+  This mirrors the existing `request_status`/`request_result` long-poll pattern.
+- **`wait_task_receipt(receipt_path, terminal_statuses=["ready_for_review","blocked","pushed"], wait_seconds<=180)`**
+  blocks watching a JSON task-receipt file (receipt protocol v1) and returns a
+  summary once its `status` field enters `terminal_statuses`. A file that is
+  absent, invalid JSON, or missing the `status` field is tolerated and re-checked
+  until the deadline instead of failing.
+- **`close_supervisor(supervisor_id, archive_summary, receipt_path=None)`**
+  idempotently stops the supervisor (only when its daemon is still alive) and
+  archives `archive_summary` — plus the receipt summary when `receipt_path` is
+  supplied — into that supervisor's topic work-memory / timeline, returning the
+  archive record id. It only stops the supervisor it owns and never pushes
+  anything itself.
+
+The receipt protocol v1 schema is `{protocol_version, status, completed_items[],
+current_item, test_summary{command,collected,passed,failed,skipped}, commit,
+pushed, blocker, updated_at}`; a valid receipt object is one that parses as JSON
+and carries a `status`.
+
 ### Codex Goal supervision (Phase 1: observability)
 
 A durable Codex Goal objective is not the same as governed long-horizon
