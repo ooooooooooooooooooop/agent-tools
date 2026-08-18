@@ -77,6 +77,7 @@ description: |
 | 闲置窗口悬挂 | supervisor 完成但长期不关闭 | 验收通过即 `close_supervisor`，摘要归档进 topic memory | broker 实现依据（`close_supervisor` 归档语义） |
 | 工具可用性臆断 | 声明目录里没有某工具就断言"物理上无法使用" | 先做一次真实调用，失败再降级；目录清单不是可用性证据（热重载可能迟注册） | 来自 2026-08-18 生产复盘（热重载迟注册），本仓库无可复核测试 |
 | 省略模型档位 | 省略 `model_policy`/`effort` 的派工被路由到前沿档，悄悄烧额度 | 派工单必填显式档位；环境默认值（如 `set_model_default`）只是局部补丁，不作约束 | 2026-08-18 生产复盘，本仓库无可复核测试 |
+| worker 越权改 git 状态 | 受管 worker 切换分支或动暂存区，管理者的提交落到非预期分支 | 派工红线显式禁止一切 git 写操作（含 checkout/switch）；提交前必查 `git branch --show-current` 与 `git status`；提交后核对远端实际落点 | 2026-08-18 生产复盘，本仓库无可复核测试 |
 
 ## 输出契约
 
