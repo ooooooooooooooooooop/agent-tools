@@ -11,11 +11,11 @@ start_managed_claude_supervisor(
   objective="修复 parser 在空输入下的崩溃，回归全绿",
   policy="红线：不改公共 API；里程碑：复现→修复→回归；验收：新增用例通过且全套件绿",
   decision_mode="record_only",
-  permission_mode="bypassPermissions"
+  permission_mode="acceptEdits"
 )
 ```
 
-要点：`permission_mode` 必须足够（受管窗口无人点批准）；`objective` 要具体到可验收。
+要点：默认用 broker 的保守默认 `acceptEdits` 启动，保持最小权限；仅当用户明确授权且目标范围受控（红线已写入 policy）时才升级为 `bypassPermissions`——受管窗口无人点批准，升级前必须确认授权来源。遇到认证类失败或被要求破坏性操作时停止上报，不得自行升级绕过。`objective` 要具体到可验收。
 
 ## 2. 切片派工
 
@@ -35,7 +35,7 @@ wait_supervisor_event(supervisor_id=..., since_seq=<上次事件序号>, wait_se
 
 ## 4. 验收
 
-对照 policy 独立核验：亲自复跑回归命令、核对 diff 范围、确认未碰红线。执行者自报"已完成"不算数。
+对照 policy 独立核验：管理者做有界只读验收——复跑只读校验/回归命令、`git show` 核对 diff 范围、确认未碰红线；不实现、不提交、不扩大调查。执行者自报"已完成"不算数。
 
 ## 5. 关闭归档
 
