@@ -185,6 +185,30 @@ current_item, test_summary{command,collected,passed,failed,skipped}, commit,
 pushed, blocker, updated_at}`; a valid receipt object is one that parses as JSON
 and carries a `status`.
 
+#### Dual-channel receipt watcher
+
+A receipt-only watcher can wait for the full window when the executor dies before writing a receipt. `scripts/receipt_watch_v2.ps1` closes that blind spot by watching two independent local signals; either signal prints a line and exits with code `0`.
+
+- **Channel A — receipt freshness:** watches `ReceiptPath` for a terminal `status` (`ready_for_review`, `blocked`, or `pushed` by default) and requires `updated_at` to be newer than `AfterUpdatedAt` when a baseline is supplied. This prevents an old receipt from satisfying a new run.
+- **Channel B — supervisor anomaly:** when `SupervisorId` is supplied, watches `%USERPROFILE%\.agent-broker\supervisors\<id>\state.json` for `failed`/`stopped`, known attention events (`api_retry_exhausted`, `stall_timeout`, `tool_failure_threshold`, `turn_interrupted`, `autonomous_action_limit_reached`), or a dead `daemon_pid`. `IgnoreAttentionSeq` suppresses an already-known attention event so the watcher does not retrigger on it.
+
+| Parameter | Default | Purpose |
+|---|---:|---|
+| `-ReceiptPath` | required | JSON task-receipt file to watch. |
+| `-SupervisorId` | empty | Supervisor directory name used for Channel B; empty disables it. |
+| `-WindowMinutes` | `30` | Maximum watch window before `window-elapsed-no-receipt`. |
+| `-AfterUpdatedAt` | empty | Optional ISO 8601 baseline; Channel A accepts only a lexically newer `updated_at`. |
+| `-Terminal` | `ready_for_review, blocked, pushed` | Terminal receipt statuses to accept. |
+| `-IgnoreAttentionSeq` | `0` | Highest already-handled attention sequence; only larger sequences trigger. |
+
+Run it in a detached, windowless PowerShell process from the repository directory:
+
+```powershell
+Start-Process pwsh -WindowStyle Hidden -ArgumentList @('-NoProfile','-File','.\scripts\receipt_watch_v2.ps1','-ReceiptPath','C:\path\output\skills_watcher_receipt.json','-SupervisorId','<supervisor-id>','-WindowMinutes','30','-AfterUpdatedAt','2026-08-18T12:00:00Z','-IgnoreAttentionSeq','12')
+```
+
+The output line is `RECEIPT-SIGNAL: ...` for Channel A, `SUPERVISOR-ANOMALY: ...` for Channel B, and `window-elapsed-no-receipt` when neither channel fires before the deadline.
+
 ### Codex Goal supervision (Phase 1: observability)
 
 A durable Codex Goal objective is not the same as governed long-horizon
