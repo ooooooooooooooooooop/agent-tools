@@ -1,0 +1,4 @@
+interface:
+  display_name: "Switchboard 运维手册"
+  short_description: "以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律。"
+  default_prompt: "使用 $agent-switchboard-ops，按管理者—执行者边界编排 agent-switchboard 任务，给出派工单、追踪方式和验收报告。"
