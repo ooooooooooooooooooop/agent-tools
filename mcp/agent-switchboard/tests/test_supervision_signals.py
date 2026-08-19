@@ -141,6 +141,22 @@ class SupervisionSignalTests(unittest.TestCase):
         self.assertEqual(result["seq"], 2)
         self.assertEqual(result["event"]["result_summary"], "done")
 
+    def test_wait_supervisor_event_wakes_on_process_death(self):
+        # Regression: an executor that dies unexpectedly must wake the waiter
+        # immediately. Previously claude_process_exited / daemon_failed /
+        # daemon_stopped were emitted by the daemon but excluded from the
+        # material set, so waiters slept until timeout on a dead process.
+        for seq, event_type in enumerate(
+            ("claude_process_exited", "daemon_failed", "daemon_stopped"), start=1
+        ):
+            with self.subTest(event_type=event_type):
+                for stale in self.state_dir.glob("events.jsonl"):
+                    stale.unlink()
+                write_event(self.state_dir, 1, event_type)
+                result = broker.wait_supervisor_event(SUPERVISOR_ID, since_seq=0, wait_seconds=0)
+                self.assertFalse(result["timeout"])
+                self.assertEqual(result["type"], event_type)
+
     def test_wait_supervisor_event_ignores_non_material_events(self):
         write_event(self.state_dir, 1, "assistant_progress")
         write_event(self.state_dir, 2, "claude_process_started")

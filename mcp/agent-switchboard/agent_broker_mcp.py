@@ -9080,7 +9080,7 @@ TOOLS = [
             "properties": {
                 "supervisor_id": {"type": "string"},
                 "since_seq": {"type": "integer", "minimum": 0, "description": "Only events with seq strictly greater than this are returned. Start at 0 to pick up the first material event."},
-                "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional narrow set of event types to watch. Omitted = the default material set (turn_completed, api_retry_exhausted, stall_timeout, tool_failure_threshold, autonomous_action_limit_reached, codex_decision_failed, turn_interrupted, hook_stop_failure, hook_session_end)."},
+                "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional narrow set of event types to watch. Omitted = the default material set (turn_completed, api_retry_exhausted, stall_timeout, tool_failure_threshold, autonomous_action_limit_reached, codex_decision_failed, turn_interrupted, hook_stop_failure, hook_session_end, claude_process_exited, daemon_failed, daemon_stopped)."},
                 "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 180, "description": "Long-poll up to this many seconds (bounded to the MCP window) for a material event. 0/omitted = return immediately."},
             },
             "required": ["supervisor_id"],
@@ -10681,6 +10681,12 @@ MATERIAL_SUPERVISOR_EVENT_TYPES = frozenset(
         "turn_interrupted",
         "hook_stop_failure",
         "hook_session_end",
+        # Terminal-for-waiting lifecycle events: after any of these, no further
+        # progress can arrive, so a long-poll that ignores them would sleep
+        # until timeout while the managed process/daemon is already dead.
+        "claude_process_exited",
+        "daemon_failed",
+        "daemon_stopped",
     }
 )
 
