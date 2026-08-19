@@ -1633,6 +1633,23 @@ def sanitize_prompt(prompt: str) -> str:
     )
 
 
+def sanitize_codex_worker_prompt(prompt: str) -> str:
+    """Execution frame for queued Codex worker runs that were granted a writable
+    sandbox. sanitize_prompt() frames the run as advice-only; under that frame a
+    workspace-write implementation task can 'succeed' in seconds with zero tool
+    calls and a proposal-shaped answer (observed in rollout forensics)."""
+    blocked = ", ".join(sorted(SECRET_NAMES))
+    return (
+        "You are executing one bounded task for a local agent broker. Use the available "
+        "shell and file tools to actually perform the work inside the granted sandbox; do "
+        "not stop at advice or a proposed plan unless the task itself only asks for advice. "
+        "Do not call MCP tools or ask another agent. "
+        "Do not inspect or reveal secrets, API keys, credentials, private keys, or files named "
+        f"{blocked}. If you need missing private information, say exactly what is missing.\n\n"
+        f"{prompt}"
+    )
+
+
 def sanitize_flash_workhorse_prompt(prompt: str) -> str:
     blocked = ", ".join(sorted(SECRET_NAMES))
     return (
@@ -4391,6 +4408,7 @@ def consult_codex(
     model_name: str | None = None,
     effort: str | None = None,
     timeout: int = SYNC_CONSULT_TIMEOUT_SECONDS,
+    prompt_wrapper: Any = None,
 ) -> CodexConsultResult:
     config = load_config()
     codex = discover_codex(config)
@@ -4425,7 +4443,8 @@ def consult_codex(
         command[2:2] = ["-c", f"model_reasoning_effort={effort}"]
     if model_name:
         command[2:2] = ["--model", str(model_name)]
-    code, stdout, stderr = run_process(command, project_info.root_path, sanitize_prompt(prompt), timeout=timeout)
+    wrap = prompt_wrapper if callable(prompt_wrapper) else sanitize_prompt
+    code, stdout, stderr = run_process(command, project_info.root_path, wrap(prompt), timeout=timeout)
     parsed = parse_codex_stream_output(stdout)
     actual_model: str | None = None
     actual_effort: str | None = None
@@ -6409,6 +6428,9 @@ def run_codex_request_worker(request_id: str) -> dict[str, Any]:
         target_model,
         resolved_effort,
         CODEX_ASYNC_WORKER_TIMEOUT_SECONDS,
+        # read-only runs are genuine consults; a writable sandbox means the
+        # caller expects the work done, so the prompt must frame execution.
+        prompt_wrapper=sanitize_prompt if stored_mode == "read-only" else sanitize_codex_worker_prompt,
     )
     response = codex_result.response
     status, error = _consult_status(response)
