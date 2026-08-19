@@ -12,6 +12,7 @@ The one binary is dual-mode so a GitHub user needs no Python at all:
   agent-switchboard.exe --version       -> print the packaged release version
   agent-switchboard.exe routing-override -> register a package-specific gate override
   agent-switchboard.exe managed-claude-daemon -> own one detached Claude stream
+  agent-switchboard.exe hook-event           -> forward one Claude hook event
 
 `broker_command()` in setup.py registers `<this-exe> serve` with every host, so the
 exact same binary that installs the broker is also the broker server.
@@ -43,6 +44,9 @@ def run() -> int:
     if first == "hook-event-server":
         from hook_event_server import server_main
         return server_main(sys.argv[2:])
+    if first == "hook-event":
+        from hook_event_server import forward_main
+        return forward_main(sys.argv[2:])
     if first in SERVE_ALIASES:
         import setup
         try:

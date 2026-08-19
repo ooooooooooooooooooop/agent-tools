@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import sys
 import tempfile
@@ -140,6 +141,88 @@ class HookEventServerTests(unittest.TestCase):
             connection.close()
         self.assertEqual(response.status, 413)
         self.assertIn("too large", result["error"])
+
+    def test_serve_writes_runtime_endpoint_and_removes_it_on_exit(self) -> None:
+        endpoint_path = self.root / hook_event_server.ENDPOINT_FILE_NAME
+        seen: list[str] = []
+
+        class FakeServer:
+            server_port = 45678
+
+            def serve_forever(self, **_: object) -> None:
+                seen.append(endpoint_path.read_text(encoding="utf-8"))
+
+            def server_close(self) -> None:
+                return
+
+        with mock.patch.object(hook_event_server, "create_server", return_value=FakeServer()):
+            self.assertEqual(hook_event_server.serve(self.root, 0), 0)
+        self.assertEqual(seen, ["http://127.0.0.1:45678\n"])
+        self.assertFalse(endpoint_path.exists())
+
+    def test_dead_server_lock_is_cleared(self) -> None:
+        # A hard-killed receiver leaves its lock behind; FileLock only expires
+        # by age, and serve() uses a one-year stale window, so without crash
+        # recovery the endpoint would be bricked for this broker dir.
+        # _pid_alive is mocked: OS-level pid deadness is not deterministic in
+        # tests (Windows keeps an exited child's pid openable via its handle).
+        lock_path = self.root / hook_event_server.SERVER_LOCK_NAME
+        lock_path.write_text("12345", encoding="utf-8")
+        with mock.patch.object(hook_event_server, "_pid_alive", return_value=False):
+            hook_event_server._clear_dead_server_lock(self.root)
+        self.assertFalse(lock_path.exists())
+        # A live holder must keep its lock.
+        lock_path.write_text("12345", encoding="utf-8")
+        with mock.patch.object(hook_event_server, "_pid_alive", return_value=True):
+            hook_event_server._clear_dead_server_lock(self.root)
+        self.assertTrue(lock_path.exists())
+
+    def test_health_reports_root_and_identity_guard_rejects_squatters(self) -> None:
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        try:
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            body = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body["root"], str(self.root))
+        self.assertTrue(
+            hook_event_server._health_check(self.server.server_port, expected_root=str(self.root))
+        )
+        self.assertFalse(
+            hook_event_server._health_check(
+                self.server.server_port, expected_root=str(self.root / "elsewhere")
+            )
+        )
+
+    def test_forward_main_reads_runtime_endpoint_and_posts_to_real_server(self) -> None:
+        endpoint_path = self.root / hook_event_server.ENDPOINT_FILE_NAME
+        endpoint_path.write_text(
+            f"http://127.0.0.1:{self.server.server_port}\n", encoding="utf-8"
+        )
+        body = json.dumps(self.payload("SessionEnd", reason="forwarded")).encode("utf-8")
+
+        class FakeStdin:
+            def __init__(self, value: bytes) -> None:
+                self.buffer = io.BytesIO(value)
+
+        with mock.patch.object(hook_event_server.sys, "stdin", FakeStdin(body)):
+            self.assertEqual(
+                hook_event_server.forward_main(["--broker-dir", str(self.root)]), 0
+            )
+        events = [json.loads(line) for line in (self.state_dir / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(events[-1]["type"], "hook_session_end")
+        self.assertEqual(events[-1]["reason"], "forwarded")
+
+    def test_forward_main_missing_endpoint_is_silent_success(self) -> None:
+        class FakeStdin:
+            buffer = io.BytesIO(b"{}")
+
+        with mock.patch.object(hook_event_server.sys, "stdin", FakeStdin()):
+            self.assertEqual(
+                hook_event_server.forward_main(["--broker-dir", str(self.root)]), 0
+            )
 
     def test_concurrent_receiver_and_daemon_writes_have_unique_sequences(self) -> None:
         config = {
