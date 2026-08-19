@@ -5,6 +5,8 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -159,6 +161,15 @@ class HookEventServerTests(unittest.TestCase):
             self.assertEqual(hook_event_server.serve(self.root, 0), 0)
         self.assertEqual(seen, ["http://127.0.0.1:45678\n"])
         self.assertFalse(endpoint_path.exists())
+
+    def test_pid_alive_uses_real_liveness(self) -> None:
+        # Regression: os.kill(pid, 0) on Windows is CTRL_C_EVENT delivery, not a
+        # liveness probe — it can report dead pids as alive or raise SystemError
+        # against detached processes, which killed managed-daemons at startup.
+        self.assertTrue(hook_event_server._pid_alive(os.getpid()))
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait(timeout=10)
+        self.assertFalse(hook_event_server._pid_alive(proc.pid))
 
     def test_dead_server_lock_is_cleared(self) -> None:
         # A hard-killed receiver leaves its lock behind; FileLock only expires

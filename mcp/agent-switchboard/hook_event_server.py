@@ -8,6 +8,7 @@ maps its session id against the durable state files before appending an event.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import http.client
 import json
 import os
@@ -301,6 +302,36 @@ def _pid_alive(pid: Any) -> bool:
         return False
     if wanted <= 0:
         return False
+    if os.name == "nt":
+        # os.kill(pid, 0) is NOT a liveness probe on Windows: signal 0 is
+        # CTRL_C_EVENT, which can deliver a Ctrl+C into a console process
+        # group, return success for dead pids, or raise SystemError
+        # ("returned a result with an exception set") against detached
+        # processes. A SystemError escapes the OSError-based guards and killed
+        # managed-daemons at startup. Use the kernel32 exit-code check that
+        # managed_claude.pid_is_alive has proven instead.
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        open_process.restype = ctypes.c_void_p
+        get_exit_code = kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        get_exit_code.restype = ctypes.c_int
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+        handle = open_process(process_query_limited_information, 0, wanted)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_uint32()
+            if not get_exit_code(handle, ctypes.byref(exit_code)):
+                return False
+            return int(exit_code.value) == still_active
+        finally:
+            close_handle(handle)
     try:
         os.kill(wanted, 0)
     except (ProcessLookupError, OSError):
