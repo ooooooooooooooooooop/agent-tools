@@ -19,8 +19,8 @@ MCP 的机器可读登记信息位于 [mcp.json](./mcp.json)。`agent-switchboar
 ### 安装 MCP
 
 ```powershell
-git clone https://github.com/ooooooooooooooooooop/skills.git
-Set-Location .\skills\mcp\agent-switchboard
+git clone https://github.com/ooooooooooooooooooop/agent-tools.git
+Set-Location .\agent-tools\mcp\agent-switchboard
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 ```
 
@@ -46,7 +46,7 @@ Skill 安装 profile 定义在 [skills.json](./skills.json)。
 ### 安装 Skill
 
 ```bash
-npx skills add https://github.com/ooooooooooooooooooop/skills --skill <skill-name>
+npx skills add https://github.com/ooooooooooooooooooop/agent-tools --skill <skill-name>
 ```
 
 ## DSH 插件
