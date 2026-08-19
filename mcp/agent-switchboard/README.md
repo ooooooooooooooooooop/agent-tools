@@ -699,6 +699,72 @@ Without it, the bridge uses whatever model is currently selected and asks you to
 
 ---
 
+## Claude Code Hook 事件接收端点
+
+Managed Claude supervisor daemon 会启动一个 broker-wide 的本地接收端点：默认
+`http://127.0.0.1:43827/event`，端口可用环境变量
+`AGENT_BROKER_HOOK_EVENT_PORT` 配置。端点只监听 `127.0.0.1`，不会暴露到局域网或公网。
+请求按 `session_id` 查找 `~/.agent-broker/supervisors/<supervisor_id>/state.json`，命中后追加到该 supervisor 的
+`events.jsonl`；找不到时追加到 `~/.agent-broker/hook-events-orphans.jsonl`，仍返回 `202`。
+
+### Claude Code `settings.json` hook 片段
+
+Claude Code hook 的 stdin 是 JSON；其中包含 `session_id`、`transcript_path`、`cwd`，并会携带事件相关字段。
+下面片段只展示转发方式，不要求改动本仓库以外的配置；Windows 可将 `curl` 替换为 `curl.exe`：
+
+```json
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
+    "StopFailure": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}]
+  }
+}
+```
+
+转发 JSON 至少应有 `session_id` 和 `event`；若直接转发 Claude hook stdin，也可用其中的 `hook_event_name` 代替 `event`（值为
+`Stop`、`SubagentStop`、`StopFailure` 或 `SessionEnd`）。接收端还接受 `cwd`、`transcript_path`、`source`、`reason`、`error`、
+`message`、`last_assistant_message`、`prompt`、`permission_mode` 和 `stop_hook_active`。未知字段、无效 JSON、
+超过 64 KiB 的请求体都会被拒绝。`hook_stop_failure` 与 `hook_session_end` 是 material event；普通的
+`hook_stop` 与 `hook_subagent_stop` 仅记录生命周期事实，不会让默认的 `wait_supervisor_event` 提前唤醒。
+
+### Kimi Code 接入说明（仅文档片段）
+
+不要把 Kimi 配置写入本仓库或用户配置。接入方可采用如下逻辑：
+
+```yaml
+# illustrative fragment only; not an actual Kimi configuration
+SessionHeartbeat:
+  action: poll_switchboard
+  tool: wait_supervisor_event
+  args:
+    supervisor_id: <managed-supervisor-id>
+    since_seq: <last-seq>
+    wait_seconds: 0
+
+UserPromptSubmit:
+  action: prepend_pending_switchboard_events
+  source: wait_supervisor_event
+  include_types: [hook_stop_failure, hook_session_end]
+```
+
+`SessionHeartbeat` 轮询时保存返回的 `seq`，`UserPromptSubmit` 将尚未提醒的 material event 摘要注入下一次用户提示；
+不应重复消费同一 `seq`，也不应把完整 transcript 注入提示。
+
+### 运维注意事项
+
+- 端口被占用时，daemon 不会换用未记录的端口；启动会失败并在 supervisor 状态中暴露错误。检查
+  `AGENT_BROKER_HOOK_EVENT_PORT`、`127.0.0.1:43827` 的占用情况后再处理。
+- 端点由常驻 supervisor daemon 启动为 broker-wide 的 detached receiver，并写入
+  `~/.agent-broker/hook-event-server.pid`。daemon 重启会复用健康的 receiver；若 receiver 已退出，下一次
+  daemon 启动会重新创建。MCP stdio 客户端会话结束不会直接杀掉该端点。
+- session 尚未写入 `state.json`、session id 过期或 supervisor 已归档时，事件会进入
+  `hook-events-orphans.jsonl`。排查时对照该文件中的 `session_id` 与各 supervisor 的 `state.json`，确认 hook
+  是否连接到了同一个 broker 根目录。
+
+---
+
 ## Terms & risk
 
 - ⚠️ **Subscription automation, not API.** The broker drives the assistants you're already logged into — including, optionally, keystroke/CDP UI automation. Automating prompts against a logged-in subscription UI may violate a provider's terms and carries account risk. Review your providers' terms before using it, and keep automation opt-in.

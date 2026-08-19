@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from atomic_io import FileLock, atomic_write_text
+from hook_event_server import ensure_hook_event_server
 
 
 WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -174,6 +175,18 @@ def _daemon_command(state_dir: Path) -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable, "managed-claude-daemon", "--state-dir", str(state_dir)]
     return [sys.executable, str(Path(__file__).resolve()), "daemon", "--state-dir", str(state_dir)]
+
+
+def _hook_event_server_command(broker_dir: Path) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "hook-event-server", "--broker-dir", str(broker_dir)]
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "hook-event-server",
+        "--broker-dir",
+        str(broker_dir),
+    ]
 
 
 def _detached_popen(command: list[str], cwd: str) -> subprocess.Popen[Any]:
@@ -674,19 +687,22 @@ class ManagedClaudeDaemon:
 
     def _event(self, event_type: str, **fields: Any) -> dict[str, Any]:
         with self.event_lock:
-            self.event_seq += 1
-            payload = {
-                "seq": self.event_seq,
-                "type": event_type,
-                "created_at": utc_now(),
-                **fields,
-            }
-            self.events_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.events_path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            return payload
+            with FileLock(self.state_dir / "events.lock"):
+                recent = _recent_jsonl(self.events_path, 1)
+                latest_seq = int(recent[-1].get("seq") or 0) if recent else 0
+                self.event_seq = max(self.event_seq, latest_seq) + 1
+                payload = {
+                    "seq": self.event_seq,
+                    "type": event_type,
+                    "created_at": utc_now(),
+                    **fields,
+                }
+                self.events_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.events_path.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                return payload
 
     def _log(self, message: str) -> None:
         with self.log_path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -1546,6 +1562,11 @@ class ManagedClaudeDaemon:
         if not lock.acquire():
             return 2
         try:
+            broker_dir = self.state_dir.parents[1]
+            ensure_hook_event_server(
+                broker_dir,
+                command=_hook_event_server_command(broker_dir),
+            )
             self._save_state(status="starting", daemon_pid=os.getpid(), uses_foreground_ui=False)
             self._event("daemon_started", daemon_pid=os.getpid(), uses_foreground_ui=False)
             self._start_claude(resume=bool(self.config.get("resume_existing")))
@@ -1603,6 +1624,11 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "daemon":
         args = args[1:]
+        return daemon_main(args)
+    if args and args[0] == "hook-event-server":
+        from hook_event_server import server_main
+
+        return server_main(args[1:])
     return daemon_main(args)
 
 

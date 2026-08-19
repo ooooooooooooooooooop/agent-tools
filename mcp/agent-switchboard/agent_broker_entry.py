@@ -40,6 +40,9 @@ def run() -> int:
     if first == "managed-claude-daemon":
         import managed_claude
         return managed_claude.daemon_main(sys.argv[2:])
+    if first == "hook-event-server":
+        from hook_event_server import server_main
+        return server_main(sys.argv[2:])
     if first in SERVE_ALIASES:
         import setup
         try:
