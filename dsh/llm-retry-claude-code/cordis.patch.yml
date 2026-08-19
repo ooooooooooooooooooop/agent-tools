@@ -1,0 +1,12 @@
+# Drop-in user patch layer for a DSH profile (e.g. ~/.dsh/profiles/web/cordis.patch.yml).
+#
+# A fresh profile ships with `[]` as its patch layer — replace that content with
+# this file. If the target profile already has entries (e.g. its own MCP rows),
+# merge only the `insert` list below into the existing array; do not overwrite.
+#
+# The profile watcher (watchUserPatches) hot-reloads this file, so a running
+# GUI picks the plugin up without a restart. Loader resolves `./plugins/...`
+# relative to this file's directory.
+- insert:
+  - id: llm-retry-claude-code
+    name: './plugins/llm-retry-claude-code.js'
