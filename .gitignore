@@ -24,3 +24,9 @@ artifacts/
 weekly_summary_*.xlsx
 weekly_summary_*.png
 weekly_summary_entries_*.json
+
+# One-off local diagnostics (probe / schema dumps) — never publish
+_probe*.py
+_db_schema.py
+_mem_src.py
+_sqlite_src.py
