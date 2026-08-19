@@ -701,24 +701,24 @@ Without it, the bridge uses whatever model is currently selected and asks you to
 
 ## Claude Code Hook 事件接收端点
 
-Managed Claude supervisor daemon 会启动一个 broker-wide 的本地接收端点：默认
-`http://127.0.0.1:43827/event`，端口可用环境变量
-`AGENT_BROKER_HOOK_EVENT_PORT` 配置。端点只监听 `127.0.0.1`，不会暴露到局域网或公网。
+标准安装（`install-agent-broker.ps1` / `python setup.py install`）会自动完成 Claude Code hook 接线；Managed Claude supervisor daemon 会启动一个 broker-wide 的本地接收端点。
+端口可用环境变量 `AGENT_BROKER_HOOK_EVENT_PORT` 配置。端点只监听 `127.0.0.1`，不会暴露到局域网或公网；启动时把实际地址写入
+`~/.agent-broker/hook-event-server.endpoint`，退出时删除该文件。
 请求按 `session_id` 查找 `~/.agent-broker/supervisors/<supervisor_id>/state.json`，命中后追加到该 supervisor 的
 `events.jsonl`；找不到时追加到 `~/.agent-broker/hook-events-orphans.jsonl`，仍返回 `202`。
 
 ### Claude Code `settings.json` hook 片段
 
 Claude Code hook 的 stdin 是 JSON；其中包含 `session_id`、`transcript_path`、`cwd`，并会携带事件相关字段。
-下面片段只展示转发方式，不要求改动本仓库以外的配置；Windows 可将 `curl` 替换为 `curl.exe`：
+安装器写入的是不含端口的静态命令；下面用占位符表示安装时解析的绝对 Python 路径和 broker 源码路径，端口由转发器运行时读取 endpoint 文件：
 
 ```json
 {
   "hooks": {
-    "Stop": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
-    "SubagentStop": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
-    "StopFailure": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}],
-    "SessionEnd": [{"hooks": [{"type": "command", "command": "curl.exe -sS -X POST http://127.0.0.1:43827/event -H \"Content-Type: application/json\" --data-binary @-"}]}]
+    "Stop": [{"hooks": [{"type": "command", "command": "<python-absolute-path> <broker-source-dir>/agent_broker_entry.py hook-event >/dev/null 2>&1 || true"}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "<python-absolute-path> <broker-source-dir>/agent_broker_entry.py hook-event >/dev/null 2>&1 || true"}]}],
+    "StopFailure": [{"hooks": [{"type": "command", "command": "<python-absolute-path> <broker-source-dir>/agent_broker_entry.py hook-event >/dev/null 2>&1 || true"}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "<python-absolute-path> <broker-source-dir>/agent_broker_entry.py hook-event >/dev/null 2>&1 || true"}]}]
   }
 }
 ```

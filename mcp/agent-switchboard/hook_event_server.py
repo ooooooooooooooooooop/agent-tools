@@ -31,6 +31,7 @@ SERVER_LOCK_NAME = "hook-event-server.lock"
 LAUNCH_LOCK_NAME = "hook-event-server.launch.lock"
 ORPHAN_LOG_NAME = "hook-events-orphans.jsonl"
 ORPHAN_LOCK_NAME = "hook-events-orphans.lock"
+ENDPOINT_FILE_NAME = "hook-event-server.endpoint"
 
 EVENT_TYPES = {
     "Stop": "hook_stop",
@@ -238,7 +239,7 @@ class _HookRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if urlsplit(self.path).path == "/health":
-            self._json_response(200, {"status": "ok"})
+            self._json_response(200, {"status": "ok", "root": str(self.server.receiver.broker_dir)})
             return
         self._json_response(404, {"error": "not_found"})
 
@@ -313,6 +314,10 @@ def _server_info_path(broker_dir: Path) -> Path:
     return Path(broker_dir) / PID_FILE_NAME
 
 
+def _endpoint_path(broker_dir: Path) -> Path:
+    return Path(broker_dir) / ENDPOINT_FILE_NAME
+
+
 def _read_server_info(broker_dir: Path) -> dict[str, Any] | None:
     path = _server_info_path(broker_dir)
     try:
@@ -324,12 +329,25 @@ def _read_server_info(broker_dir: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _health_check(port: int, timeout: float = 0.25) -> bool:
+def _health_check(port: int, timeout: float = 0.25, expected_root: str | None = None) -> bool:
     connection = http.client.HTTPConnection(HOST, port, timeout=timeout)
     try:
         connection.request("GET", "/health")
         response = connection.getresponse()
-        return response.status == 200
+        if response.status != 200:
+            return False
+        # Identity guard: a healthy answer on the right port is not enough — a
+        # receiver rooted at a DIFFERENT broker dir (e.g. a leftover temp-dir
+        # smoke instance) must not be accepted as ours, otherwise its pid-file
+        # state and our events silently diverge.
+        if expected_root is not None:
+            try:
+                body = json.loads(response.read().decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError):
+                return False
+            if not isinstance(body, dict) or body.get("root") != expected_root:
+                return False
+        return True
     except (OSError, http.client.HTTPException):
         return False
     finally:
@@ -369,7 +387,7 @@ def ensure_hook_event_server(
     with FileLock(root / LAUNCH_LOCK_NAME, timeout=5):
         info = _read_server_info(root)
         if info and _pid_alive(info.get("pid")) and int(info.get("port") or 0) == chosen_port:
-            if _health_check(chosen_port):
+            if _health_check(chosen_port, expected_root=str(root)):
                 return int(info["pid"])
         _clear_dead_server_lock(root)
         if command is None:
@@ -388,7 +406,7 @@ def ensure_hook_event_server(
         deadline = time.monotonic() + max(0.2, wait_seconds)
         while time.monotonic() < deadline:
             info = _read_server_info(root)
-            if info and _pid_alive(info.get("pid")) and int(info.get("port") or 0) == chosen_port and _health_check(chosen_port):
+            if info and _pid_alive(info.get("pid")) and int(info.get("port") or 0) == chosen_port and _health_check(chosen_port, expected_root=str(root)):
                 return int(info["pid"])
             if process.poll() is not None:
                 break
@@ -398,17 +416,20 @@ def ensure_hook_event_server(
 
 def serve(broker_dir: Path, port: int) -> int:
     root = Path(broker_dir).expanduser().resolve()
+    _clear_dead_server_lock(root)
     lock = FileLock(root / SERVER_LOCK_NAME, timeout=0.1, stale_seconds=365 * 24 * 60 * 60)
     if not lock.acquire():
         return 2
     server: HookEventHTTPServer | None = None
     pid_path = _server_info_path(root)
+    endpoint_path = _endpoint_path(root)
     try:
         server = create_server(root, port)
         atomic_write_text(
             pid_path,
             json.dumps({"pid": os.getpid(), "host": HOST, "port": port}, separators=(",", ":")) + "\n",
         )
+        atomic_write_text(endpoint_path, f"http://{HOST}:{server.server_port}\n")
         server.serve_forever(poll_interval=0.2)
         return 0
     except OSError:
@@ -418,6 +439,12 @@ def serve(broker_dir: Path, port: int) -> int:
             server.server_close()
         try:
             pid_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        try:
+            endpoint_path.unlink()
         except FileNotFoundError:
             pass
         except OSError:
@@ -433,6 +460,37 @@ def server_main(argv: list[str] | None = None) -> int:
     if args.port < 1 or args.port > 65535:
         raise SystemExit("port must be between 1 and 65535")
     return serve(Path(args.broker_dir), args.port)
+
+
+def forward_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Forward a Claude hook event to the broker")
+    parser.add_argument("--broker-dir", default=str(Path.home() / ".agent-broker"))
+    try:
+        args = parser.parse_args(argv)
+        broker_dir = Path(args.broker_dir).expanduser().resolve()
+        stdin = getattr(sys.stdin, "buffer", sys.stdin)
+        body = stdin.read()
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        endpoint = _endpoint_path(broker_dir).read_text(encoding="utf-8").strip()
+        parsed = urlsplit(endpoint)
+        if parsed.scheme != "http" or not parsed.hostname or parsed.port is None:
+            return 0
+        path = (parsed.path.rstrip("/") or "") + "/event"
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=2.0)
+        try:
+            connection.request(
+                "POST",
+                path,
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            connection.getresponse().read()
+        finally:
+            connection.close()
+    except Exception:  # noqa: BLE001
+        return 0
+    return 0
 
 
 if __name__ == "__main__":

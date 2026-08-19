@@ -25,6 +25,7 @@ registration in all four hosts and removes the bridge extension.
 from __future__ import annotations
 
 import filecmp
+import copy
 import json
 import os
 import re
@@ -64,6 +65,7 @@ def find_asset(rel: str) -> Path | None:
 
 CODEX_TOML = HOME / ".codex" / "config.toml"
 CLAUDE_JSON = HOME / ".claude.json"
+CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
 # The Claude DESKTOP app (separate product from Claude Code) reads its MCP servers here.
 # Wiring it up lets it PUSH into the broker's nerve system; it can't be read on disk.
 CLAUDE_DESKTOP_CONFIG = APPDATA / "Claude" / "claude_desktop_config.json"
@@ -79,6 +81,9 @@ CODEX_KEY = "agent_switchboard"
 MCP_KEY = "agent-switchboard"
 
 _backup_root: Path | None = None
+
+CLAUDE_HOOK_EVENTS = ("Stop", "SubagentStop", "StopFailure", "SessionEnd")
+_CLAUDE_HOOK_COMMAND_RE = re.compile(r"agent_broker_entry\.py[\"']?\s+hook-event(?:\s|$)")
 
 
 # --- small utilities -------------------------------------------------------
@@ -109,6 +114,160 @@ def backup_file(path: Path, quiet: bool = False) -> None:
         shutil.copy2(path, dest)
         if not quiet:
             info(f"backed up {path} -> {dest}")
+
+
+def _claude_code_present() -> bool:
+    return bool(CLAUDE_JSON.exists() or which("claude"))
+
+
+def _claude_hook_command() -> str:
+    python_executable = str(Path(sys.executable).resolve())
+    entry = find_asset("agent_broker_entry.py") or (SETUP_DIR / "agent_broker_entry.py")
+    argv = [python_executable, str(entry.resolve()), "hook-event"]
+    if os.name == "nt":
+        command = subprocess.list2cmdline(argv)
+        return f"{command} >nul 2>&1 || ver >nul"
+    return f"{shlex.join(argv)} >/dev/null 2>&1 || true"
+
+
+def _claude_hook_entry(command: str) -> dict:
+    return {"hooks": [{"type": "command", "command": command}]}
+
+
+def _claude_hook_command_owned(entry: object) -> bool:
+    if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+        return False
+    return bool(_CLAUDE_HOOK_COMMAND_RE.search(entry["command"]))
+
+
+def _claude_hook_legacy_command_owned(entry: object) -> bool:
+    if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+        return False
+    command = entry["command"]
+    return "/event" in command and "curl" in command.lower()
+
+
+def _backup_claude_settings(path: Path) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    destination = path.with_name(f"{path.name}.{stamp}.bak")
+    index = 1
+    while destination.exists():
+        destination = path.with_name(f"{path.name}.{stamp}.{index}.bak")
+        index += 1
+    shutil.copy2(path, destination)
+    info(f"backed up {path} -> {destination}")
+    return destination
+
+
+def install_claude_hooks(dry: bool = False) -> str:
+    """Merge the broker event hooks into Claude Code settings."""
+    if not _claude_code_present():
+        return "skipped (not installed)"
+    path = CLAUDE_SETTINGS
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        data = json.loads(existing) if existing else {}
+        if not isinstance(data, dict):
+            raise ValueError("top-level JSON must be an object")
+        hooks = data.get("hooks", {})
+        if not isinstance(hooks, dict):
+            raise ValueError("hooks must be a JSON object")
+        data["hooks"] = hooks
+        changed = False
+        for event in CLAUDE_HOOK_EVENTS:
+            groups = hooks.get(event, [])
+            if not isinstance(groups, list):
+                raise ValueError(f"hooks.{event} must be a JSON array")
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                handlers = group.get("hooks", [])
+                if not isinstance(handlers, list):
+                    raise ValueError(f"hooks.{event}.hooks must be a JSON array")
+                if any(_claude_hook_command_owned(entry) for entry in handlers):
+                    break
+            else:
+                groups.append(_claude_hook_entry(_claude_hook_command()))
+                hooks[event] = groups
+                changed = True
+        if not changed:
+            return "unchanged"
+    except Exception as exc:  # noqa: BLE001
+        return f"ERROR: {path.name} is not safely mergeable ({exc}); left untouched"
+
+    if dry:
+        return f"would merge Claude event hooks into {path}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        _backup_claude_settings(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "registered"
+
+
+def uninstall_claude_hooks(dry: bool = False) -> str:
+    """Remove only installer-shaped loopback event hooks from Claude settings."""
+    if not dry:
+        try:
+            (BROKER_HOME / "hook-event-server.endpoint").unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    path = CLAUDE_SETTINGS
+    if not path.exists():
+        return "nothing to remove"
+    try:
+        existing = path.read_text(encoding="utf-8")
+        data = json.loads(existing)
+        if not isinstance(data, dict):
+            raise ValueError("top-level JSON must be an object")
+        hooks = data.get("hooks")
+        if hooks is None:
+            return "nothing to remove"
+        if not isinstance(hooks, dict):
+            raise ValueError("hooks must be a JSON object")
+        changed = False
+        for event in CLAUDE_HOOK_EVENTS:
+            if event not in hooks:
+                continue
+            groups = hooks[event]
+            if not isinstance(groups, list):
+                continue
+            kept_groups = []
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(group.get("hooks", []), list):
+                    kept_groups.append(group)
+                    continue
+                handlers = group["hooks"]
+                filtered = [
+                    entry
+                    for entry in handlers
+                    if not (_claude_hook_command_owned(entry) or _claude_hook_legacy_command_owned(entry))
+                ]
+                if filtered != handlers:
+                    changed = True
+                if filtered or filtered == handlers:
+                    new_group = copy.deepcopy(group)
+                    new_group["hooks"] = filtered
+                    kept_groups.append(new_group)
+            if kept_groups:
+                hooks[event] = kept_groups
+            else:
+                hooks.pop(event, None)
+                changed = True
+        if not hooks:
+            data.pop("hooks", None)
+            changed = True
+        if not changed:
+            return "nothing to remove"
+    except Exception as exc:  # noqa: BLE001
+        return f"ERROR: {path.name} is not safely mergeable ({exc}); left untouched"
+
+    if dry:
+        return f"would remove Claude event hooks from {path}"
+    _backup_claude_settings(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "removed"
 
 
 def python_command() -> str:
@@ -854,6 +1013,7 @@ def do_refresh_hierarchy(dry: bool) -> bool:
             for key, value in results.items():
                 print(f"  {key:<24} : {value}")
             return False
+    results["Claude Code event hooks"] = install_claude_hooks(dry)
     results.update(refresh_hierarchy(dry=dry))
     for key, value in results.items():
         print(f"  {key:<24} : {value}")
@@ -884,6 +1044,7 @@ def do_install(dry: bool, debug_port: bool) -> bool:
     results = {}
     if self_install:
         results["Broker exe"] = self_install
+    results["Claude Code event hooks"] = install_claude_hooks(dry)
     results.update({
         "Codex MCP": register_codex(command, cargs, dry),
         "Claude MCP": register_claude(command, cargs, dry),
@@ -938,6 +1099,7 @@ def do_uninstall(dry: bool, remove_data: bool) -> bool:
     results = {
         "Codex MCP": unregister_codex(dry),
         "Claude MCP": _unregister_json(CLAUDE_JSON, "mcpServers", dry),
+        "Claude Code event hooks": uninstall_claude_hooks(dry),
         "Claude Desktop MCP": _unregister_json(CLAUDE_DESKTOP_CONFIG, "mcpServers", dry),
         "Antigravity MCP": unregister_antigravity(dry),
         "VS Code MCP": _unregister_json(VSCODE_MCP, "servers", dry),
