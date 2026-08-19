@@ -169,6 +169,8 @@ CODEX_CHEAP_MODEL = "gpt-5.6-luna"
 CLAUDE_FLAGSHIP_MODEL = "fable"
 CLAUDE_BALANCED_MODEL = "sonnet"
 CLAUDE_CHEAP_MODEL = "haiku"
+# Used only when the live ``agy models`` catalog is unavailable or advertises no
+# stable Gemini Flash High slug. Online defaults are selected numerically below.
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-3.6-flash-high"
 CODEX_DEFAULT_EFFORT = "max"
 # Consults/plans default to the flagship (gpt-5.6-sol) at max — quality is the priority.
@@ -197,8 +199,6 @@ CODEX_SERIOUS_TASK_KINDS = {
 }
 
 MODEL_ALIASES = {
-    "gemini flash": "Gemini 3.6 Flash (High)",
-    "gemini flash high": "Gemini 3.6 Flash (High)",
     "gemini 3.6 flash": "Gemini 3.6 Flash (High)",
     "gemini 3.6 flash high": "Gemini 3.6 Flash (High)",
     "gemini 3.6 high": "Gemini 3.6 Flash (High)",
@@ -243,12 +243,15 @@ GENERIC_MODEL_REQUESTS = {
     "claude",
     "anthropic",
     "gemini",
+    "gemini flash",
+    "gemini flash high",
+    "flash high",
     "antigravity",
 }
 
 # Default CLI model per family. Codex and Claude use their highest-quality
-# defaults; Antigravity uses the current fast implementation default and still
-# honors any explicitly named model from the live CLI catalog.
+# defaults. Antigravity's entry is an offline fallback; its live workhorse is
+# selected dynamically from the advertised stable Flash High slugs.
 FAMILY_FLAGSHIP = {
     "codex": CODEX_FLAGSHIP_MODEL,
     "claude": CLAUDE_FLAGSHIP_MODEL,
@@ -571,13 +574,21 @@ GENERIC_GROUND_RULES = [
 COST_AWARE_ROUTING_RULES = [
     "The model selected for the main session is the brain; never rewrite that user choice. It owns requirements, architecture, planning, hard diagnosis, risk decisions, and final signoff.",
     "For non-trivial planning or a hard issue, obtain one opposite-vendor maximum-effort consultation: Codex brain -> moving Claude Fable alias (Opus only when Fable is explicitly unavailable); Claude brain -> the live Codex frontier at its highest single-agent effort.",
-    "Native first: same-vendor labour uses the host's managed native subagents (Codex explorer/worker; Claude Explore/economy-worker). Agent Switchboard is only for opposite-vendor consultation or an explicitly documented native-unavailable fallback.",
+    "Capability tier outranks model version. Gemini Flash High is a useful, non-authoritative workhorse-level adviser; a higher version does not promote it above Sol/Fable or make its advice automatically authoritative. When Claude's Fable -> Opus chain is unavailable because of quota, reachability, entitlement, or another availability failure, a Codex brain should request a second opinion from the newest live Flash High, label it degraded advisory fallback, and retain final judgment.",
+    "Native first: same-vendor labour uses the host's managed native subagents (Codex explorer/worker; Claude Explore/economy-worker). Agent Switchboard is reserved for opposite-vendor consultation, the external Antigravity Flash workhorse lane, or an explicitly documented native-unavailable fallback; Flash is not a native child agent.",
+    "Cross-vendor routing must enter through Agent Switchboard's MCP tools whenever Switchboard is registered. For Flash labour, the sender brain MUST call MCP route_agent_task; 'through CLI' means surface=cli on that MCP call. The brain MUST NOT shell out to agy or call consult_antigravity directly. Only the Switchboard backend may start agy; sender-side direct agy is prohibited.",
+    "Codex, Claude, and Gemini brains should proactively consider the newest live Antigravity Gemini Flash High through Agent Switchboard as a fast, cheap external workhorse for bounded search, reading, extraction, summaries, drafting, low-risk implementation/tests from an approved plan, and independent parallel packages. Use route_agent_task with target_agent=antigravity, surface=cli, target_model=gemini flash, effort=high, the correct task_kind, and mode=plan or mode=accept-edits plus the required implementation envelope.",
+    "Every Flash call is exactly one bounded work package. Never hand Flash an entire autonomous plan or let it select/continue to the next package. Implementation calls must name a package id, at most five allowed files, explicit acceptance criteria, and forbidden actions; Switchboard rejects an incomplete envelope.",
+    "A Switchboard-launched Gemini Flash session is the non-authoritative worker for exactly its assigned envelope, never the brain or router. It must not dispatch agents, reinterpret the whole plan, or continue to another package.",
+    "Switchboard's internal agy backend must use --output-format json with --json-schema. Missing/malformed fields, scope violations, contradictory completion, unsupported design-intent claims, ambiguity, or failed checks are failures to escalate -- never prose to accept. The sender brain independently inspects cited lines, the actual diff, and check output before dispatching another package.",
+    "Flash never receives production SSH, live credentials, destructive operations, migrations, or danger-full-access. It may prepare bounded local changes and checks; the brain owns live deployment and approval.",
+    "If agy or Flash is missing, quota-limited, times out, mismatches the requested model, or otherwise fails, fall back to the host's native cheap roles (Codex explorer/worker; Claude Explore/economy-worker) and record the fallback.",
     "Classify risk and difficulty at every work-package boundary. Reader/low handles bounded reading, search, extraction, and formatting; workhorse/medium handles routine writing, light implementation, tests, scripts, and reversible deployment from an approved plan.",
     "Portable packages state Lane | mechanism | exact resolved model/effort | deliverable | verification | escalation. Imported foreign-vendor reader/workhorse routes are re-resolved to the executor's current same-vendor native role at execution start.",
     "A worker follows the resolved package. A retained package uses `override: brain - <WP-ID>: <specific reason>` in the Routing audit; bare/global overrides are invalid.",
     "A worker must stop and escalate on security, authentication, payments, destructive operations, schema or data migrations, plan deviation, ambiguous requirements, or failed verification.",
     "On the first ambiguity or failed fix, the item returns to the brain immediately; the brain resolves it and re-delegates only the remaining deterministic work, instead of letting the worker improvise past the blocker.",
-    "Default execution order: read-only work packages run in parallel, write/edit work packages run serially, unless the plan explicitly overrides this.",
+    "Flash and native workers may run concurrently only on independent stages/packages. Read-only packages may run in parallel; writes run serially unless their files and state transitions are demonstrably isolated. The brain reviews evidence and actual diffs and owns the final decision.",
     "A dirty worktree or same-session ownership never excuses keeping read-only inventory, tests, evidence, docs, or isolated mechanical work on the brain; only the exact overlapping write or high-risk state transition may be retained.",
     "The installed native-first PreToolUse gate allows ten direct brain labour calls, then denies the next eligible labour call until a managed same-vendor reader/workhorse starts or the brain registers the exact package/reason with the local routing-override command supplied by the gate. Each relief opens only the next bounded block; registered overrides must appear in the final audit.",
     "Brain-context ingress defaults to at most 8,000 characters (roughly 1-2k tokens). Verification calls declare a field projection and output cap; oversized raw evidence stays outside context with its query and location.",
@@ -586,6 +597,15 @@ COST_AWARE_ROUTING_RULES = [
     "The final routing audit covers planned and unplanned packages and uses host-attested native:<agent-id> receipts for native labour, broker:<uuid> ledger receipts for Switchboard calls, or a structured per-package brain override. It includes direct-brain-labour: reads=N | searches=N | evidence=N | tests=N | docs=N | other=N, and maps every nonzero category to a package row as direct=reads,searches,... . Native model/effort is configured by the checksum-protected role and labeled unverified if the host exposes no runtime model attestation.",
     "Skip delegation when specifying and verifying the handoff would cost more than doing the small task directly.",
 ]
+
+FLASH_WORKHORSE_MAX_ALLOWED_FILES = 5
+FLASH_WORKHORSE_DEFAULT_FORBIDDEN_ACTIONS = (
+    "Do not continue to another work package or execute the rest of a plan.",
+    "Do not modify files outside the allowed-files list.",
+    "Do not redesign architecture, expand scope, or reinterpret an approved plan.",
+    "Do not use production SSH, live credentials, destructive operations, schema/data migrations, or deployment commands.",
+    "Do not call a defect intentional or by design without an explicit spec, test, or code comment cited by file and line.",
+)
 
 
 @dataclass
@@ -1613,6 +1633,18 @@ def sanitize_prompt(prompt: str) -> str:
     )
 
 
+def sanitize_flash_workhorse_prompt(prompt: str) -> str:
+    blocked = ", ".join(sorted(SECRET_NAMES))
+    return (
+        "You are executing one bounded work package for a local agent broker. Follow the package "
+        "contract exactly and return the schema-enforced report. Do not call MCP tools or ask another "
+        "agent. Do not inspect or reveal secrets, API keys, credentials, private keys, or files named "
+        f"{blocked}. If required private information is missing, return status=blocked and name only what "
+        "is missing.\n\n"
+        f"{prompt}"
+    )
+
+
 def safe_slug(value: str | None) -> str:
     text = (value or "default").strip().lower()
     text = re.sub(r"[^a-z0-9._-]+", "-", text)
@@ -2373,7 +2405,7 @@ def antigravity_model_entry_from_slug(slug: str, source: str = "antigravity-cli"
     display = model_id
     aliases = [model_id, model_id.replace("-", " ")]
 
-    gemini_match = re.fullmatch(r"gemini-([0-9]+(?:\.[0-9]+)?)-(flash|pro)", base, re.I)
+    gemini_match = re.fullmatch(r"gemini-([0-9]+(?:\.[0-9]+)*)-(flash|pro)", base, re.I)
     claude_match = re.fullmatch(r"claude-(sonnet|opus)-([0-9]+)-([0-9]+)(-thinking)?", base, re.I)
     if gemini_match:
         version, tier = gemini_match.groups()
@@ -2404,6 +2436,66 @@ def antigravity_model_entry_from_slug(slug: str, source: str = "antigravity-cli"
             display += f" ({effort.title()})"
         aliases.extend(["gpt oss 120b", "gpt-oss 120b"])
     return model_entry(model_id, display, list(dict.fromkeys(aliases)), source)
+
+
+_STABLE_GEMINI_FLASH_HIGH_SLUG = re.compile(
+    r"gemini-([0-9]+(?:\.[0-9]+)*)-flash-high", re.I
+)
+
+
+def antigravity_roles_from_models(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Select the newest stable Flash High workhorse advertised by ``agy``.
+
+    Numeric version segments are compared as integers, so 3.10 sorts after 3.9.
+    Nonconforming/preview slugs and static/config entries cannot auto-promote.
+    """
+    live: list[tuple[tuple[int, ...], dict[str, Any]]] = []
+    for item in models:
+        if item.get("source") != "antigravity-cli":
+            continue
+        match = _STABLE_GEMINI_FLASH_HIGH_SLUG.fullmatch(str(item.get("id") or ""))
+        if match:
+            live.append((tuple(int(part) for part in match.group(1).split(".")), item))
+    selected = max(live, key=lambda candidate: candidate[0])[1] if live else None
+    workhorse = selected or next(
+        (
+            item
+            for item in models
+            if normalize_lookup(item.get("id")) == normalize_lookup(ANTIGRAVITY_DEFAULT_MODEL)
+        ),
+        model_entry(ANTIGRAVITY_DEFAULT_MODEL, "Gemini 3.6 Flash (High)", source="offline-fallback"),
+    )
+    return {
+        "frontier": None,
+        "workhorse": workhorse,
+        "authoritative": False,
+        "peer_brain_eligible": False,
+        "capability_tier": "workhorse",
+        "source": "antigravity-cli" if selected else "offline-fallback",
+        "rule": (
+            "Gemini Flash High is a useful, non-authoritative external workhorse for Codex/Claude "
+            "brains to consider proactively; it is not a native child agent. A higher version does "
+            "not promote it above Sol/Fable. On agy/model absence, quota, timeout, mismatch, or "
+            "failure, use the host native cheap reader/workhorse and record the fallback. The main "
+            "frontier brain reviews evidence/diffs and retains judgment."
+        ),
+    }
+
+
+def current_antigravity_workhorse_model() -> str:
+    role = antigravity_roles_from_models(discover_antigravity_models()).get("workhorse") or {}
+    return str(role.get("id") or ANTIGRAVITY_DEFAULT_MODEL)
+
+
+def antigravity_model_slugs_from_output(output: Any) -> list[str]:
+    """Parse both legacy slug-only and current ``slug<TAB>display`` output."""
+    slugs: list[str] = []
+    for line in str(output or "").splitlines():
+        fields = line.strip().split(maxsplit=1)
+        slug = fields[0] if fields else ""
+        if slug and re.fullmatch(r"[a-z0-9][a-z0-9.-]*", slug):
+            slugs.append(slug)
+    return slugs
 
 
 _ANTIGRAVITY_MODEL_CACHE: list[dict[str, Any]] | None = None
@@ -2458,10 +2550,8 @@ def discover_antigravity_models() -> list[dict[str, Any]]:
                 creationflags=WINDOWS_NO_WINDOW,
             )
             if proc.returncode == 0:
-                for line in proc.stdout.splitlines():
-                    slug = line.strip()
-                    if slug and re.fullmatch(r"[a-z0-9][a-z0-9.-]*", slug):
-                        models.append(antigravity_model_entry_from_slug(slug))
+                for slug in antigravity_model_slugs_from_output(proc.stdout):
+                    models.append(antigravity_model_entry_from_slug(slug))
             else:
                 log(f"agy models exited {proc.returncode}: {proc.stderr[:500]}")
         except Exception as exc:  # noqa: BLE001
@@ -2478,13 +2568,17 @@ def discover_antigravity_models() -> list[dict[str, Any]]:
                 display = str(item).strip()
                 if not any(normalize_lookup(existing.get("display")) == normalize_lookup(display) for existing in models):
                     models.append(model_entry(display, display, [display], "antigravity-cdp"))
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     result: list[dict[str, Any]] = []
     for item in models:
         key = normalize_lookup(item.get("id"))
         if key and key not in seen:
-            seen.add(key)
+            seen[key] = len(result)
             result.append(item)
+        elif key and item.get("source") == "antigravity-cli":
+            # The advertised entry outranks an identical static fallback so role
+            # selection can distinguish an online 3.6 catalog from offline mode.
+            result[seen[key]] = item
     _ANTIGRAVITY_MODEL_CACHE = [dict(item) for item in result]
     _ANTIGRAVITY_MODEL_CACHE_AT = time.monotonic()
     return result
@@ -2563,6 +2657,8 @@ def list_agent_models(agent: str | None = None, project: str | None = None, topi
             family_catalog["roles"] = codex_roles_from_models(models)
         elif family == "claude":
             family_catalog["roles"] = model_roles.select_claude_roles()
+        elif family == "antigravity":
+            family_catalog["roles"] = antigravity_roles_from_models(models)
         catalogs[family] = family_catalog
     defaults = get_model_defaults(project, topic) if project or topic else {"items": []}
     return {"agent": agent or "all", "catalogs": catalogs, "defaults": defaults.get("items", [])}
@@ -2576,10 +2672,18 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
     codex_frontier = str((codex_roles.get("frontier") or {}).get("id") or CODEX_FLAGSHIP_MODEL)
     codex_workhorse = str((codex_roles.get("workhorse") or {}).get("id") or CODEX_BALANCED_MODEL)
     codex_reader = str((codex_roles.get("reader") or {}).get("id") or CODEX_CHEAP_MODEL)
+    antigravity_catalog = catalog.get("catalogs", {}).get("antigravity", {})
+    antigravity_roles = antigravity_catalog.get("roles") or antigravity_roles_from_models(
+        discover_antigravity_models()
+    )
+    antigravity_workhorse = str(
+        (antigravity_roles.get("workhorse") or {}).get("id") or ANTIGRAVITY_DEFAULT_MODEL
+    )
     guide: dict[str, Any] = {
         "purpose": "Use this before routing if you are unsure which model/effort to request.",
         "execution_precedence": [
             "Same-vendor bounded labour uses native subagents first: Codex explorer/worker or Claude Explore/economy-worker.",
+            "Proactively consider the newest live Antigravity Gemini Flash High through Agent Switchboard/agy as a fast, cheap external workhorse; it is not a native child agent.",
             "Use Agent Switchboard for opposite-vendor maximum-effort consultation.",
             "Use a same-vendor broker worker only when the named native role is unavailable or failed to start, and record the fallback.",
         ],
@@ -2621,10 +2725,31 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
             },
             "antigravity_cli": {
                 "target_agent": "antigravity",
-                "target_model": ANTIGRAVITY_DEFAULT_MODEL,
+                "target_model": antigravity_workhorse,
                 "effort": "high",
                 "surface": "cli",
-                "rule": "Antigravity routes through the agy CLI by default. Name a live model explicitly when requested; use surface='extension' or 'inbox' only for the in-app bridge.",
+                "role": "workhorse",
+                "authoritative": False,
+                "peer_brain_eligible": False,
+                "native_child_agent": False,
+                "recommended_for": [
+                    "bounded search/read/extraction/summaries/drafting",
+                    "low-risk implementation/tests from an approved plan",
+                    "independent parallel stages/packages",
+                ],
+                "hard_requirements": [
+                    "one work package per call; never the whole autonomous plan",
+                    "schema-enforced JSON with evidence, claims, checks, ambiguities, and risks",
+                    "implementation names a package id, 1-5 allowed files, and acceptance criteria",
+                    "brain independently verifies cited lines, actual diff, and checks before acceptance",
+                    "no danger-full-access, production SSH, credentials, migrations, or live deployment",
+                ],
+                "failure_fallback": {
+                    "codex": ["explorer", "worker"],
+                    "claude": ["Explore", "economy-worker"],
+                    "record_fallback": True,
+                },
+                "rule": "Antigravity routes through agy using the newest stable numeric Gemini Flash High advertised live. Codex and Claude brains should proactively consider it as a fast, cheap external workhorse, not a native child agent. Every call is one bounded package with schema-enforced JSON; implementation requires a package id, 1-5 allowed files, and acceptance criteria. Never hand Flash a whole plan or production access. Flash remains non-authoritative: the brain reviews evidence/diffs and independently verifies cited lines, the actual diff, and checks before accepting or dispatching another package. If agy/Flash is missing, quota-limited, times out, mismatches, or fails -- including malformed/contradictory output or ambiguity -- use the host native reader/workhorse and record the fallback. Flash and native workers run concurrently only on independent packages; writes are serial unless demonstrably isolated.",
             },
         },
         "caller_examples": {
@@ -2667,17 +2792,44 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
                 },
                 "broker_resolves_to": {"target_model": CLAUDE_BALANCED_MODEL, "effort": CLAUDE_BALANCED_EFFORT},
             },
-            "antigravity_implementation": {
+            "antigravity_external_read": {
                 "tool": "route_agent_task",
                 "args": {
                     "target_agent": "antigravity",
-                    "target_model": "flash high 3.6",
-                    "task_kind": "implementation",
-                    "prompt": "Implement the requested change and run focused checks.",
+                    "surface": "cli",
+                    "target_model": "gemini flash",
+                    "effort": "high",
+                    "mode": "plan",
+                    "task_kind": "quick_check",
+                    "work_package_id": "READ-1",
+                    "allowed_files": ["src/example.py"],
+                    "acceptance_criteria": ["Return exact file:line evidence for the bounded question."],
+                    "prompt": "Read the bounded scope and return concise evidence.",
                 },
                 "broker_resolves_to": {
                     "route": "antigravity_cli",
-                    "target_model": "gemini-3.6-flash-high",
+                    "target_model": antigravity_workhorse,
+                    "effort": "high",
+                    "mode": "plan",
+                },
+            },
+            "antigravity_external_implementation": {
+                "tool": "route_agent_task",
+                "args": {
+                    "target_agent": "antigravity",
+                    "surface": "cli",
+                    "target_model": "gemini flash",
+                    "effort": "high",
+                    "mode": "accept-edits",
+                    "task_kind": "implementation",
+                    "work_package_id": "WP-1",
+                    "allowed_files": ["src/example.py", "tests/test_example.py"],
+                    "acceptance_criteria": ["Focused tests pass.", "No files outside the allowlist change."],
+                    "prompt": "Implement the approved isolated package and run focused checks.",
+                },
+                "broker_resolves_to": {
+                    "route": "antigravity_cli",
+                    "target_model": antigravity_workhorse,
                     "effort": "high",
                     "mode": "accept-edits",
                 },
@@ -2686,6 +2838,14 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
         "notes": [
             "Use target_model for the model slug only; put reasoning in effort.",
             "Antigravity CLI models are discovered live with `agy models`; newly released models become routable without changing the static catalog.",
+            "The newest exact stable gemini-<numeric>-flash-high slug is the Antigravity workhorse; numeric version order never promotes previews or renamed/nonconforming SKUs.",
+            "Capability tier outranks version: Gemini Flash is useful non-authoritative workhorse-level advice, and a higher version does not promote it above Sol/Fable or make it automatically authoritative. If Claude's Fable -> Opus chain is unavailable because of quota, reachability, entitlement, or another availability failure, Codex should request a second opinion from the newest live Flash High, label it degraded advisory fallback, and retain final judgment.",
+            "Both Codex and Claude brains should proactively consider newest live Flash High for bounded external workhorse labour; this does not make Flash a native child agent.",
+            "If agy/Flash is missing, quota-limited, times out, mismatches, or fails, use the host native explorer/worker or Explore/economy-worker and record the fallback.",
+            "Flash and native workers may run concurrently only for independent stages/packages: parallel reads are allowed, while writes are serial unless demonstrably isolated; the brain reviews evidence/diffs and owns the final decision.",
+            "Each Flash call carries exactly one bounded package and schema-enforced output. Implementation without a package id, 1-5 allowed files, and explicit acceptance criteria is rejected before agy starts.",
+            "A Flash completion is never acceptance: the sender brain independently checks cited primary evidence, the actual diff, and command output. Unsupported intentional/by-design claims keep the investigation open.",
+            "Flash may not use danger-full-access or receive production SSH, live credentials, destructive operations, migrations, or live deployment.",
             "An automatic Antigravity route falls back to the in-app bridge if agy is missing. An explicit surface='cli' reports a missing CLI instead of silently changing surfaces.",
             "For a serious live-frontier Codex consult/audit/review/debate, a lower effort is allowed only when the caller explicitly marks the downshift with a cost policy or says lower effort is enough.",
             "Claude family aliases move with Claude Code: Fable/max is the peer brain, Opus/max is the availability fallback, Haiku is the reader, and Sonnet/medium is the workhorse.",
@@ -2917,13 +3077,19 @@ def model_guard_text(requested_label: Any, *, strict: bool) -> str:
 
 
 def match_model_request(family: str, requested_model: Any) -> dict[str, Any]:
+    requested_text = str(requested_model or "").strip()
+    # Preserve an empty/bare Antigravity request as generic. normalize_model_name
+    # uses a UI-facing "current selected model" label for empty values, which must
+    # not turn a CLI-default request into a model-selection prompt.
+    if not requested_text or normalize_lookup(requested_text) in GENERIC_MODEL_REQUESTS:
+        return {"status": "generic", "requested": requested_text}
     # Only the Antigravity catalog uses the Antigravity display-name aliases.
     # Applying them to Claude/Codex/Gemini turns "opus" into "Claude Opus 4.6
     # (Thinking)" and breaks CLI alias matching, so use the raw text there.
     if family == "antigravity":
-        raw = normalize_model_name(requested_model)
+        raw = normalize_model_name(requested_text)
     else:
-        raw = str(requested_model or "").strip()
+        raw = requested_text
     lookup = normalize_lookup(raw)
     if lookup in GENERIC_MODEL_REQUESTS:
         return {"status": "generic", "requested": raw}
@@ -3004,13 +3170,19 @@ def family_frontier_model(family: str) -> str | None:
         configured = str(load_config().get("claude_model") or "").strip()
         if configured:
             return configured
+    if family == "antigravity":
+        # Antigravity has no frontier-brain role. Generic requests use its moving
+        # Flash High workhorse; the historical function name is retained for API
+        # compatibility with the shared CLI resolver.
+        return current_antigravity_workhorse_model()
     return FAMILY_FLAGSHIP.get(family)
 
 
 def pick_cli_model(family: str, model_text: Any) -> str | None:
     """Resolve an (effort-stripped) model request for a CLI family. Generic/empty ->
-    the family flagship (most capable). A named model resolves to its catalog id; an
-    unmatched name passes through unchanged so brand-new CLI models still work."""
+    the family default (frontier for Codex/Claude, workhorse for Antigravity). A named
+    model resolves to its catalog id; an unmatched name passes through unchanged so
+    brand-new CLI models still work."""
     text = str(model_text or "").strip()
     if not text or normalize_lookup(text) in GENERIC_MODEL_REQUESTS:
         return family_frontier_model(family)
@@ -3262,9 +3434,9 @@ def resolve_model_request(args: dict[str, Any]) -> dict[str, Any]:
             if effort_policy:
                 result["effort_policy"] = effort_policy
             return result
-        # No explicit pin: default to the family flagship at highest effort instead of
-        # interrupting to ask. Families with no flagship (antigravity / gemini) still ask.
-        flagship = FAMILY_FLAGSHIP.get(family)
+        # No explicit pin: default to the family's moving default instead of
+        # interrupting to ask. Antigravity's moving default is a workhorse, not a brain.
+        flagship = family_frontier_model(family)
         if flagship is not None:
             flagship = (
                 antigravity_model_for_effort(flagship, resolved_effort)
@@ -3283,7 +3455,7 @@ def resolve_model_request(args: dict[str, Any]) -> dict[str, Any]:
                 "target_agent": default_target_agent_for_family(family),
                 "target_model": flagship,
                 "effort": final_effort,
-                "source": "family_flagship",
+                "source": "family_workhorse" if family == "antigravity" else "family_flagship",
             }
             if model_policy:
                 result["model_policy"] = model_policy
@@ -3427,6 +3599,258 @@ def task_contract_text(task_kind: str, token_budget: int | None = None, compact:
 
 def wrap_task_prompt(prompt: str, task_kind: str, token_budget: int | None = None) -> str:
     return f"{task_contract_text(task_kind, token_budget)}\n\nRequest:\n\n{prompt.strip()}"
+
+
+def _bounded_string_list(value: Any, field: str, maximum: int) -> list[str]:
+    if value is None:
+        return []
+    raw_items = [value] if isinstance(value, str) else value
+    if not isinstance(raw_items, (list, tuple)):
+        raise ValueError(f"{field} must be an array of strings")
+    items: list[str] = []
+    for raw in raw_items:
+        item = str(raw or "").strip()
+        if item and item not in items:
+            items.append(item)
+    if len(items) > maximum:
+        raise ValueError(f"{field} allows at most {maximum} items; split the Flash handoff into smaller packages")
+    return items
+
+
+def prepare_flash_work_package(args: dict[str, Any], task_kind: str, prompt: str) -> dict[str, Any]:
+    kind = normalize_task_kind(task_kind)
+    package_id = str(args.get("work_package_id") or "").strip()
+    if not package_id:
+        if kind == "implementation":
+            raise ValueError("Flash implementation requires work_package_id; send exactly one bounded package")
+        digest = hashlib.sha256(prompt.encode("utf-8", errors="replace")).hexdigest()[:10].upper()
+        package_id = f"FLASH-{digest}"
+    if len(package_id) > 100:
+        raise ValueError("work_package_id must be at most 100 characters")
+
+    allowed_files = _bounded_string_list(
+        args.get("allowed_files"), "allowed_files", FLASH_WORKHORSE_MAX_ALLOWED_FILES
+    )
+    acceptance_criteria = _bounded_string_list(
+        args.get("acceptance_criteria"), "acceptance_criteria", 12
+    )
+    forbidden_actions = list(FLASH_WORKHORSE_DEFAULT_FORBIDDEN_ACTIONS)
+    forbidden_actions.extend(
+        _bounded_string_list(args.get("forbidden_actions"), "forbidden_actions", 12)
+    )
+    forbidden_actions = list(dict.fromkeys(forbidden_actions))
+
+    if kind == "implementation" and not allowed_files:
+        raise ValueError(
+            "Flash implementation requires 1-5 allowed_files; whole-plan or open-worktree access is rejected"
+        )
+    if kind == "implementation" and not acceptance_criteria:
+        raise ValueError("Flash implementation requires explicit acceptance_criteria")
+
+    return {
+        "package_id": package_id,
+        "task_kind": kind,
+        "allowed_files": allowed_files,
+        "acceptance_criteria": acceptance_criteria,
+        "forbidden_actions": forbidden_actions,
+    }
+
+
+def flash_workhorse_output_schema(package: dict[str, Any]) -> dict[str, Any]:
+    criteria_min = 1 if package.get("task_kind") == "implementation" else 0
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "package_id", "status", "summary", "acceptance_criteria", "files_changed",
+            "checks", "evidence", "claims", "ambiguities", "risks", "next_action",
+            "brain_verification_required",
+        ],
+        "properties": {
+            "package_id": {"type": "string", "enum": [package["package_id"]]},
+            "status": {"type": "string", "enum": ["completed", "blocked", "failed"]},
+            "summary": {"type": "string"},
+            "acceptance_criteria": {
+                "type": "array",
+                "minItems": criteria_min,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["criterion", "status", "evidence"],
+                    "properties": {
+                        "criterion": {"type": "string"},
+                        "status": {"type": "string", "enum": ["passed", "failed", "not_checked"]},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            "files_changed": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["path", "change"],
+                    "properties": {"path": {"type": "string"}, "change": {"type": "string"}},
+                },
+            },
+            "checks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["command", "status", "exit_code", "output_excerpt"],
+                    "properties": {
+                        "command": {"type": "string"},
+                        "status": {"type": "string", "enum": ["passed", "failed", "not_run"]},
+                        "exit_code": {"type": "integer"},
+                        "output_excerpt": {"type": "string"},
+                    },
+                },
+            },
+            "evidence": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["claim", "path", "line", "observation"],
+                    "properties": {
+                        "claim": {"type": "string"},
+                        "path": {"type": "string"},
+                        "line": {"type": "string"},
+                        "observation": {"type": "string"},
+                    },
+                },
+            },
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["statement", "basis", "evidence"],
+                    "properties": {
+                        "statement": {"type": "string"},
+                        "basis": {"type": "string", "enum": ["observed", "inference", "assumption"]},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            "ambiguities": {"type": "array", "items": {"type": "string"}},
+            "risks": {"type": "array", "items": {"type": "string"}},
+            "next_action": {"type": "string"},
+            "brain_verification_required": {"type": "string", "enum": ["required"]},
+        },
+    }
+
+
+def wrap_flash_workhorse_prompt(prompt: str, package: dict[str, Any]) -> str:
+    allowed = "\n".join(f"- {item}" for item in package["allowed_files"]) or "- Read-only scope stated in the request; make no edits."
+    criteria = "\n".join(f"- {item}" for item in package["acceptance_criteria"]) or "- Return the requested bounded evidence only."
+    forbidden = "\n".join(f"- {item}" for item in package["forbidden_actions"])
+    return f"""<flash_workhorse_contract>
+You are a fast, non-authoritative workhorse. Execute exactly one bounded package and stop.
+Package ID: {package['package_id']}
+Task kind: {package['task_kind']}
+
+Allowed files (implementation is restricted to these exact paths):
+{allowed}
+
+Acceptance criteria:
+{criteria}
+
+Forbidden actions:
+{forbidden}
+
+Stop with status=blocked at the first ambiguity, plan mismatch, required out-of-scope change, or failed fix that needs diagnosis. Never continue to the next plan step/package. A failed check means status=failed unless the approved package explicitly expects that failure.
+Separate observed facts from inference and assumptions. Any claim that behavior is intentional/by design must be basis=observed and cite an explicit spec, test, or code comment as file:line evidence; otherwise label it assumption and keep the investigation open.
+Your schema-enforced report is evidence for the sender brain, never approval. The brain will independently inspect cited lines, the actual diff, and check output before accepting this package or dispatching another.
+</flash_workhorse_contract>
+
+<bounded_request>
+{prompt.strip()}
+</bounded_request>"""
+
+
+def _normalized_path_for_scope(value: str) -> str:
+    return str(value or "").strip().replace("\\", "/").lstrip("./").lower()
+
+
+def validate_flash_workhorse_result(
+    outer: Any, package: dict[str, Any]
+) -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    if not isinstance(outer, dict):
+        return None, ["agy JSON result is not an object"]
+    if str(outer.get("status") or "").upper() != "SUCCESS":
+        errors.append(f"agy status was {outer.get('status') or 'missing'}")
+    structured = outer.get("structured_output")
+    if isinstance(structured, str):
+        try:
+            structured = json.loads(structured)
+        except json.JSONDecodeError:
+            structured = None
+    if not isinstance(structured, dict):
+        return None, errors + ["structured_output is missing or not an object"]
+
+    required = set(flash_workhorse_output_schema(package)["required"])
+    missing = sorted(required.difference(structured))
+    if missing:
+        errors.append("missing fields: " + ", ".join(missing))
+    if structured.get("package_id") != package["package_id"]:
+        errors.append("package_id does not match the dispatched package")
+    worker_status = structured.get("status")
+    if worker_status not in {"completed", "blocked", "failed"}:
+        errors.append("worker status is invalid")
+    if structured.get("brain_verification_required") != "required":
+        errors.append("brain_verification_required must be 'required'")
+
+    list_fields = (
+        "acceptance_criteria", "files_changed", "checks", "evidence", "claims",
+        "ambiguities", "risks",
+    )
+    for field in list_fields:
+        if field in structured and not isinstance(structured[field], list):
+            errors.append(f"{field} must be an array")
+
+    allowed = {_normalized_path_for_scope(path) for path in package["allowed_files"]}
+    for changed in structured.get("files_changed") or []:
+        if not isinstance(changed, dict) or not str(changed.get("path") or "").strip():
+            errors.append("every files_changed item requires path and change")
+            continue
+        if allowed and _normalized_path_for_scope(changed["path"]) not in allowed:
+            errors.append(f"out-of-scope file reported: {changed['path']}")
+
+    criteria = structured.get("acceptance_criteria") or []
+    checks = structured.get("checks") or []
+    ambiguities = structured.get("ambiguities") or []
+    expected_criteria = package.get("acceptance_criteria") or []
+    reported_criteria = [
+        str(item.get("criterion") or "").strip()
+        for item in criteria
+        if isinstance(item, dict)
+    ]
+    if expected_criteria and (
+        len(reported_criteria) != len(expected_criteria)
+        or set(reported_criteria) != set(expected_criteria)
+    ):
+        errors.append("reported acceptance criteria do not exactly match the dispatched package")
+    if worker_status == "completed":
+        if ambiguities:
+            errors.append("status=completed contradicts non-empty ambiguities")
+        if any(not isinstance(item, dict) or item.get("status") != "passed" for item in criteria):
+            errors.append("status=completed requires every acceptance criterion to pass")
+        if any(isinstance(item, dict) and item.get("status") == "failed" for item in checks):
+            errors.append("status=completed contradicts a failed check")
+
+    for claim in structured.get("claims") or []:
+        if not isinstance(claim, dict):
+            errors.append("every claims item must be an object")
+            continue
+        statement = str(claim.get("statement") or "")
+        if re.search(r"\b(intentional|by design|designed behavior|explicit alias)\b", statement, re.I):
+            evidence = claim.get("evidence") or []
+            if claim.get("basis") != "observed" or not evidence:
+                errors.append("intentional/by-design claim lacks observed primary evidence")
+    return structured, errors
 
 
 def infer_target_agent(target_agent: Any, target_model: Any = None) -> str:
@@ -4172,6 +4596,7 @@ def consult_antigravity_cli(
     model_name: str | None = None,
     effort: str | None = None,
     timeout: int = SYNC_CONSULT_TIMEOUT_SECONDS,
+    work_package: dict[str, Any] | None = None,
 ) -> str:
     config = load_config()
     agy = discover_antigravity_cli(config)
@@ -4190,23 +4615,33 @@ def consult_antigravity_cli(
         "danger full access", "danger-full-access", "bypass permissions",
         "bypasspermissions", "unrestricted",
     }
+    if bypass_permissions:
+        return (
+            "Antigravity CLI Flash safety policy rejected danger-full-access. "
+            "Keep production SSH, credentials, destructive operations, migrations, and live deployment with the brain."
+        )
+    package_kind = "implementation" if implementation_mode else "consult"
+    package = work_package or prepare_flash_work_package({}, package_kind, prompt)
+    schema = flash_workhorse_output_schema(package)
     command = [agy]
     if model_name:
         command.extend(["--model", str(model_name)])
     if effort:
         command.extend(["--effort", str(effort)])
-    if implementation_mode or bypass_permissions:
+    if implementation_mode:
         command.extend(["--mode", "accept-edits"])
     else:
         command.extend(["--mode", "plan", "--sandbox"])
-    if bypass_permissions:
-        command.append("--dangerously-skip-permissions")
     command.extend(
         [
+            "--output-format",
+            "json",
+            "--json-schema",
+            json.dumps(schema, separators=(",", ":"), ensure_ascii=True),
             "--print-timeout",
             f"{int(timeout)}s",
             "--print",
-            sanitize_prompt(prompt),
+            sanitize_flash_workhorse_prompt(prompt),
         ]
     )
     code, stdout, stderr = run_process(
@@ -4219,7 +4654,28 @@ def consult_antigravity_cli(
         return consult_timeout_message("Antigravity CLI", timeout, stdout)
     if code != 0:
         return f"Antigravity CLI exited with code {code}.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}".strip()
-    return stdout or stderr or "Antigravity CLI returned no output."
+    raw = stdout or stderr
+    if not raw:
+        return "Antigravity CLI structured-output validation failed: agy returned no output."
+    try:
+        outer = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return f"Antigravity CLI structured-output validation failed: invalid JSON ({exc})."
+    structured, validation_errors = validate_flash_workhorse_result(outer, package)
+    if validation_errors:
+        return "Antigravity CLI structured-output validation failed: " + "; ".join(validation_errors)
+    normalized = {
+        "package_id": package["package_id"],
+        "worker_status": structured.get("status") if structured else "failed",
+        "structured_output": structured,
+        "cli": {
+            "conversation_id": outer.get("conversation_id"),
+            "duration_seconds": outer.get("duration_seconds"),
+            "num_turns": outer.get("num_turns"),
+            "usage": outer.get("usage"),
+        },
+    }
+    return json.dumps(normalized, ensure_ascii=False)
 
 
 def consult_gemini(
@@ -4508,11 +4964,21 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
         )
     timeout_seconds = bounded_sync_timeout(args.get("timeout_seconds"))
     project_info = resolve_project(str(project_arg) if project_arg is not None else None)
+    flash_package = None
+    if model == "antigravity":
+        flash_package_kind = "implementation" if normalize_lookup(mode) in {
+            "accept edits", "accept-edits", "workspace write", "workspace-write",
+            "implementation", "implement", "edit", "danger full access",
+            "danger-full-access", "bypass permissions", "bypasspermissions", "unrestricted",
+        } else task_kind
+        flash_package = prepare_flash_work_package(args, flash_package_kind, prompt)
     if task_kind != "consult" or args.get("include_task_contract", True) is not False:
         prompt = wrap_task_prompt(prompt, task_kind, token_budget)
     if topic_arg and args.get("include_context_pack", True) is not False:
         pack = get_context_pack(project_info.name, topic_arg, DEFAULT_CONTEXT_BUDGET)["content"]
         prompt = f"Shared context pack for this topic:\n\n{pack}\n\nCurrent request:\n\n{prompt}"
+    if flash_package is not None:
+        prompt = wrap_flash_workhorse_prompt(prompt, flash_package)
     if model == "claude":
         async_queue, async_reason = should_queue_heavy_claude_consult(
             args, prompt, task_kind, token_budget, effort, resolved_model
@@ -4581,6 +5047,8 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
         codex_requested_effort = None
         codex_actual_effort = None
         codex_model_attested_ok = None
+        antigravity_envelope = None
+        antigravity_structured = None
         if model == "codex":
             codex_outcome = _run_codex_consult(
                 project_info, prompt, mode, resolved_model, effort,
@@ -4613,13 +5081,24 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
             responder_model = f"claude:{claude_actual_model}" if claude_actual_model else "claude:unverified"
         elif model == "antigravity":
             response = consult_antigravity_cli(
-                project_info.root_path, prompt, mode, resolved_model, effort, timeout_seconds
+                project_info.root_path, prompt, mode, resolved_model, effort, timeout_seconds,
+                flash_package,
             )
+            if not response.startswith(CONSULT_FAILURE_PREFIXES):
+                try:
+                    antigravity_envelope = json.loads(response)
+                    antigravity_structured = antigravity_envelope.get("structured_output")
+                except (json.JSONDecodeError, AttributeError):
+                    response = "Antigravity CLI structured-output validation failed: normalized result is invalid."
         elif model == "gemini":
             response = consult_gemini(project_info.root_path, prompt, mode, resolved_model, timeout_seconds)
         else:
             raise ValueError(f"unknown model: {model}")
         status = "error" if response.startswith(CONSULT_FAILURE_PREFIXES) else "ok"
+        if status == "ok" and model == "antigravity" and isinstance(antigravity_structured, dict):
+            worker_status = antigravity_structured.get("status")
+            if worker_status in {"blocked", "failed"}:
+                status = worker_status
         error = response if status == "error" else None
         consulted_name = responder_model or (f"{model}:{resolved_model}" if resolved_model else model)
         if effort and model != "codex":
@@ -4669,6 +5148,19 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
             result["requested_effort"] = codex_requested_effort
             result["actual_effort"] = codex_actual_effort
             result["model_attested"] = codex_model_attested_ok
+        if model == "antigravity":
+            result["work_package_id"] = (flash_package or {}).get("package_id")
+            result["structured_output_enforced"] = True
+            result["structured_output"] = antigravity_structured
+            result["worker_status"] = (
+                antigravity_structured.get("status") if isinstance(antigravity_structured, dict) else None
+            )
+            result["brain_verification"] = {
+                "required": True,
+                "status": "pending",
+                "acceptance_rule": "Independently inspect cited lines, the actual diff, and check output before accepting or dispatching another package.",
+            }
+            result["accepted"] = False
         if model_policy:
             result["model_policy"] = model_policy
         if effort_policy:
@@ -5748,6 +6240,8 @@ CONSULT_FAILURE_PREFIXES = (
     "Antigravity CLI was not found.",
     "Antigravity CLI timed out after",
     "Antigravity CLI exited with code",
+    "Antigravity CLI structured-output validation failed:",
+    "Antigravity CLI Flash safety policy rejected",
     "Gemini is not configured.",
     "Gemini CLI timed out after",
     "Gemini CLI exited with code",
@@ -7749,6 +8243,10 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
                 "effort": resolved_effort,
                 "max_response_chars": args.get("max_response_chars"),
                 "timeout_seconds": args.get("timeout_seconds"),
+                "work_package_id": args.get("work_package_id"),
+                "allowed_files": args.get("allowed_files"),
+                "acceptance_criteria": args.get("acceptance_criteria"),
+                "forbidden_actions": args.get("forbidden_actions"),
             },
         )
         result["route"] = "antigravity_cli"
@@ -7843,7 +8341,7 @@ TOOLS = [
     },
     {
         "name": "consult_antigravity",
-        "description": "Ask Antigravity through the standalone agy CLI. Defaults to Gemini 3.6 Flash High in plan/sandbox mode and returns stdout directly. Name any model from list_agent_models; live agy model discovery makes newly released model slugs available without a broker update. Use route_agent_task with surface='extension' or surface='inbox' for the in-app bridge instead.",
+        "description": "Use the standalone agy CLI for exactly one bounded Gemini Flash High work package. Switchboard always enforces --json-schema and returns brain_verification=pending. Implementation requires work_package_id, 1-5 allowed_files, and acceptance_criteria; danger-full-access and live deployment are rejected. Flash is non-authoritative: independently verify cited lines, actual diff, and checks before accepting or dispatching another package. On malformed output, ambiguity, failure, quota, timeout, or missing agy, use the host native reader/workhorse and record fallback.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -7852,17 +8350,21 @@ TOOLS = [
                 "prompt": {"type": "string"},
                 "mode": {
                     "type": "string",
-                    "enum": ["plan", "accept-edits", "danger-full-access"],
-                    "description": "plan is read-only/sandboxed; accept-edits permits implementation; danger-full-access also bypasses permission prompts and must be explicit.",
+                    "enum": ["plan", "accept-edits"],
+                    "description": "plan is read-only/sandboxed; accept-edits permits only the bounded local package. Flash danger-full-access is prohibited.",
                 },
                 "include_context_pack": {"type": "boolean"},
                 "task_kind": {"type": "string"},
                 "token_budget": {"type": "integer", "minimum": 500, "maximum": 20000},
                 "include_task_contract": {"type": "boolean"},
                 "max_response_chars": {"type": "integer", "minimum": 800, "maximum": 200000},
-                "target_model": {"type": "string", "description": "Model name or stable agy slug, e.g. 'flash high 3.6' or 'gemini-3.6-flash-high'."},
+                "target_model": {"type": "string", "description": "Model name or stable agy slug. Omit it or use 'gemini flash' for the moving Flash High workhorse; use a versioned gemini-<version>-flash-high slug for an exact pin."},
                 "effort": {"type": "string", "description": "Antigravity reasoning effort: low|medium|high. Explicit effort selects the matching live model variant when available."},
                 "timeout_seconds": {"type": "integer", "minimum": 15, "maximum": 240},
+                "work_package_id": {"type": "string", "description": "Required for implementation. Exactly one stable package id; Flash may not continue to another package."},
+                "allowed_files": {"type": "array", "maxItems": 5, "items": {"type": "string"}, "description": "Required for implementation. Exact files Flash may edit."},
+                "acceptance_criteria": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "Required for implementation. Deterministic pass/fail criteria for this package only."},
+                "forbidden_actions": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "Additional package-specific prohibitions; global no-production/no-next-package rules always apply."},
             },
             "required": ["prompt"],
         },
@@ -7920,14 +8422,14 @@ TOOLS = [
     },
     {
         "name": "route_agent_task",
-        "description": "Route a task to Antigravity, Codex, Claude, or Gemini. CLI-FIRST DEFAULTS: Codex, Claude, and Antigravity use their headless CLIs unless a surface is explicitly requested. Bare Antigravity defaults to Gemini 3.6 Flash High; a request such as target_model='flash high 3.6' resolves to the stable agy slug. Live agy model discovery exposes future models when installed. Pass surface='extension' or surface='inbox' (or use_inbox=true) for the Antigravity in-app bridge, or surface='app' for visible-app delivery. If agy is missing, an automatic Antigravity route falls back to the bridge/inbox. Name target_model for a specific model and keep effort in the effort field. KEEP prompt SHORT: let the receiver read project files/work-memory and use context refs for large unique data.",
+        "description": "Required MCP entry point for routing one task package to Antigravity, Codex, Claude, or Gemini. For Flash CLI work, set surface=cli here; never invoke agy directly. Send exactly one bounded package; implementation requires work_package_id, 1-5 allowed_files, and acceptance_criteria. Switchboard alone invokes agy and enforces --output-format json with --json-schema, rejects danger-full-access/malformed or contradictory completion, and returns brain_verification=pending. Never send Flash an entire plan, production SSH, credentials, migrations, or live deployment. The sender brain independently checks cited lines, actual diff, and tests before accepting or sending the next package. KEEP prompt SHORT.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "project": {"type": "string"},
                 "topic": {"type": "string"},
                 "target_agent": {"type": "string"},
-                "target_model": {"type": "string", "description": "Model only (e.g. 'opus', 'gpt-5.6-sol', 'flash high 3.6', 'gemini-3.6-flash-high'). Bare Codex/Claude/Antigravity requests resolve to their family defaults. Keep reasoning effort in the effort field."},
+                "target_model": {"type": "string", "description": "Model only (e.g. 'opus', 'gpt-5.6-sol', or 'gemini flash'). Bare Antigravity/'gemini flash' moves to the latest stable Flash High; a versioned agy slug pins exactly. Keep reasoning effort in the effort field."},
                 "effort": {"type": "string", "description": "Reasoning effort for CLI surfaces. Codex: minimal|low|medium|high|xhigh|max; Claude: low|medium|high|xhigh|max; Antigravity: low|medium|high."},
                 "target_host": {
                     "type": "string",
@@ -7970,6 +8472,10 @@ TOOLS = [
                 "token_budget": {"type": "integer", "minimum": 500, "maximum": 20000},
                 "mode": {"type": "string"},
                 "max_response_chars": {"type": "integer", "minimum": 800, "maximum": 200000},
+                "work_package_id": {"type": "string", "description": "For Flash implementation, required stable id for exactly one bounded package."},
+                "allowed_files": {"type": "array", "maxItems": 5, "items": {"type": "string"}, "description": "For Flash implementation, required exact edit allowlist."},
+                "acceptance_criteria": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "For Flash implementation, required deterministic criteria for this package."},
+                "forbidden_actions": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "Additional prohibitions; global Flash safety rules cannot be removed."},
                 "model_policy": {"type": "string", "description": "Explicit cost policy for Codex or Claude. 'cheap_read' selects Luna/low or Haiku (no effort); 'balanced'/'efficient'/'lower_effort' selects Terra/medium or Sonnet/medium. Omit for frontier/max consultation, audit, review, or debate."},
                 "native_unavailable_reason": {"type": "string", "description": "Required for same-vendor Codex/Claude MCP fallback after native subagent startup/access failure."},
                 "prompt": {"type": "string"},
@@ -7979,7 +8485,7 @@ TOOLS = [
     },
     {
         "name": "list_agent_models",
-        "description": "List available/detected models for Codex, Claude Code, and Antigravity, including topic defaults.",
+        "description": "List detected models, defaults, and roles. Antigravity Gemini Flash is a non-authoritative external workhorse for proactive bounded labour, not a native child agent or frontier role.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -7991,7 +8497,7 @@ TOOLS = [
     },
     {
         "name": "get_model_routing_guide",
-        "description": "Explain the broker's brain/worker model policy and return the model catalog. Serious consults use Sol/max or Fable/max; explicit cheap_read uses Luna/low or Haiku; balanced uses Terra/medium or Sonnet/medium.",
+        "description": "Explain frontier, native worker, and proactive external Antigravity Flash routing. Includes failure fallback, concurrency/write-isolation rules, exact route_agent_task examples, and the live model catalog.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -8574,7 +9080,7 @@ TOOLS = [
             "properties": {
                 "supervisor_id": {"type": "string"},
                 "since_seq": {"type": "integer", "minimum": 0, "description": "Only events with seq strictly greater than this are returned. Start at 0 to pick up the first material event."},
-                "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional narrow set of event types to watch. Omitted = the default material set (turn_completed, api_retry_exhausted, stall_timeout, tool_failure_threshold, autonomous_action_limit_reached, codex_decision_failed, turn_interrupted)."},
+                "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional narrow set of event types to watch. Omitted = the default material set (turn_completed, api_retry_exhausted, stall_timeout, tool_failure_threshold, autonomous_action_limit_reached, codex_decision_failed, turn_interrupted, hook_stop_failure, hook_session_end)."},
                 "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 180, "description": "Long-poll up to this many seconds (bounded to the MCP window) for a material event. 0/omitted = return immediately."},
             },
             "required": ["supervisor_id"],
@@ -8672,11 +9178,12 @@ PUBLIC_TOOL_NAMES = CLAUDE_LITE_TOOL_NAMES | {
 
 TOOL_DESCRIPTION_OVERRIDES = {
     "route_agent_task": (
-        "Route a task to Antigravity, Codex, Claude, or Gemini. CLI-FIRST: bare Antigravity "
-        "uses agy with Gemini 3.6 Flash High; bare Codex uses gpt-5.6-sol/max; bare Claude "
-        "uses fable/max. Same-vendor Codex/Claude labour must use native subagents first; MCP "
-        "fallback requires native_unavailable_reason. Use surface='extension'/'inbox' to force "
-        "in-app delivery. Cross-vendor fallback policies can select reader/workhorse tiers. "
+        "Required MCP entry for cross-vendor labour; never shell out to agy directly. Codex/Claude "
+        "brains should proactively consider external Antigravity "
+        "Flash High for bounded cheap labour via target_agent='antigravity', surface='cli', "
+        "target_model='gemini flash', effort='high'; plan is read-only and accept-edits requires an "
+        "approved isolated package. Flash is non-authoritative and not a native child. On failure, "
+        "use the host native reader/workhorse and record fallback. Parallelize only independent work. "
         "Call get_model_routing_guide/list_agent_models if unsure."
     ),
 }
@@ -8684,15 +9191,15 @@ TOOL_DESCRIPTION_OVERRIDES = {
 COMPACT_TOOL_DESCRIPTIONS = {
     "consult_codex": "Cross-vendor Codex consultation; same-vendor fallback requires native_unavailable_reason.",
     "consult_claude": "Cross-vendor Claude consultation; same-vendor fallback requires native_unavailable_reason.",
-    "consult_antigravity": "Ask Antigravity through agy CLI; defaults to Gemini 3.6 Flash High in plan mode.",
+    "consult_antigravity": "Low-level compatibility/diagnostic route. For Flash labour, call route_agent_task with surface=cli; never invoke agy directly.",
     "consult_gemini": "Ask Gemini through the configured CLI/API. Long answers return an excerpt plus response_ref.",
-    "route_agent_task": "Route cross-vendor work CLI-first; same-vendor Codex/Claude labour uses native subagents first.",
+    "route_agent_task": "Required MCP entry for cross-vendor work, including Antigravity Flash packages; surface=cli selects the backend without direct agy invocation.",
     "queue_codex_request": "Queue Codex work; same-vendor callers require native_unavailable_reason after native subagents fail.",
     "get_codex_requests": "List recent queued/completed Codex extension requests.",
     "queue_claude_request": "Queue Claude work; same-vendor callers require native_unavailable_reason after native subagents fail.",
     "get_claude_requests": "List recent queued/completed Claude extension requests.",
-    "list_agent_models": "List detected models and remembered defaults.",
-    "get_model_routing_guide": "Show frontier-brain and cost-aware worker routing for Codex and Claude.",
+    "list_agent_models": "List detected models, defaults, and frontier/native/external-workhorse roles.",
+    "get_model_routing_guide": "Show frontier, native worker, and proactive external Antigravity Flash routing with failure/concurrency rules.",
     "get_consultation_history": "Return recent consultation summaries. Pass include_raw=true only when excerpts are needed.",
     "get_work_memory": "Return the compact per-topic continuation log.",
     "record_work_memory": "Write a compact continuation update for the next model.",
@@ -10172,6 +10679,8 @@ MATERIAL_SUPERVISOR_EVENT_TYPES = frozenset(
         "autonomous_action_limit_reached",
         "codex_decision_failed",
         "turn_interrupted",
+        "hook_stop_failure",
+        "hook_session_end",
     }
 )
 
