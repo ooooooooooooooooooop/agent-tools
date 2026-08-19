@@ -386,6 +386,8 @@ Get-Process -ErrorAction SilentlyContinue |
         proc = subprocess.run(
             [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=8,
             check=False,
@@ -554,7 +556,8 @@ def claude_desktop_installed() -> bool:
                 proc = subprocess.run(
                     [ps, "-NoProfile", "-Command",
                      "if (Get-AppxPackage -Name '*Claude*') { 'yes' } else { 'no' }"],
-                    text=True, capture_output=True, timeout=8, check=False,
+                    text=True, encoding="utf-8", errors="replace",
+                    capture_output=True, timeout=8, check=False,
                 )
                 if "yes" in (proc.stdout or "").lower():
                     return True
@@ -897,7 +900,8 @@ def install_bridge(host_cli: str, dry: bool) -> str:
         return f"would run {cli} --install-extension {vsix.name}"
     try:
         subprocess.run([cli, "--install-extension", str(vsix), "--force"],
-                       capture_output=True, text=True, timeout=120, check=False)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, check=False)
         return f"installed {vsix.name}"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {exc}"
@@ -911,7 +915,8 @@ def uninstall_bridge(host_cli: str, dry: bool) -> str:
         return f"would run {cli} --uninstall-extension {BRIDGE_EXTENSION_ID}"
     try:
         proc = subprocess.run([cli, "--uninstall-extension", BRIDGE_EXTENSION_ID],
-                              capture_output=True, text=True, timeout=120, check=False)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=120, check=False)
         out = (proc.stdout + proc.stderr).lower()
         if "not installed" in out or "is not installed" in out:
             return "not installed"
@@ -1170,7 +1175,8 @@ def setup_debug_port(dry: bool) -> str:
         return f"ERROR copying debug scripts to {BROKER_HOME}: {exc}"
     try:
         subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(durable_enable)],
-                       capture_output=True, text=True, timeout=60, check=False)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, check=False)
         return "patched shortcuts (port 9000); debug scripts installed to ~/.agent-broker"
     except Exception as exc:  # noqa: BLE001
         return f"ERROR: {exc}"

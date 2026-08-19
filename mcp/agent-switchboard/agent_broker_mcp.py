@@ -1054,6 +1054,8 @@ def run_git(root: str, args: list[str]) -> str | None:
             ["git", *args],
             cwd=root,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=10,
             check=False,
@@ -1166,6 +1168,8 @@ if ($match) { $match.AppID }
         proc = subprocess.run(
             [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=8,
             env=env,
@@ -1202,6 +1206,8 @@ def app_is_running(agent: str) -> bool:
         proc = subprocess.run(
             [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=8,
             env=env,
@@ -1255,6 +1261,8 @@ def focus_app_window(agent: str) -> dict[str, Any]:
         proc = subprocess.run(
             [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", FOCUS_PS_SCRIPT],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=8,
             env=env,
@@ -1375,6 +1383,8 @@ if (-not $p) { 'no-window' } else {
         proc = subprocess.run(
             [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=int(delay_ms) / 1000 + 25,
             env=env,
@@ -1518,6 +1528,8 @@ def copy_to_clipboard(text: str) -> dict[str, Any]:
                 "$value = Get-Content -Raw -LiteralPath $env:AGENT_BROKER_CLIP_FILE; Set-Clipboard -Value $value",
             ],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=8,
             env={**os.environ.copy(), "AGENT_BROKER_CLIP_FILE": str(temp_file)},
@@ -9736,6 +9748,8 @@ ConvertTo-Json -InputObject @($rows) -Compress
     proc = subprocess.run(
         [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         timeout=12,
         check=False,
