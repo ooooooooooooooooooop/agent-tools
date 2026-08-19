@@ -1,9 +1,10 @@
 # Agent 工具仓库
 
-面向 Codex、Claude Code 等本地 Agent 工作流的可复现工具仓库。仓库同时发布两类项目：
+面向 Codex、Claude Code 等本地 Agent 工作流的可复现工具仓库。仓库同时发布三类项目：
 
 - **Skills**：Agent 读取的流程、规则与确定性辅助脚本。
 - **MCP servers**：提供实际工具调用能力的本地服务。
+- **DSH 插件**：本地 DSH（DeepSeek Harness）用户级插件源码与跨设备安装说明。
 
 本地运行状态、私有记忆、会话记录、机器路径、配置文件和生成物不属于发布内容。
 
@@ -48,9 +49,19 @@ Skill 安装 profile 定义在 [skills.json](./skills.json)。
 npx skills add https://github.com/ooooooooooooooooooop/skills --skill <skill-name>
 ```
 
+## DSH 插件
+
+本地 DSH（DeepSeek Harness）用户级插件，随仓库发布源码与安装说明。
+
+| 插件 | 简介 | 目标 profile |
+|---|---|---|
+| [llm-overflow-classifier](./dsh/llm-overflow-classifier) | 把 "Input token exceed the limit" 措辞归类为 CONTEXT_WINDOW_EXCEEDED，触发压缩/重试 | web |
+
+DSH 插件不设注册表；包内 `README.md` 提供跨设备安装步骤，发布内容不含本机路径。
+
 ## 仓库结构
 
-根目录按四类组织。前三类随仓库发布；第四类**永远仅存在于本地，不进入发布**。
+根目录按五类组织。前四类随仓库发布；第五类**永远仅存在于本地，不进入发布**。
 
 ```text
 # ① Skill 包（统一收在 skills/ 下，受 skills.json + validate_repo.py 契约约束）
@@ -61,14 +72,18 @@ skills/<name>/           # 每目录一个 Skill 包，含 SKILL.md，必须登�
 mcp/<server-name>/       # 可独立验证的第三方/修改版 MCP 包，自持子目录许可证
                          # 登记在 mcp.json（入口、版本、平台、上游基线）
 
-# ③ 质量与发布脚手架
+# ③ DSH 插件包
+dsh/<plugin-name>/       # 本地 DSH 用户级插件：插件源码 + 可移植 cordis.patch.yml 片段 + README
+                         # 不设注册表；发布内容禁止含本机路径/运行态
+
+# ④ 质量与发布脚手架
 scripts/                 # 仓库级校验（validate_repo.py）与 Skill 同步（sync_skills.py）
 tests/                   # 仓库级回归测试
 docs/                    # 架构与发布规则（architecture.md / skill-contract.md / sync-and-release.md）
 .github/workflows/       # CI：严格校验 + Skill 门禁 + markdown/py 语法 + 回归测试
 _template/               # 新建包的模板种子（validate_repo 显式排除，非 Skill）
 
-# ④ 设备运行层（本地，永不发布）
+# ⑤ 设备运行层（本地，永不发布）
 .taskflow/  .grepai/  .claude/  node_modules/  state.sqlite  会话 JSONL  日志  用户配置  生成报告
 ```
 
