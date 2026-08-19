@@ -4,16 +4,17 @@
 
 ## 一句话
 
-这是一个 **Agent 工具的源码与发布控制面**（Skill 包 + MCP 发行包 + 质量脚手架），**不是运行时工作区**。根目录 top-level 目录属于四层之一。
+这是一个 **Agent 工具的源码与发布控制面**（Skill 包 + MCP 发行包 + DSH 插件包 + 质量脚手架），**不是运行时工作区**。根目录 top-level 目录属于五层之一。
 
-## 四层目录（改动前先认层）
+## 分层目录（改动前先认层）
 
 | 层 | 目录 | 可否改动 | 改动要点 |
 |---|---|---|---|
 | ① Skill 包 | `skills/<name>/`（9 个） | ✅ | 必须登记在 `skills.json`；布局统一 `SKILL.md + agents/openai.yaml + examples/*.md` |
 | ② MCP 包 | `mcp/<name>/` | ✅ | 登记在 `mcp.json`；自持子目录许可证；`agent-switchboard` 是修改版，非 MIT |
-| ③ 质量脚手架 | `scripts/` `tests/` `docs/` `_template/` `.github/workflows/`（`skill-quality-gate` 是 ① 中的 Skill 包，位于 `skills/skill-quality-gate/`） | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
-| ④ 设备运行层 | `.taskflow/` `.grepai/` `.claude/` `node_modules/` 等 | ❌ 禁改/禁提交 | 本地运行态，发布门禁拒绝 |
+| ③ DSH 插件包 | `dsh/<name>/` | ✅ | 本地 DSH 用户级插件：源码 + 可移植 `cordis.patch.yml` 片段 + README 一起发布；不设注册表，校验器不核对 manifest，靠链接/markdown 检查兜底；发布内容禁止含本机路径 |
+| ④ 质量脚手架 | `scripts/` `tests/` `docs/` `_template/` `.github/workflows/`（`skill-quality-gate` 是 ① 中的 Skill 包，位于 `skills/skill-quality-gate/`） | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
+| ⑤ 设备运行层 | `.taskflow/` `.grepai/` `.claude/` `node_modules/` 等 | ❌ 禁改/禁提交 | 本地运行态，发布门禁拒绝 |
 
 ## 硬约束（改目录结构的红线）
 
