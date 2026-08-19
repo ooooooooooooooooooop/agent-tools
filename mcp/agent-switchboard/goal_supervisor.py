@@ -187,6 +187,8 @@ def _smoke_version(codex_path: str) -> tuple[bool, str | None]:
             [codex_path, "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
@@ -204,6 +206,8 @@ def _probe_dispatch(codex_path: str) -> bool:
             [codex_path, "exec", "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
@@ -948,6 +952,8 @@ def _run_command(
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=max(1.0, float(timeout_seconds)),
             stdin=subprocess.PIPE if stdin_data is not None else None,
             input=stdin_data,
