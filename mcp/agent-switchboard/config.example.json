@@ -27,5 +27,51 @@
   "antigravity_cdp_port": 9000,
   "vscode_cdp_port": 9010,
   "_comment_cdp": "CDP model auto-selection is off by default; the debug port is unauthenticated. Opt in only after launching the IDE with --remote-debugging-port.",
-  "antigravity_cdp_autoselect": false
+  "antigravity_cdp_autoselect": false,
+
+  "_comment_cli_backends": "Register arbitrary local CLIs so route_agent_task(target_agent=<name>, prompt=...) routes to them. Two backend types: (1) type=cli (default) runs a subprocess — command (string or arg array), args_template (argv tokens before the prompt; placeholders {model}/{effort}/{timeout} allowed), prompt_arg (the argv tail carrying the prompt; default '{prompt}'), model_aliases, default_model, output_format (plain_text|stdout|json), json_path (only for output_format=json); (2) type=openai_compat calls a local OpenAI-compatible HTTP serve (base_url like http://localhost:11434/v1, optional api_key, default_model). Only {prompt}/{model}/{effort}/{timeout} are substituted; no shell is used.",
+  "cli_backends": {
+    "ollama": {
+      "command": "ollama",
+      "args_template": ["run", "{model}"],
+      "prompt_arg": "{prompt}",
+      "default_model": "llama3",
+      "description": "Local Ollama via `ollama run <model>`",
+      "output_format": "plain_text",
+      "timeout": 600
+    },
+    "ollama-http": {
+      "type": "openai_compat",
+      "base_url": "http://localhost:11434/v1",
+      "default_model": "llama3",
+      "description": "Local Ollama via OpenAI-compatible HTTP serve"
+    }
+  },
+  "_comment_cli_backends_plugin": "Alternatively, drop a .py file into ~/.agent-broker/cli-backends/ (or $AGENT_BROKER_CLI_BACKENDS_DIR) that defines a `backend` instance or `make_backend()` returning a CliBackend. No config edit needed. See docs/cli-adapter-design.md §12.3 for the plugin contract.",
+  "cli_backends_plugin_dir": "",
+  "_comment_routing_preferences": "Optional: route an ambiguous target_agent (no explicit target) to a preferred backend by task type. Keys: coding/review/writing/research/fast/general. Values are ordered backend names (built-in or custom). Task type is inferred from prompt keywords (中英文).",
+  "routing_preferences": {
+    "coding": ["codex_cli", "claude_code"],
+    "research": ["claude_code", "antigravity_cli"],
+    "fast": ["gemini_cli", "antigravity_cli"]
+  },
+  "_comment_providers": "Declarative execution layers for the decision-layer AI. Two types: (1) official_cli = a locally-installed official CLI (cli: claude|codex|gemini); availability requires it to be logged in. (2) openai_compat = any OpenAI-compatible relay/local server (base_url + optional api_key via 'env:XXX' or literal, models). Decision layer lists them with `list_providers`, then calls route_agent_task(target_agent=<provider>, target_model=<model>).",
+  "providers": {
+    "deepseek": {
+      "type": "openai_compat",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "env:DEEPSEEK_API_KEY",
+      "models": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    "claude-official": {
+      "type": "official_cli",
+      "cli": "claude",
+      "models": ["opus", "sonnet", "haiku"]
+    },
+    "ollama": {
+      "type": "openai_compat",
+      "base_url": "http://localhost:11434/v1",
+      "models": ["llama3"]
+    }
+  }
 }

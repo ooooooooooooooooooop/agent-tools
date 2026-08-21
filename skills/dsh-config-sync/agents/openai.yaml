@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH 配置同步"
+  short_description: "把 ~/.dsh 的 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，含只读审计、显式应用与 SHA-256 校验，绝不携带凭据与运行态。"
+  default_prompt: "使用 $dsh-config-sync，导出或恢复本设备的 DSH 用户配置（偏好与模型路由，不含密钥）。"
