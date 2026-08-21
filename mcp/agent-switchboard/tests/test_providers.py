@@ -334,5 +334,75 @@ class CcSwitchImportTests(unittest.TestCase):
             providers.ccswitch_config_block("/nonexistent/cc-switch.db")
 
 
+class CrossCliProviderTests(unittest.TestCase):
+    """Cross-CLI x provider coupling: CLI executes a provider's model via injected env."""
+
+    def _cfg_and_registry(self):
+        import agent_broker_mcp as m
+
+        cfg = {
+            "providers": {
+                "kimi": {
+                    "type": "openai_compat",
+                    "base_url": "https://api.kimi.com/coding",
+                    "api_key": "sk-kimi-test",
+                    "models": ["kimi-for-coding"],
+                    "api_format": "both",
+                },
+                "deepseek": {
+                    "type": "openai_compat",
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "sk-ds-test",
+                    "models": ["deepseek-chat"],
+                    "api_format": "openai",
+                },
+            }
+        }
+        reg = CliRegistry()
+        from cli_backends import register_builtin_backends
+        register_builtin_backends(reg)
+        with mock.patch.object(m, "load_config", return_value=cfg):
+            m._register_providers(reg)
+        return cfg, reg
+
+    def test_claude_cross_kimi(self):
+        import agent_broker_mcp as m
+
+        cfg, reg = self._cfg_and_registry()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("claude_code", "kimi-for-coding", reg)
+        self.assertIsNotNone(out)
+        self.assertEqual(out[0], "kimi")
+        self.assertIn("CLAUDE_CONFIG_DIR", out[1])
+        import os
+        self.assertTrue(os.path.isdir(out[1]["CLAUDE_CONFIG_DIR"]))
+        self.assertTrue(os.path.isfile(os.path.join(out[1]["CLAUDE_CONFIG_DIR"], "settings.json")))
+
+    def test_codex_cross_returns_none(self):
+        import agent_broker_mcp as m
+
+        cfg, reg = self._cfg_and_registry()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("codex_cli", "kimi-for-coding", reg)
+        self.assertIsNone(out)  # codex not env-overridable yet
+
+    def test_protocol_mismatch_returns_none(self):
+        import agent_broker_mcp as m
+
+        cfg, reg = self._cfg_and_registry()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            # deepseek is openai-only; claude needs anthropic -> no match
+            out = m._resolve_cross_cli_provider("claude_code", "deepseek-chat", reg)
+        self.assertIsNone(out)
+
+    def test_unknown_model_returns_none(self):
+        import agent_broker_mcp as m
+
+        cfg, reg = self._cfg_and_registry()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("claude_code", "not-a-model", reg)
+        self.assertIsNone(out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -128,6 +128,7 @@ class ProviderConfig:
     base_url: str | None = None         # for openai_compat
     api_key: str | None = None          # resolved (env expanded)
     models: list[str] = field(default_factory=list)
+    api_format: str = "auto"  # "anthropic" | "openai" | "both" | "auto" (probe at first use)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -144,6 +145,16 @@ class ProviderConfig:
         """Decision-layer-choosable model list. Empty means 'any' for that provider."""
         return list(self.models)
 
+    def supports_protocol(self, protocol: str) -> bool:
+        """Whether this provider can be driven through ``protocol`` ('anthropic'|'openai')."""
+        fmt = (self.api_format or "auto").strip().lower()
+        if fmt == "both":
+            return True
+        if fmt in ("anthropic", "openai"):
+            return fmt == protocol
+        # auto: assume the protocol works; a failed execution reports upstream_error.
+        return True
+
 
 def _parse_providers_block(block: Any) -> list[ProviderConfig]:
     """Parse the ``providers`` config dict into ProviderConfig list (malformed skipped)."""
@@ -156,6 +167,9 @@ def _parse_providers_block(block: Any) -> list[ProviderConfig]:
         if not isinstance(spec, dict):
             continue
         provider_type = str(spec.get("type") or "").strip().lower()
+        api_format = str(spec.get("api_format") or spec.get("protocol") or "auto").strip().lower()
+        if api_format not in {"anthropic", "openai", "both", "auto"}:
+            api_format = "auto"
         cli = str(spec.get("cli") or "").strip() or None
         if provider_type == "official_cli":
             out.append(
@@ -164,6 +178,7 @@ def _parse_providers_block(block: Any) -> list[ProviderConfig]:
                     provider_type="official_cli",
                     cli=cli,
                     models=[str(m) for m in (spec.get("models") or []) if str(m).strip()],
+                    api_format=api_format,
                     raw=spec,
                 )
             )
@@ -177,6 +192,7 @@ def _parse_providers_block(block: Any) -> list[ProviderConfig]:
                 base_url=base_url or None,
                 api_key=_resolve_key(spec.get("api_key")),
                 models=[str(m) for m in (spec.get("models") or []) if str(m).strip()],
+                api_format=api_format,
                 raw=spec,
             )
         )
@@ -292,6 +308,8 @@ def _claude_settings_to_provider(name: str, sc: dict[str, Any]) -> dict[str, Any
         "base_url": base,
         "api_key": token,
         "models": models,
+        # cc-switch claude providers speak Anthropic Messages API (ANTHROPIC_BASE_URL).
+        "api_format": "anthropic",
         "description": f"imported from cc-switch (claude)",
     }
     return provider
@@ -324,6 +342,8 @@ def _codex_settings_to_provider(name: str, sc: dict[str, Any]) -> dict[str, Any]
         "base_url": base,
         "api_key": key,
         "models": [model] if model else [],
+        # cc-switch codex providers speak OpenAI API (OPENAI_API_KEY + base_url).
+        "api_format": "openai",
         "description": "imported from cc-switch (codex)",
     }
     return provider
