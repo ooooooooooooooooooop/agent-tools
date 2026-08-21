@@ -167,6 +167,85 @@ class _ProviderTargetAlias(cli_backend_base.CliBackend):
         return getattr(self._inner, "discover", lambda: None)()
 
 
+# Protocol each CLI-family speaks, used for cross-CLI x provider routing.
+_CLI_PROTOCOL = {
+    "claude_code": "anthropic",
+    "codex_cli": "openai",
+    "claude": "anthropic",
+    "codex": "openai",
+}
+
+
+def _resolve_cross_cli_provider(
+    target_agent: str | None,
+    target_model: str | None,
+    registry: cli_backend_base.CliRegistry | None = None,
+) -> tuple[str, dict[str, str]] | None:
+    """When ``target_agent`` is a CLI (claude/codex) and ``target_model`` names a model
+    belonging to a configured provider, return (provider_name, env_override) so the CLI
+    runs against that provider (cross-CLI x provider coupling).
+
+    Only applies when the provider's ``api_format`` supports the CLI's protocol
+    (claude -> anthropic, codex -> openai); otherwise returns None so the request
+    falls through to the normal built-in CLI path. Returns None when no provider model
+    matches, or when ``target_agent`` is not a CLI target.
+
+    The env_override for claude uses CLAUDE_CONFIG_DIR pointing at a temporary isolated
+    settings.json (claude CLI reads settings.json env with higher priority than process
+    environment; cc-switch writes there for the same reason). codex currently returns
+    None (its config.toml provider wiring is not overridable via env).
+    """
+    if not target_agent or not target_model:
+        return None
+    cli_key = str(target_agent).strip().lower()
+    protocol = _CLI_PROTOCOL.get(cli_key)
+    if not protocol:
+        return None
+    if cli_key not in {"claude_code", "claude"}:
+        return None  # codex config.toml provider wiring is not env-overridable (for now)
+    registry = registry or cli_registry()
+    providers_cfg = providers_from_config_loaded()
+    model_lower = str(target_model).strip().lower()
+    for p in providers_cfg:
+        if p.is_official or not p.base_url:
+            continue
+        if not p.supports_protocol(protocol):
+            continue
+        if not any(str(m).strip().lower() == model_lower for m in p.models):
+            continue
+        api_key = p.api_key or ""
+        if api_key.startswith("env:"):
+            import os as _os
+
+            api_key = _os.environ.get(api_key[4:], "") or ""
+        # Isolated claude config dir carrying the provider's anthropic endpoint.
+        import tempfile
+
+        iso_dir = tempfile.mkdtemp(prefix="claude-provider-")
+        try:
+            import json as _json
+
+            settings = {
+                "env": {
+                    "ANTHROPIC_BASE_URL": p.base_url,
+                    "ANTHROPIC_AUTH_TOKEN": api_key,
+                    "ANTHROPIC_MODEL": str(target_model),
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": str(target_model),
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": str(target_model),
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": str(target_model),
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": str(target_model),
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": str(target_model),
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": str(target_model),
+                }
+            }
+            with open(os.path.join(iso_dir, "settings.json"), "w", encoding="utf-8") as fh:
+                _json.dump(settings, fh)
+        except Exception:  # noqa: BLE001
+            continue
+        return (p.name, {"CLAUDE_CONFIG_DIR": iso_dir})
+    return None
+
+
 # Global CLI adapter registry. Built-ins plus config-registered custom backends are
 # loaded lazily on first access (see cli_registry()) so importing this module never
 # forces discovery or config parsing at import time.
@@ -4273,8 +4352,11 @@ def run_process(
     cwd: str,
     stdin_text: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    env_override: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     env = os.environ.copy()
+    if env_override:
+        env.update(env_override)
     env["AGENT_BROKER_CHILD"] = "1"
     # CREATE_NO_WINDOW so the CLI child (codex/claude/gemini) never pops a console window,
     # even when spawned from the windowless detached worker.
@@ -5151,6 +5233,7 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("prompt is required")
     project_arg = args.get("project")
     topic_arg = str(args.get("topic") or "").strip() or None
+    env_override = args.get("env_override")  # cross-CLI × provider coupling
     task_kind = normalize_task_kind(args.get("task_kind"))
     token_budget = int(args.get("token_budget") or TASK_BUDGETS.get(task_kind, TASK_BUDGETS["consult"]))
     mode = str(args.get("mode") or ("plan" if model in {"claude", "antigravity"} else "read-only"))
@@ -5274,25 +5357,42 @@ def consult(model: str, args: dict[str, Any]) -> dict[str, Any]:
         antigravity_envelope = None
         antigravity_structured = None
         if model == "codex":
-            codex_outcome = _run_codex_consult(
-                project_info, prompt, mode, resolved_model, effort,
-                timeout_seconds, topic_arg, task_kind, token_budget,
-            )
-            if codex_outcome.get("pending"):
-                return codex_outcome["payload"]
-            response = codex_outcome["response"]
-            responder_model = codex_outcome.get("responder_model")
-            codex_requested_model = codex_outcome.get("requested_model")
-            codex_actual_model = codex_outcome.get("actual_model")
-            codex_requested_effort = codex_outcome.get("requested_effort")
-            codex_actual_effort = codex_outcome.get("actual_effort")
-            codex_model_attested_ok = codex_outcome.get("model_attested")
-            already_stored = True
+            if env_override:
+                # Cross-CLI × provider coupling: bypass the async worker and call the CLI
+                # synchronously with the injected provider env (the worker path can't carry
+                # per-request env through the detached process).
+                codex_result = consult_codex(
+                    project_info.root_path, prompt, mode, resolved_model, effort,
+                    timeout_seconds, env_override=env_override,
+                )
+                response = codex_result.response
+                responder_model = f"codex:{codex_result.actual_model}" if codex_result.actual_model else "codex:unverified"
+                codex_requested_model = codex_result.requested_model
+                codex_actual_model = codex_result.actual_model
+                codex_requested_effort = codex_result.requested_effort
+                codex_actual_effort = codex_result.actual_effort
+                codex_model_attested_ok = codex_result.model_attested
+            else:
+                codex_outcome = _run_codex_consult(
+                    project_info, prompt, mode, resolved_model, effort,
+                    timeout_seconds, topic_arg, task_kind, token_budget,
+                )
+                if codex_outcome.get("pending"):
+                    return codex_outcome["payload"]
+                response = codex_outcome["response"]
+                responder_model = codex_outcome.get("responder_model")
+                codex_requested_model = codex_outcome.get("requested_model")
+                codex_actual_model = codex_outcome.get("actual_model")
+                codex_requested_effort = codex_outcome.get("requested_effort")
+                codex_actual_effort = codex_outcome.get("actual_effort")
+                codex_model_attested_ok = codex_outcome.get("model_attested")
+            if not env_override:
+                already_stored = True
         elif model == "claude":
             claude_workspace = None
             if topic_arg and load_config().get("topic_workspaces", True):
                 claude_workspace = str(topic_workspace_dir(project_info, topic_arg))
-            claude_result = consult_claude(project_info.root_path, prompt, mode, resolved_model, claude_workspace, effort, timeout_seconds)
+            claude_result = consult_claude(project_info.root_path, prompt, mode, resolved_model, claude_workspace, effort, timeout_seconds, env_override=env_override)
             response = claude_result.response
             claude_requested_model = claude_result.requested_model
             claude_actual_model = claude_result.actual_model
@@ -8837,6 +8937,38 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         # The narrow per-field inference picked Antigravity-as-host; the full intent
         # names a real family hosted in that IDE. Correct it before model resolution.
         target_agent = default_target_agent_for_family(intent_family)
+    # Cross-CLI × provider coupling early exit: when the caller names a CLI
+    # (claude/claude_code) and a provider model, route straight to the CLI with the
+    # provider's endpoint injected — before normal model resolution would reject the
+    # provider model as unknown.
+    if str(target_agent).strip().lower() in {"claude_code", "claude"}:
+        _cross = _resolve_cross_cli_provider(target_agent, target_model, cli_registry())
+        if _cross is not None:
+            _provider_name, _env = _cross
+            _result = consult(
+                "claude",
+                {
+                    "project": project,
+                    "topic": topic,
+                    "prompt": prompt,
+                    "mode": args.get("mode") or "plan",
+                    "task_kind": normalize_task_kind(args.get("task_kind") or args.get("request_type")),
+                    "token_budget": int(args.get("token_budget") or 0) or None,
+                    "target_model": target_model,
+                    "effort": args.get("effort") or args.get("reasoning_effort"),
+                    "max_response_chars": args.get("max_response_chars"),
+                    "timeout_seconds": args.get("timeout_seconds"),
+                    "new_chat": truthy(args.get("new_chat") or args.get("force_new_chat")),
+                    "async": args.get("async") or args.get("async_handoff") or args.get("use_inbox") or args.get("queue"),
+                    "force_sync": args.get("force_sync") or args.get("sync") or args.get("direct") or args.get("use_cli"),
+                    "env_override": _env,
+                },
+            )
+            _result["route"] = "claude_code_cross"
+            _result["cross_cli_provider"] = _provider_name
+            _result["surface"] = "cli"
+            _result["model_resolution"] = {"status": "resolved", "target_agent": target_agent, "target_model": target_model, "source": "cross_cli_provider"}
+            return _result
     effort_hint = args.get("effort") or args.get("reasoning_effort")
     model_policy = None
     requested_family = model_family_for(target_agent, target_model)
@@ -9154,47 +9286,53 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         queued["model_resolution"] = model_resolution
         return queued
     if target_agent == "codex_cli":
-        result = consult(
-            "codex",
-            {
-                "project": project,
-                "topic": topic,
-                "prompt": prompt,
-                "mode": args.get("mode") or "read-only",
-                "task_kind": task_kind,
-                "token_budget": token_budget,
-                "target_model": target_model,
-                "effort": resolved_effort,
-                "max_response_chars": args.get("max_response_chars"),
-                "timeout_seconds": args.get("timeout_seconds"),
-            },
-        )
+        _cross = _resolve_cross_cli_provider("codex_cli", target_model, cli_registry())
+        consult_args: dict[str, Any] = {
+            "project": project,
+            "topic": topic,
+            "prompt": prompt,
+            "mode": args.get("mode") or "read-only",
+            "task_kind": task_kind,
+            "token_budget": token_budget,
+            "target_model": target_model,
+            "effort": resolved_effort,
+            "max_response_chars": args.get("max_response_chars"),
+            "timeout_seconds": args.get("timeout_seconds"),
+        }
+        if _cross is not None:
+            consult_args["env_override"] = _cross[1]
+        result = consult("codex", consult_args)
         result["route"] = "codex_cli"
+        if _cross is not None:
+            result["cross_cli_provider"] = _cross[0]
         result["surface"] = surface
         if surface_note:
             result["surface_note"] = surface_note
         result["model_resolution"] = model_resolution
         return result
     if target_agent == "claude_code":
-        result = consult(
-            "claude",
-            {
-                "project": project,
-                "topic": topic,
-                "prompt": prompt,
-                "mode": args.get("mode") or "plan",
-                "task_kind": task_kind,
-                "token_budget": token_budget,
-                "target_model": target_model,
-                "effort": resolved_effort,
-                "max_response_chars": args.get("max_response_chars"),
-                "timeout_seconds": args.get("timeout_seconds"),
-                "new_chat": new_chat,
-                "async": args.get("async") or args.get("async_handoff") or args.get("use_inbox") or args.get("queue"),
-                "force_sync": args.get("force_sync") or args.get("sync") or args.get("direct") or args.get("use_cli"),
-            },
-        )
+        _cross = _resolve_cross_cli_provider("claude_code", target_model, cli_registry())
+        consult_args = {
+            "project": project,
+            "topic": topic,
+            "prompt": prompt,
+            "mode": args.get("mode") or "plan",
+            "task_kind": task_kind,
+            "token_budget": token_budget,
+            "target_model": target_model,
+            "effort": resolved_effort,
+            "max_response_chars": args.get("max_response_chars"),
+            "timeout_seconds": args.get("timeout_seconds"),
+            "new_chat": new_chat,
+            "async": args.get("async") or args.get("async_handoff") or args.get("use_inbox") or args.get("queue"),
+            "force_sync": args.get("force_sync") or args.get("sync") or args.get("direct") or args.get("use_cli"),
+        }
+        if _cross is not None:
+            consult_args["env_override"] = _cross[1]
+        result = consult("claude", consult_args)
         result["route"] = "claude_inbox" if result.get("async") else "claude_code"
+        if _cross is not None:
+            result["cross_cli_provider"] = _cross[0]
         result["surface"] = "extension" if result.get("async") else surface
         if surface_note:
             result["surface_note"] = surface_note

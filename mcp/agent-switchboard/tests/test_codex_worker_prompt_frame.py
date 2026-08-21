@@ -67,7 +67,7 @@ class WorkerPromptFrameTests(unittest.TestCase):
     def test_consult_codex_applies_custom_prompt_wrapper(self) -> None:
         seen: list[str] = []
 
-        def fake_run_process(command, cwd, prompt, timeout=None):
+        def fake_run_process(command, cwd, prompt, timeout=None, env_override=None):
             seen.append(prompt)
             return 0, "", ""
 
