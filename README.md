@@ -40,6 +40,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [environment-bootstrap](./skills/environment-bootstrap) | 恢复 Codex Skill 环境并校验文件哈希 | 核心 |
 | [skill-quality-gate](./skills/skill-quality-gate) | 评估 Skill 的触发边界、输出契约与回归质量 | 核心 |
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
+| [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
+| [weekly-work-summary](./skills/weekly-work-summary) | 按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel | 可选 |
 
 Skill 安装 profile 定义在 [skills.json](./skills.json)。
 

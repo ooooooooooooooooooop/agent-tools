@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,12 +35,171 @@ import claude_pool
 import claude_sdk_backend
 import goal_supervisor
 from switchboard_version import BROKER_VERSION
+import cli_backend_base
+from cli_backends import (
+    register_builtin_backends,
+    backends_from_config,
+)
+from cli_backends.plugin_loader import register_backends_from_directory
+import openai_gateway
+import providers
 
 
 BROKER_DIR = Path(os.environ.get("AGENT_BROKER_HOME", Path.home() / ".agent-broker"))
 DB_PATH = BROKER_DIR / "state.sqlite"
 LOG_PATH = BROKER_DIR / "agent-broker.log"
 CONFIG_PATH = BROKER_DIR / "config.json"
+
+
+# --- providers: declarative execution layers ---------------------------------
+# Map an official_cli provider's `cli` field to the built-in backend name.
+_OFFICIAL_CLI_TO_BACKEND = {"claude": "claude_code", "codex": "codex_cli", "gemini": "gemini_cli"}
+
+
+def providers_from_config_loaded(config: dict[str, Any] | None = None) -> list[providers.ProviderConfig]:
+    """Load ProviderConfig list from config.json (lazily)."""
+    from providers import providers_from_config
+
+    return providers_from_config(load_config() if config is None else config)
+
+
+def _register_providers(registry: cli_backend_base.CliRegistry) -> None:
+    """Register config.json ``providers`` blocks as routable target_agent aliases.
+
+    - ``official_cli`` providers alias to the matching built-in backend
+      (claude -> claude_code, codex -> codex_cli, gemini -> gemini_cli).
+    - ``openai_compat`` providers get a GenericCliBackend built from the spec.
+    Registered under the provider's own name so decision-layer AI can route via
+    ``route_agent_task(target_agent=<provider>, target_model=<model>)``.
+    """
+    from cli_backends.generic import GenericCliBackend
+
+    for p in providers_from_config_loaded():
+        if registry.get(p.name) is not None:
+            continue  # avoid shadowing an existing CLI/backend of the same name
+        if p.is_official:
+            backend_name = _OFFICIAL_CLI_TO_BACKEND.get((p.cli or "").strip().lower())
+            existing = registry.get(backend_name) if backend_name else None
+            if existing is None:
+                continue  # official CLI not present; skip (will show unavailable via list_providers)
+            # Wrap the existing backend under the provider name, carrying provider info.
+            registry.register(_ProviderTargetAlias(existing, p))
+        else:
+            spec = {
+                "type": "openai_compat",
+                "base_url": p.base_url or "http://localhost:11434/v1",
+                "default_model": p.models[0] if p.models else None,
+                "models": p.models,
+                "description": f"provider {p.name} (openai_compat)",
+            }
+            if p.api_key:
+                spec["api_key"] = p.api_key
+            try:
+                registry.register(GenericCliBackend(p.name, spec))
+            except (TypeError, ValueError):
+                continue
+
+
+class _ProviderTargetAlias(cli_backend_base.CliBackend):
+    """Thin adapter exposing an existing backend under a provider's name with available().
+
+    Delegates execution to the wrapped built-in backend but reports provider metadata
+    and enforcement of the provider's model list.
+    """
+
+    def __init__(self, inner: cli_backend_base.CliBackend, provider: "providers.ProviderConfig") -> None:
+        self._inner = inner
+        self._provider = provider
+
+    @property
+    def name(self) -> str:
+        return self._provider.name
+
+    @property
+    def aliases(self) -> list[str]:
+        return [self._provider.name]
+
+    @property
+    def family(self) -> str:
+        return "provider"
+
+    @property
+    def description(self) -> str:
+        return f"provider '{self._provider.name}' via {self._inner.name}"
+
+    @property
+    def provider_cli(self) -> str | None:
+        return self._provider.cli
+
+    def available(self) -> bool:
+        # official_cli availability = inner backend available AND credentials present
+        from providers import auth_available
+
+        inner_ok = bool(getattr(self._inner, "available", lambda: True)())
+        return inner_ok and auth_available(self._provider.cli)
+
+    def metadata(self) -> dict[str, Any]:
+        md = dict(self._inner.metadata()) if hasattr(self._inner, "metadata") else {}
+        md["name"] = self._provider.name
+        md["family"] = "provider"
+        md["provider_type"] = "official_cli"
+        md["cli"] = self._provider.cli
+        md["models"] = self._provider.models or md.get("models") or []
+        md["capabilities"] = md.get("capabilities") or ["chat", "models"]
+        return md
+
+    def execute(self, prompt: str, model: str | None = None, effort: str | None = None,
+                mode: str = "read-only", project_root: str | None = None,
+                timeout: int = 300, **kwargs: Any) -> Any:
+        # Whenever effort is not explicitly given, pull the provider's declared
+        # default_effort from metadata.  This avoids falling back to a family's
+        # "max" effort (which some models reject) when the backend has a safer
+        # default such as "xhigh".
+        if effort is None:
+            try:
+                effort = self.metadata().get("default_effort")
+            except Exception:  # noqa: BLE001
+                pass
+        return self._inner.execute(prompt, model=model, effort=effort, mode=mode,
+                                   project_root=project_root, timeout=timeout, **kwargs)
+
+    def discover(self) -> str | None:
+        return getattr(self._inner, "discover", lambda: None)()
+
+
+# Global CLI adapter registry. Built-ins plus config-registered custom backends are
+# loaded lazily on first access (see cli_registry()) so importing this module never
+# forces discovery or config parsing at import time.
+_CLI_BACKENDS_PLUGIN_DIR = Path(
+    os.environ.get("AGENT_BROKER_CLI_BACKENDS_DIR", BROKER_DIR / "cli-backends")
+)
+
+
+def _cli_registry() -> cli_backend_base.CliRegistry:
+    registry = getattr(_cli_registry, "_registry", None)
+    if registry is None:
+        registry = cli_backend_base.CliRegistry()
+        register_builtin_backends(registry)
+        for custom in backends_from_config(load_config()):
+            if registry.get(custom.name) is None:
+                registry.register(custom)
+        # Directory-scan discovery: any .py file in the plugin directory (or a
+        # subdirectory sibling) is loaded as a backend plugin. The user drops a file
+        # and it's available — no config edit or import required.
+        if _CLI_BACKENDS_PLUGIN_DIR.is_dir():
+            _registry_plugin_notes = register_backends_from_directory(
+                registry, str(_CLI_BACKENDS_PLUGIN_DIR), strict=True
+            )
+            for note in _registry_plugin_notes:
+                log(note)
+        # Declarative execution-layer providers (config.json `providers`).
+        _register_providers(registry)
+        _cli_registry._registry = registry
+    return registry
+
+
+def cli_registry() -> cli_backend_base.CliRegistry:
+    return _cli_registry()
 
 # The MCP server key every host registers the broker under (matches setup.py MCP_KEY).
 MCP_SERVER_KEY = "agent-switchboard"
@@ -826,6 +986,37 @@ def init_db() -> None:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+        # cli_requests: generic async requests for registered CLI backends (built-in or
+        # config.json cli_backends custom). Mirrors codex/claude_requests so request_result /
+        # request_status / _poll_request / the ledger can all read custom-CLI work that runs
+        # in a detached {name}-cli-worker, exactly like the codex/claude async workers.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cli_requests (
+                id TEXT PRIMARY KEY,
+                backend TEXT NOT NULL,
+                project TEXT NOT NULL,
+                root_path TEXT,
+                topic TEXT,
+                prompt TEXT NOT NULL,
+                status TEXT NOT NULL,
+                response TEXT,
+                error TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                notified_at TEXT,
+                completed_at TEXT,
+                responder TEXT,
+                responder_model TEXT,
+                target_model TEXT,
+                effort TEXT,
+                worker_pid INTEGER,
+                worker_started_at TEXT,
+                worker_completed_at TEXT,
+                mode TEXT
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS shared_context_blobs (
@@ -4421,6 +4612,7 @@ def consult_codex(
     effort: str | None = None,
     timeout: int = SYNC_CONSULT_TIMEOUT_SECONDS,
     prompt_wrapper: Any = None,
+    env_override: dict[str, str] | None = None,
 ) -> CodexConsultResult:
     config = load_config()
     codex = discover_codex(config)
@@ -4456,7 +4648,7 @@ def consult_codex(
     if model_name:
         command[2:2] = ["--model", str(model_name)]
     wrap = prompt_wrapper if callable(prompt_wrapper) else sanitize_prompt
-    code, stdout, stderr = run_process(command, project_info.root_path, wrap(prompt), timeout=timeout)
+    code, stdout, stderr = run_process(command, project_info.root_path, wrap(prompt), timeout=timeout, env_override=env_override)
     parsed = parse_codex_stream_output(stdout)
     actual_model: str | None = None
     actual_effort: str | None = None
@@ -4512,6 +4704,7 @@ def consult_claude(
     workspace: str | None = None,
     effort: str | None = None,
     timeout: int = SYNC_CONSULT_TIMEOUT_SECONDS,
+    env_override: dict[str, str] | None = None,
 ) -> ClaudeConsultResult:
     config = load_config()
     initial_model = str(
@@ -4568,7 +4761,7 @@ def consult_claude(
             command.extend(["--model", candidate])
             attempts.append(candidate)
         code, stdout, stderr = run_process(
-            command, run_cwd, sanitize_prompt(prompt), timeout=timeout
+            command, run_cwd, sanitize_prompt(prompt), timeout=timeout, env_override=env_override
         )
         parsed = parse_claude_stream_output(stdout)
         if code == 124:
@@ -6765,6 +6958,343 @@ def run_claude_request_worker(request_id: str) -> dict[str, Any]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Async request queue for registered CLI backends (built-in or config custom).
+# Mirrors the codex/claude worker lifecycle so route_agent_task(target_agent=<custom>)
+# can, when `async`/`inbox` is requested, return a pending cli_requests id that caller
+# collects with request_result/request_status — same async story Codex/Claude enjoy.
+# ---------------------------------------------------------------------------
+CLI_ASYNC_WORKER_TIMEOUT_SECONDS = max(
+    30, _env_int("AGENT_BROKER_CLI_ASYNC_TIMEOUT_SECONDS", CODEX_ASYNC_WORKER_TIMEOUT_SECONDS)
+)
+
+
+def queue_cli_request(
+    backend_name: str,
+    prompt: str,
+    project: str | None = None,
+    topic: str | None = None,
+    target_model: str | None = None,
+    effort: str | None = None,
+    mode: str = "read-only",
+    task_kind: str | None = None,
+    timeout: int | None = None,
+    autorun: Any = None,
+) -> dict[str, Any]:
+    """Queue a prompt for a registered CLI backend as an async cli_requests row.
+
+    The owner then calls start_cli_request_worker(id) to run it in a detached process,
+    or the caller can pass autorun=True (default) to start the worker immediately.
+    Always returns an id (deduped when an identical pending row exists).
+    """
+    init_db()
+    backend = cli_registry().get(backend_name)
+    if backend is None:
+        raise ValueError(f"unknown CLI backend: {backend_name!r}")
+    if not prompt or not prompt.strip():
+        raise ValueError("prompt is required")
+    project_info = resolve_project(project) if project else _project_info_from_root()
+    request_id = str(uuid.uuid4())
+    now = utc_now()
+    created_by = os.environ.get("AGENT_BROKER_CALLER") or "mcp-client"
+    clean_prompt = prompt.strip()
+    stored_mode = str(mode).strip().lower()
+    if stored_mode not in {"read-only", "workspace-write", "danger-full-access"}:
+        stored_mode = "read-only"
+    stored_effort = normalize_effort_token(effort) or (str(effort).strip().lower() if effort else None)
+    _timeout = int(timeout or CLI_ASYNC_WORKER_TIMEOUT_SECONDS)
+    autorun_enabled = True if autorun is None else truthy(autorun)
+    stored_root = project_info.root_path if project else None
+
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        existing = conn.execute(
+            """
+            SELECT id FROM cli_requests
+            WHERE backend = ? AND prompt = ?
+              AND COALESCE(mode, 'read-only') = ?
+              AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (backend.name, clean_prompt, stored_mode),
+        ).fetchone()
+        if existing:
+            rid = existing["id"]
+            if autorun_enabled:
+                start_cli_request_worker(rid)
+            row = conn.execute("SELECT * FROM cli_requests WHERE id = ?", (rid,)).fetchone()
+            payload = dict(row)
+            payload["deduped"] = True
+            return payload
+        conn.execute(
+            """
+            INSERT INTO cli_requests (
+                id, backend, project, root_path, topic, prompt, status, created_by, created_at,
+                target_model, effort, mode
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                backend.name,
+                project_info.name if project else None,
+                stored_root,
+                topic,
+                clean_prompt,
+                created_by,
+                now,
+                target_model,
+                stored_effort,
+                stored_mode,
+            ),
+        )
+    if autorun_enabled:
+        start_cli_request_worker(request_id)
+    return {"id": request_id, "backend": backend.name, "status": "queued", "autorun": autorun_enabled}
+
+
+def _project_info_from_root() -> ProjectInfo:
+    root = str(Path.cwd())
+    return ProjectInfo(name=safe_slug(Path(root).name), root_path=root)
+
+
+def get_cli_requests(project: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """List async requests queued for registered CLI backends (filtered by project, newest first)."""
+    init_db()
+    try:
+        cap = max(1, min(int(limit or 20), 100))
+    except (TypeError, ValueError):
+        cap = 20
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        if project:
+            rows = conn.execute(
+                """
+                SELECT id, backend, project, topic, target_model, status, created_at, completed_at,
+                       response IS NOT NULL AND length(response) > 0 AS answered
+                FROM cli_requests
+                WHERE lower(project) = lower(?)
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (project, cap),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, backend, project, topic, target_model, status, created_at, completed_at,
+                       response IS NOT NULL AND length(response) > 0 AS answered
+                FROM cli_requests
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (cap,),
+            ).fetchall()
+        items = [
+            {
+                "id": r["id"],
+                "backend": r["backend"],
+                "project": r["project"],
+                "topic": r["topic"],
+                "target_model": r["target_model"],
+                "state": canonical_request_state(r["status"]),
+                "raw_status": r["status"],
+                "answered": bool(r["answered"]),
+                "created_at": r["created_at"],
+                "completed_at": r["completed_at"],
+                "latency": _latency(r["created_at"], r["completed_at"]),
+            }
+            for r in rows
+        ]
+    return {"backends": sorted(cli_registry().names()), "requests": items, "count": len(items)}
+
+
+def start_cli_request_worker(request_id: str) -> dict[str, Any]:
+    """Start a detached worker for a queued cli_requests row (mirror of codex/claude)."""
+    init_db()
+    rid = str(request_id or "").strip()
+    if not rid:
+        return {"started": False, "reason": "empty request id"}
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM cli_requests WHERE id = ?", (rid,)).fetchone()
+        if not row:
+            return {"started": False, "reason": "unknown request"}
+        data = dict(row)
+        if data.get("response") or is_terminal_state(data.get("status")):
+            return {"started": False, "reason": "request already terminal", "status": data.get("status")}
+        if _worker_recent_enough(data):
+            return {"started": False, "reason": "worker already running", "pid": data.get("worker_pid")}
+        now = utc_now()
+        stale_epoch = (_iso_epoch(now) or int(time.time())) - (CLI_ASYNC_WORKER_TIMEOUT_SECONDS + 120)
+        stale_cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stale_epoch))
+        cur = conn.execute(
+            """
+            UPDATE cli_requests
+            SET status = 'running', worker_started_at = ?, notified_at = COALESCE(notified_at, ?)
+            WHERE id = ? AND response IS NULL
+              AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')
+              AND (worker_started_at IS NULL OR worker_started_at < ?)
+            """,
+            (now, now, rid, stale_cutoff),
+        )
+        if cur.rowcount != 1:
+            return {"started": False, "reason": "worker already claimed", "pid": data.get("worker_pid")}
+    try:
+        tmp_dir = BROKER_DIR / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        out_path = tmp_dir / f"cli-worker-{safe_slug(rid)}.log"
+        env = os.environ.copy()
+        env.pop("AGENT_BROKER_CHILD", None)
+        env["AGENT_BROKER_CALLER"] = "agent-broker-cli-worker"
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+        with out_path.open("ab") as fh:
+            proc = subprocess.Popen(
+                _broker_bridge_command("run-cli-request", rid),
+                cwd=str(BROKER_DIR),
+                stdin=subprocess.DEVNULL,
+                stdout=fh,
+                stderr=fh,
+                env=env,
+                creationflags=creationflags,
+            )
+        with db_connect() as conn:
+            conn.execute("UPDATE cli_requests SET worker_pid = ? WHERE id = ?", (proc.pid, rid))
+        return {"started": True, "pid": proc.pid, "timeout_seconds": CLI_ASYNC_WORKER_TIMEOUT_SECONDS, "log": str(out_path)}
+    except Exception as exc:  # noqa: BLE001
+        err = f"failed to start CLI async worker: {type(exc).__name__}: {exc}"
+        with db_connect() as conn:
+            conn.execute(
+                """
+                UPDATE cli_requests SET status = 'error', error = ?, response = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (err, err, utc_now(), rid),
+            )
+        return {"started": False, "reason": err}
+
+
+def run_cli_request_worker(request_id: str) -> dict[str, Any]:
+    """Detached-process body: run one queued cli_requests prompt through its backend and
+    record the answer back on the row. Deterministic; called only by the spawned worker."""
+    init_db()
+    rid = str(request_id or "").strip()
+    if not rid:
+        raise ValueError("request_id is required")
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM cli_requests WHERE id = ?", (rid,)).fetchone()
+        if not row:
+            raise ValueError(f"unknown cli request: {rid}")
+        data = dict(row)
+        if data.get("response") or is_terminal_state(data.get("status")):
+            return {"id": rid, "status": data.get("status"), "skipped": True, "reason": "already terminal"}
+        now = utc_now()
+        conn.execute(
+            """
+            UPDATE cli_requests SET status = 'running', worker_started_at = COALESCE(worker_started_at, ?),
+                worker_pid = ?
+            WHERE id = ?
+            """,
+            (now, os.getpid(), rid),
+        )
+    backend = cli_registry().get(data.get("backend"))
+    if backend is None:
+        err = f"CLI backend '{data.get('backend')}' is no longer registered."
+        return _finalize_cli_worker(rid, data, err, err)
+    started_at = utc_now()
+    mode = str(data.get("mode") or "read-only")
+
+    def runner(command, cwd, timeout):
+        return run_process(command, cwd or str(Path.cwd()), timeout=timeout)
+
+    try:
+        result = backend.execute(
+            data.get("prompt") or "",
+            model=data.get("target_model"),
+            effort=data.get("effort"),
+            mode=mode,
+            project_root=data.get("root_path"),
+            timeout=CLI_ASYNC_WORKER_TIMEOUT_SECONDS,
+            runner=runner,
+        )
+        response = result.response
+        status = "completed" if result.status == "completed" else "error"
+        if result.status == "cli_not_found":
+            response = f"{backend.name} CLI was not found on PATH."
+            status = "error"
+        error = None if status == "completed" else response
+        responder_model = f"{backend.name}:{result.actual_model}" if result.actual_model else f"{backend.name}:unverified"
+        return _finalize_cli_worker(rid, data, response, error or "", status, responder_model, started_at)
+    except Exception as exc:  # noqa: BLE001
+        err = f"{type(exc).__name__}: {exc}"
+        return _finalize_cli_worker(rid, data, err, err, "error", f"{backend.name}:unverified", started_at)
+
+
+def _finalize_cli_worker(
+    rid: str,
+    data: dict[str, Any],
+    response: str,
+    error: str,
+    status: str = "completed",
+    responder_model: str | None = None,
+    started_at: str | None = None,
+) -> dict[str, Any]:
+    response = scrub_surrogates(response)
+    error = scrub_surrogates(error)
+    completed_at = utc_now()
+    with db_connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE cli_requests
+            SET status = ?, response = ?, error = ?, responder = ?, responder_model = ?,
+                completed_at = ?, worker_completed_at = ?
+            WHERE id = ? AND response IS NULL
+              AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')
+            """,
+            (status, response, error or None, "cli-worker", responder_model, completed_at, completed_at, rid),
+        )
+        finalized = cur.rowcount == 1
+    if not finalized:
+        return {"id": rid, "status": "superseded", "skipped": True, "reason": "already finalized by another path"}
+    try:
+        store_consultation(
+            ProjectInfo(data.get("project") or "", data.get("root_path") or str(Path.cwd())),
+            responder_model or data.get("backend") or "cli",
+            data.get("mode") or "read-only",
+            data.get("prompt") or "",
+            response,
+            status,
+            error or None,
+            started_at or completed_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"cli worker consultation history failed for {rid}: {exc}")
+    try:
+        record_agent_event(
+            data.get("project"),
+            data.get("topic"),
+            "cli-worker",
+            "cli_request_completed" if status == "completed" else "cli_request_failed",
+            f"CLI async worker {'failed' if error else 'completed'} request {rid}",
+            response[:2000],
+        )
+        render_request_ledger(data.get("project"), data.get("topic"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"cli worker post-complete failed for {rid}: {exc}")
+    return {
+        "id": rid,
+        "status": status,
+        "responder": "cli-worker",
+        "responder_model": responder_model,
+        "response_chars": len(response or ""),
+        "completed_at": completed_at,
+    }
+
+
 def ledger_path(project_info: ProjectInfo, topic: str | None) -> Path:
     return BROKER_DIR / "topics" / safe_slug(project_info.name) / safe_slug(topic or "all") / "ledger.md"
 
@@ -6845,8 +7375,13 @@ def _terminal_sql() -> str:
 # All Q&A request tables share id/project/topic/prompt/status/response/created_at/
 # completed_at/responder/responder_model/target_model, so status/result/cancel/reap
 # operate over them uniformly.
-_REQUEST_TABLES = ("codex_requests", "antigravity_requests", "claude_requests")
-_REQUEST_KIND = {"codex_requests": "codex", "antigravity_requests": "antigravity", "claude_requests": "claude"}
+_REQUEST_TABLES = ("codex_requests", "claude_requests", "antigravity_requests", "cli_requests")
+_REQUEST_KIND = {
+    "codex_requests": "codex",
+    "claude_requests": "claude",
+    "antigravity_requests": "antigravity",
+    "cli_requests": "cli",
+}
 
 
 def _find_request(rid: str) -> tuple[str, dict[str, Any]] | None:
@@ -6863,12 +7398,11 @@ def _find_request(rid: str) -> tuple[str, dict[str, Any]] | None:
 
 
 def _refresh_stale_codex_request(table: str, row: dict[str, Any]) -> dict[str, Any]:
-    """Turn abandoned codex/claude worker requests into terminal errors when polled.
-    (Name kept for call-site compatibility; since v1.0.19 it also covers claude_requests,
-    whose queued rows previously sat 'queued' forever when nothing picked the inbox up.)"""
-    if table not in ("codex_requests", "claude_requests") or row.get("response") or is_terminal_state(row.get("status")):
+    """Turn abandoned worker requests into terminal errors when polled.
+    Covers codex_requests, claude_requests, and cli_requests (generic async backends)."""
+    if table not in ("codex_requests", "claude_requests", "cli_requests") or row.get("response") or is_terminal_state(row.get("status")):
         return row
-    agent_label = "Codex" if table == "codex_requests" else "Claude"
+    agent_label = "Codex" if table == "codex_requests" else ("Claude" if table == "claude_requests" else "CLI")
     now_epoch = _iso_epoch(utc_now()) or int(time.time())
     status = str(row.get("status") or "").strip().lower()
     reason = ""
@@ -6887,11 +7421,15 @@ def _refresh_stale_codex_request(table: str, row: dict[str, Any]) -> dict[str, A
                     "Codex request expired before an answer was recorded. Older broker versions delivered Codex inbox "
                     "requests to the UI without a reliable answer-capture worker; requeue this request after updating."
                 )
-            else:
+            elif table == "claude_requests":
                 reason = (
                     "Claude request expired: no CLI worker ran it (target not CLI-runnable or pre-v1.0.19 broker) and "
                     "no interactive Claude session/bridge picked the inbox up. Requeue with a CLI model "
                     "(opus/sonnet/fable/haiku) after updating."
+                )
+            else:
+                reason = (
+                    "CLI request expired before the worker completed. Requeue or check the backend availability."
                 )
     if not reason:
         return row
@@ -7875,6 +8413,336 @@ def route_agent_task(args: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _enforce_provider_models(
+    backend: cli_backend_base.CliBackend, target_model: str | None
+) -> dict[str, Any] | None:
+    """Return an error dict when ``backend`` declares a closed ``models`` list and the
+    requested ``target_model`` is not in it (only when target_model is provided)."""
+    if not target_model:
+        return None
+    try:
+        md = backend.metadata()
+    except Exception:  # noqa: BLE001
+        return None
+    allowed = md.get("models") if isinstance(md, dict) else None
+    if not allowed:
+        return None  # no closed list -> any model allowed
+    if str(target_model).strip().lower() in {str(x).strip().lower() for x in allowed if str(x).strip()}:
+        return None
+    return {
+        "status": "error",
+        "error": f"model_not_available: {target_model!r} is not in {backend.name} models: {list(allowed)}",
+        "response": f"The requested model '{target_model}' is not available for execution layer '{backend.name}'. "
+                    f"Choose one of: {', '.join(str(m) for m in allowed)}.",
+        "available_models": list(allowed),
+        "response_is_error": True,
+    }
+
+
+def _dispatch_custom_cli_backend(
+    backend: cli_backend_base.CliBackend,
+    prompt: str,
+    target_model: str | None,
+    effort: str | None,
+    project: str | None,
+    project_root: str | None,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a registered (non-builtin) CLI backend and shape the result as a routing dict.
+
+    When the caller asks for async delivery (``async`` truthy, or ``surface`` in
+    inbox/extension), the prompt is queued as a cli_requests row and a detached worker
+    runs it; collect the answer with request_result/request_status(id). Otherwise it
+    runs synchronously through the unified ``execute`` with an injected runner so real
+    subprocess execution flows through the broker's own ``run_process``.
+    """
+    # Model-list enforcement for provider/backend aliases that declare a limited
+    # `models` set: if the caller requested a model not in that list, fail clearly with
+    # the available choices instead of attempting a doomed call.
+    _model_guard_error = _enforce_provider_models(backend, target_model)
+    if _model_guard_error:
+        return _model_guard_error
+    async_delivery = bool(args.get("async")) or str(args.get("surface") or "").strip().lower() in {
+        "inbox", "extension",
+    }
+    if async_delivery:
+        try:
+            queued = queue_cli_request(
+                backend.name,
+                prompt,
+                project=project,
+                topic=args.get("topic"),
+                target_model=target_model,
+                effort=effort,
+                mode=str(args.get("mode") or "read-only"),
+                task_kind=args.get("task_kind"),
+                timeout=int(args.get("timeout") or CLI_ASYNC_WORKER_TIMEOUT_SECONDS),
+                autorun=True,
+            )
+            return {
+                "status": "delivered",
+                "id": queued["id"],
+                "request_id": queued["id"],
+                "backend": backend.name,
+                "route": "cli_backend_async",
+                # Mirror the async contract: the caller polls request_result/request_status.
+                "note": f"Async {backend.name} request queued as {queued['id']}; collect with request_result(request_id=..., wait_seconds=...)",
+                "queued": queued,
+            }
+        except Exception as exc:  # noqa: BLE001
+            log(f"custom CLI backend '{backend.name}' async queue failed: {exc}")
+            return {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "response": f"{backend.name} async queue failed: {exc}",
+                "response_is_error": True,
+            }
+
+    def runner(command, cwd, timeout):
+        import agent_broker_mcp as _self
+
+        try:
+            code, out, err = _self.run_process(
+                command, cwd or _self.resolve_project(project).root_path, timeout=timeout
+            )
+            return code, out, err
+        except Exception as exc:  # noqa: BLE001
+            return -1, "", f"{type(exc).__name__}: {exc}"
+
+    mode = str(args.get("mode") or "read-only")
+    timeout = int(args.get("timeout") or 300)
+    try:
+        result = backend.execute(
+            prompt,
+            model=target_model,
+            effort=effort,
+            mode=mode,
+            project_root=project_root,
+            timeout=timeout,
+            runner=runner,
+            project=project,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"custom CLI backend '{backend.name}' execution failed: {exc}")
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "response": f"{backend.name} backend failed: {exc}",
+            "response_is_error": True,
+        }
+    if isinstance(result, cli_backend_base.CliResult):
+        payload = result.to_dict()
+        status = "completed" if result.status == "completed" else "error"
+        return {
+            "status": status,
+            "response": result.response,
+            "cli_result": payload,
+            "requested_model": result.requested_model,
+            "actual_model": result.actual_model,
+        }
+    # Backends may also return a plain string (kept for forwards-compatibility).
+    return {"status": "completed", "response": str(result)}
+
+
+# Task-keyword inference for configurable routing_preferences (aligned with qiaomu's
+# TASK_KEYWORDS / ROUTE_PREFERENCES). Chinese + English keywords.
+TASK_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "coding": (
+        "code", "coding", "程序", "代码", "debug", "bug", "修复", "build",
+        "typescript", "python", "react", "api", "script", "implement", "实现",
+    ),
+    "review": (
+        "review", "审查", "代码审查", "安全", "漏洞", "regression", "diff",
+        "audit", "审计", "漏洞扫描",
+    ),
+    "writing": (
+        "write", "写", "文章", "博客", "润色", "文案", "中文", "wechat", "公众号",
+        "draft", "compose", "rewrite",
+    ),
+    "research": (
+        "research", "分析", "调研", "paper", "论文", "compare", "对比", "summarize",
+        "总结", "investigate", "search", "检索",
+    ),
+    "fast": (
+        "cheap", "fast", "快速", "便宜", "低成本", "quick", "low cost",
+    ),
+}
+
+
+def infer_task_type_from_prompt(text: str, requested: str | None = None) -> str:
+    """Infer a task type from an explicit arg or prompt keywords (defaults to 'general')."""
+    if requested:
+        normalized = str(requested).strip().lower()
+        if normalized not in {"auto", "general", "generic"}:
+            return normalized
+    haystack = str(text or "").lower()
+    for task_type, keywords in TASK_KEYWORDS.items():
+        if any(keyword.lower() in haystack for keyword in keywords):
+            return task_type
+    return "general"
+
+
+def route_from_task_preferences(
+    prompt: str,
+    config: dict[str, Any],
+    registry: cli_backend_base.CliRegistry,
+    requested_task_type: str | None = None,
+) -> tuple[str, str | None, str | None] | None:
+    """Resolve (backend, model, effort) from config.json ``routing_preferences``.
+
+    Returns None when no preference is configured for the inferred task type, or the
+    preferred backend is no longer registered. The caller then falls through to the
+    normal default routing.
+    """
+    prefs = config.get("routing_preferences") or {}
+    if not isinstance(prefs, dict) or not prefs:
+        return None
+    inferred = infer_task_type_from_prompt(prompt, requested_task_type)
+    preferred = prefs.get(inferred)
+    if not preferred:
+        return None
+    if isinstance(preferred, str):
+        preferred = [preferred]
+    if not isinstance(preferred, (list, tuple)):
+        return None
+    for name in preferred:
+        backend = registry.get(name)
+        if backend is None:
+            continue
+        md = backend.metadata()
+        return (backend.name, md.get("default_model"), md.get("default_effort"))
+    return None
+
+
+def compare_cli_backends(
+    prompt: str,
+    backends: list[str] | None = None,
+    model: str | None = None,
+    project: str | None = None,
+    timeout: int = 300,
+    parallel: bool = True,
+    max_workers: int | None = None,
+) -> dict[str, Any]:
+    """Run the same prompt through multiple registered CLI backends and return their
+    responses side by side. When ``backends`` is None, all available registered backends
+    are used.
+
+    With ``parallel=True`` (default), backends are invoked concurrently via
+    ``ThreadPoolExecutor`` (bounded by ``max_workers``, defaulting to min(len, 8)) so total
+    wall-clock time ~ the slowest backend rather than the sum. Results keep the order of the
+    selected backends. ``parallel=False`` preserves the original sequential behavior.
+    """
+    registry = cli_registry()
+
+    def _resolve_selected() -> list[cli_backend_base.CliBackend]:
+        all_available = [b for b in registry.all() if b.available()]
+        if not backends:
+            return all_available
+        resolved = [b for name in backends if (b := registry.get(name)) is not None]
+        return resolved if resolved else all_available
+
+    selected = _resolve_selected()
+    if not selected:
+        return {"status": "error", "error": "no available backends to compare", "results": []}
+
+    def _run_one(b: cli_backend_base.CliBackend) -> dict[str, Any]:
+        md = b.metadata()
+        m = model or md.get("default_model")
+        try:
+            r = b.execute(
+                prompt,
+                model=m,
+                timeout=timeout,
+                runner=lambda cmd, cwd, t: run_process(
+                    cmd, cwd or str(project or ""), timeout=t
+                ),
+                project=project,
+            )
+            return {
+                "backend": b.name,
+                "status": r.status,
+                "response": r.response[:8000],
+                "model": r.requested_model or m,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "backend": b.name,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    if parallel and len(selected) > 1:
+        workers = max_workers or min(len(selected), 8)
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            results = list(pool.map(_run_one, selected))
+    else:
+        results = [_run_one(b) for b in selected]
+    errors = [f"{r['backend']}: {r['error']}" for r in results if r.get("error")]
+    return {
+        "status": "completed" if any(r.get("status") == "completed" for r in results) else "error",
+        "results": results,
+        "errors": errors,
+        "count": len(results),
+    }
+
+
+def run_cli_pipeline(
+    prompt: str,
+    steps: list[dict[str, Any]],
+    project: str | None = None,
+    timeout: int = 300,
+) -> dict[str, Any]:
+    """Run a multi-step pipeline: each step specifies a ``backend`` (and optional
+    ``model``). The output of step N becomes the input prompt of step N+1. Returns the
+    final output plus all intermediate outputs."""
+    if not steps:
+        return {"status": "error", "error": "pipeline requires at least one step", "steps": []}
+    registry = cli_registry()
+    current_prompt = prompt
+    outputs: list[dict[str, Any]] = []
+    for idx, step in enumerate(steps):
+        backend_name = str(step.get("backend") or step.get("agent") or step.get("name") or "")
+        if not backend_name:
+            outputs.append({"step": idx, "status": "error", "error": "no backend specified"})
+            continue
+        b = registry.get(backend_name)
+        if b is None:
+            outputs.append({"step": idx, "backend": backend_name, "status": "error", "error": f"unknown backend: {backend_name}"})
+            continue
+        step_model = step.get("model") or b.metadata().get("default_model")
+        try:
+            r = b.execute(
+                current_prompt,
+                model=step_model,
+                timeout=timeout,
+                runner=lambda cmd, cwd, t: run_process(
+                    cmd, cwd or str(project or ""), timeout=t
+                ),
+                project=project,
+            )
+            outputs.append(
+                {
+                    "step": idx,
+                    "backend": backend_name,
+                    "model": step_model,
+                    "status": r.status,
+                    "response": r.response[:16000] if r.status == "completed" else r.response[:8000],
+                }
+            )
+            current_prompt = r.response if r.status == "completed" else current_prompt
+        except Exception as exc:  # noqa: BLE001
+            outputs.append({"step": idx, "backend": backend_name, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
+            break
+    final_status = "completed" if all(o.get("status") == "completed" for o in outputs) else "error"
+    final_response = outputs[-1].get("response", "") if outputs else ""
+    return {
+        "status": final_status,
+        "final_response": final_response,
+        "steps": outputs,
+        "step_count": len(outputs),
+    }
+
+
 def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
@@ -7888,6 +8756,30 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
     target_agent_hint = explicit_target_agent
     target_model = str(args.get("target_model") or args.get("model") or "")
     new_chat = truthy(args.get("new_chat") or args.get("force_new_chat"))
+    # Early custom-CLI dispatch: an explicit target_agent that names a registered
+    # (non-builtin) backend routes there immediately, before model inference could
+    # rewrite it to a built-in family target like antigravity_cli.
+    _BUILTIN_AGENT_SPELLINGS = {
+        "antigravity", "antigravity_cli", "agy",
+        "codex", "codex_cli", "codex_app", "codex_ext",
+        "claude", "claude_code", "claude_cli", "claude_ext", "claude_app",
+        "gemini", "gemini_cli",
+    }
+    if explicit_target_agent is not None:
+        _custom = cli_registry().get(explicit_target_agent)
+        if (
+            _custom is not None
+            and str(explicit_target_agent).strip().lower() not in _BUILTIN_AGENT_SPELLINGS
+        ):
+            return _dispatch_custom_cli_backend(
+                _custom,
+                prompt,
+                target_model or _custom.metadata().get("default_model"),
+                args.get("effort") or args.get("reasoning_effort"),
+                project,
+                resolve_project(project).root_path if project else None,
+                args,
+            ) | {"target_agent": _custom.name, "route": "cli_backend"}
     # Conservative fallback: if no model was named in the structured args, look for an
     # explicit "ask/get Opus" style mention in the prompt so the topic default (e.g.
     # Sonnet) doesn't silently win. A detected mention is a one-off (remember_model
@@ -7907,6 +8799,28 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
             if peer_family:
                 target_agent_hint = default_target_agent_for_family(peer_family)
     requested_label = target_model.strip()
+    # Configurable task->backend preference routing (config.json routing_preferences).
+    # Only applies when the caller did not pin an explicit target_agent/model, so an
+    # explicit ask always wins over the preference table.
+    if not explicit_target_agent and not target_model.strip() and not prompt_target_family:
+        _pref = route_from_task_preferences(prompt, load_config(), cli_registry(), args.get("task_type"))
+        if _pref is not None:
+            _pref_backend, _pref_model, _pref_effort = _pref
+            if str(_pref_backend).lower() not in _BUILTIN_AGENT_SPELLINGS:
+                target_model = _pref_model or ""
+                effort_hint_for_pref = _pref_effort
+                args = dict(args)
+                if effort_hint_for_pref:
+                    args.setdefault("effort", effort_hint_for_pref)
+                return _dispatch_custom_cli_backend(
+                    cli_registry().get(_pref_backend),
+                    prompt,
+                    target_model or cli_registry().get(_pref_backend).metadata().get("default_model"),
+                    args.get("effort") or args.get("reasoning_effort"),
+                    project,
+                    resolve_project(project).root_path if project else None,
+                    args,
+                ) | {"target_agent": _pref_backend, "route": "cli_backend", "task_route": "routing_preferences"}
     # Detect the family over the WHOLE routing intent (all hint fields), so a host
     # word like "antigravity"/"vscode" sitting next to an explicit family + an
     # "extension" intent routes to that family's extension rather than the
@@ -8070,6 +8984,32 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
             (target_agent == "antigravity" and target_model != "Antigravity current selected model")
             or (requested_explicitly and target_agent in GUARD_SURFACES)
         )
+
+    # Custom/registered CLI backends (GenericCliBackend from config, or any adapter a
+    # caller registered) that are NOT one of the built-in family surfaces are dispatched
+    # through the unified CliBackend interface. This is how a user flexibly takes any
+    # local CLI ("target_agent: ollama", "target_agent: my-tool") without a code change.
+    _BUILTIN_TARGETS = {
+        "antigravity", "codex", "codex_app", "codex_cli",
+        "claude_ext", "claude_app", "claude_code", "antigravity_cli", "gemini_cli",
+        "gemini", "antigravity_cli",
+    }
+    custom_backend = cli_registry().get(target_agent)
+    if custom_backend is not None and target_agent not in _BUILTIN_TARGETS:
+        _result = _dispatch_custom_cli_backend(
+            custom_backend,
+            prompt,
+            target_model,
+            model_resolution.get("effort") if isinstance(model_resolution, dict) else effort_hint,
+            project,
+            resolve_project(project).root_path,
+            args,
+        )
+        _result["target_agent"] = target_agent
+        _result["route"] = "cli_backend"
+        _result["surface"] = surface
+        _result["model_resolution"] = model_resolution
+        return _result
 
     if target_agent == "antigravity":
         # Make sure the visible Antigravity panel is up (focuses an existing
@@ -8527,6 +9467,91 @@ TOOLS = [
                 "project": {"type": "string"},
                 "topic": {"type": "string"},
             },
+        },
+    },
+    {
+        "name": "list_cli_backends",
+        "description": "List registered CLI adapters (built-in codex/claude/antigravity/gemini plus any config.json cli_backends custom CLIs). Each can be routed with route_agent_task via its name/aliases.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "list_providers",
+        "description": "List configured execution-layer providers (config.json `providers`: official CLI login states and openai_compat relays) with their models and real availability. Read this to pick an execution layer, then call route_agent_task(target_agent=<provider>, target_model=<model>).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "queue_cli_request",
+        "description": "Queue a prompt for a registered CLI backend (built-in or config.json cli_backends custom) as an async request. Run by a detached worker; collect the answer with request_result(request_id=...).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "backend": {"type": "string"},
+                "prompt": {"type": "string"},
+                "project": {"type": "string"},
+                "topic": {"type": "string"},
+                "target_model": {"type": "string"},
+                "effort": {"type": "string"},
+                "mode": {"type": "string"},
+                "task_kind": {"type": "string"},
+                "timeout": {"type": "integer"},
+                "autorun": {"type": "boolean"},
+            },
+            "required": ["backend", "prompt"],
+        },
+    },
+    {
+        "name": "get_cli_requests",
+        "description": "List async requests queued for registered CLI backends (codex/claude/antigravity/gemini built-ins or config.json cli_backends custom).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "compare_cli_backends",
+        "description": "Run the same prompt through multiple registered CLI backends and return their responses side by side. Pass backends=[] (or omit) to use all available ones. parallel=true (default) runs them concurrently.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "backends": {"type": "array", "items": {"type": "string"}},
+                "model": {"type": "string"},
+                "project": {"type": "string"},
+                "timeout": {"type": "integer"},
+                "parallel": {"type": "boolean"},
+                "max_workers": {"type": "integer"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "run_cli_pipeline",
+        "description": "Run a multi-step pipeline over registered CLI backends. Each step: {backend, model?}. Output of step N becomes the input prompt of step N+1. Returns final + intermediate outputs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"backend": {"type": "string"}, "model": {"type": "string"}},
+                        "required": ["backend"],
+                    },
+                },
+                "project": {"type": "string"},
+                "timeout": {"type": "integer"},
+            },
+            "required": ["prompt", "steps"],
         },
     },
     {
@@ -12409,6 +13434,69 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return text_content(route_agent_task(args))
     if name == "list_agent_models":
         return text_content(list_agent_models(args.get("agent"), args.get("project"), args.get("topic")))
+    if name == "list_cli_backends":
+        backends = cli_registry().all()
+        payload = []
+        for b in backends:
+            md = b.metadata()
+            payload.append(
+                {
+                    "name": b.name,
+                    "aliases": b.aliases,
+                    "family": b.family,
+                    "description": b.description,
+                    "available": b.available(),
+                    "metadata": md,
+                }
+            )
+        return text_content(
+            json.dumps(
+                {"backends": payload, "count": len(payload), "custom": sum(1 for b in backends if b.family == "custom")},
+                ensure_ascii=True,
+            )
+        )
+    if name == "list_providers":
+        return text_content(json.dumps(list_providers(), ensure_ascii=True))
+    if name == "queue_cli_request":
+        return text_content(
+            queue_cli_request(
+                str(args.get("backend") or ""),
+                str(args.get("prompt") or ""),
+                project=args.get("project"),
+                topic=args.get("topic"),
+                target_model=args.get("target_model") or args.get("model"),
+                effort=args.get("effort") or args.get("reasoning_effort"),
+                mode=str(args.get("mode") or "read-only"),
+                task_kind=args.get("task_kind"),
+                timeout=int(args.get("timeout") or 0) or None,
+                autorun=args.get("autorun") if "autorun" in args else None,
+            )
+        )
+    if name == "get_cli_requests":
+        return text_content(
+            get_cli_requests(args.get("project"), int(args.get("limit") or 20))
+        )
+    if name == "compare_cli_backends":
+        return text_content(
+            compare_cli_backends(
+                str(args.get("prompt") or ""),
+                backends=args.get("backends"),
+                model=args.get("model") or args.get("target_model"),
+                project=args.get("project"),
+                timeout=int(args.get("timeout") or 300),
+                parallel=bool(args.get("parallel", True)),
+                max_workers=int(args.get("max_workers") or 0) or None,
+            )
+        )
+    if name == "run_cli_pipeline":
+        return text_content(
+            run_cli_pipeline(
+                str(args.get("prompt") or ""),
+                steps=args.get("steps") or [],
+                project=args.get("project"),
+                timeout=int(args.get("timeout") or 300),
+            )
+        )
     if name == "get_model_routing_guide":
         return text_content(get_model_routing_guide(args.get("agent"), args.get("project"), args.get("topic")))
     if name == "resolve_model_request":
@@ -13083,6 +14171,9 @@ def broker_doctor() -> dict[str, Any]:
             "backend is available, but the default zero-dependency CLI route is unchanged."
         )
 
+    # --- Registered CLI adapters (built-in four + config.json cli_backends custom) ---
+    cli_backend_report = _report_cli_backends()
+
     return {
         "broker_version": BROKER_VERSION,
         "bridge_version": bridge_version,
@@ -13093,8 +14184,119 @@ def broker_doctor() -> dict[str, Any]:
         "nerve_system": nerve,
         "claude_pool": claude_pool_report,
         "claude_sdk": sdk_report,
+        "cli_backends": cli_backend_report,
         "recommendations": recommendations or ["All core surfaces look healthy."],
     }
+
+
+def _report_cli_backends() -> dict[str, Any]:
+    """Read-only status of every registered CLI adapter (built-in + config custom)."""
+    backends = cli_registry().all()
+    entries = []
+    custom_unavailable = 0
+    for b in backends:
+        try:
+            available = b.available()
+        except Exception as exc:  # noqa: BLE001
+            available = False
+            log(f"cli backend '{b.name}' availability probe failed: {exc}")
+        md = b.metadata()
+        is_custom = b.family == "custom"
+        if is_custom and not available:
+            custom_unavailable += 1
+        entries.append(
+            {
+                "name": b.name,
+                "aliases": list(b.aliases),
+                "family": b.family,
+                "description": b.description,
+                "available": available,
+                "custom": is_custom,
+                "backend_type": md.get("backend_type"),
+                "capabilities": md.get("capabilities") or [],
+                "supports_effort": md.get("supports_effort"),
+                "default_model": md.get("default_model"),
+            }
+        )
+    return {
+        "registered": [e["name"] for e in entries],
+        "count": len(entries),
+        "custom_count": sum(1 for e in entries if e["custom"]),
+        "custom_unavailable": custom_unavailable,
+        "backends": entries,
+    }
+
+
+def list_providers() -> dict[str, Any]:
+    """Return a decision-layer-readable view of every configured execution-layer provider.
+
+    For each provider in config.json ``providers``: name, type (official_cli |
+    openai_compat), the underlying CLI/backend it maps to, its choosable models, and a
+    REAL availability flag (official cli logged in? openai_compat reachable?). The
+    decision-layer AI reads this to know which execution layers it can actually drive.
+    """
+    from providers import auth_available, retirement_reason
+
+    providers_cfg = providers_from_config_loaded()
+    registry = cli_registry()
+    items = []
+    for p in providers_cfg:
+        if p.is_official:
+            inner = registry.get(_OFFICIAL_CLI_TO_BACKEND.get((p.cli or "").strip().lower(), p.cli))
+            cli_present = inner is not None
+            logged_in = auth_available(p.cli)
+            retired = retirement_reason(p.cli)
+            if retired:
+                items.append(
+                    {
+                        "name": p.name,
+                        "type": "official_cli",
+                        "cli": p.cli,
+                        "backend": inner.name if inner else None,
+                        "models": p.models or _default_official_models(p.cli),
+                        "available": False,
+                        "reason": retired,
+                        "retired": True,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "name": p.name,
+                        "type": "official_cli",
+                        "cli": p.cli,
+                        "backend": inner.name if inner else None,
+                        "models": p.models or _default_official_models(p.cli),
+                        "available": bool(cli_present and logged_in),
+                        "reason": ("unavailable: cli not installed" if not cli_present
+                                   else ("unavailable: not logged in" if not logged_in else None)),
+                        "retired": False,
+                    }
+                )
+        else:
+            # openai_compat: availability = configured with a base_url (reachability checked
+            # at execute time). Optionally do a lightweight probe here.
+            items.append(
+                {
+                    "name": p.name,
+                    "type": "openai_compat",
+                    "base_url": p.base_url,
+                    "models": p.models,
+                    "available": bool(p.base_url),
+                    "reason": ("unavailable: base_url not set" if not p.base_url else None),
+                }
+            )
+    return {"providers": items, "count": len(items)}
+
+
+def _default_official_models(cli: str | None) -> list[str]:
+    if cli == "claude":
+        return ["opus", "sonnet", "haiku", "fable"]
+    if cli == "codex":
+        return ["gpt-5.5", "gpt-5.4-mini"]
+    if cli == "gemini":
+        return ["gemini-2.5-pro"]
+    return []
 
 
 def render_doctor(report: dict[str, Any]) -> str:
@@ -13183,6 +14385,20 @@ def render_doctor(report: dict[str, Any]) -> str:
                          "use `bridge probe sdk --run-prompt <text>` to test the SDK driver.")
         else:
             lines.append(f"  sdk        : not importable - {sdk.get('note') or sdk.get('error') or ''}".rstrip())
+        lines.append("")
+    clib = report.get("cli_backends")
+    if clib:
+        lines.append("[cli backends: registered adapters (route via route_agent_task)]")
+        lines.append(f"  registered : {', '.join(clib['registered']) or '(none)'}")
+        lines.append(f"  count      : {clib['count']}  custom: {clib['custom_count']}")
+        if clib.get("custom_unavailable"):
+            lines.append(f"  ! {clib['custom_unavailable']} custom backend(s) not found on PATH - "
+                         "route_agent_task will report cli_not_found for them.")
+        for e in clib.get("backends", []):
+            tag = "OK" if e["available"] else "not-found"
+            kind = "custom" if e["custom"] else "builtin"
+            suffix = f" defaults=model:{e.get('default_model')}" if e.get("default_model") else ""
+            lines.append(f"  {e['name']:<16} [{tag},{kind}] {e['description']}{suffix}")
         lines.append("")
     lines.append("[recommendations]")
     for rec in report["recommendations"]:
@@ -13285,6 +14501,80 @@ def handle_managed_claude_cli(argv: list[str]) -> int:
     raise ValueError(f"unknown managed-claude subcommand: {command}")
 
 
+def handle_import_ccswitch_cli(argv: list[str]) -> int:
+    """bridge import-ccswitch: read cc-switch provider registry and print (or write) a
+    providers config block for switchboard.
+
+    Usage:
+      bridge import-ccswitch                    # print the generated providers block
+      bridge import-ccswitch --write            # merge into ~/.agent-broker/config.json
+      bridge import-ccswitch --db <path>        # custom cc-switch db path
+      bridge import-ccswitch --apps claude,codex
+    """
+    db_path = None
+    apps: tuple[str, ...] = ("claude", "codex")
+    write = False
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--db" and i + 1 < len(argv):
+            db_path = argv[i + 1]
+            i += 2
+        elif arg == "--write":
+            write = True
+            i += 1
+        elif arg == "--apps" and i + 1 < len(argv):
+            apps = tuple(a.strip() for a in argv[i + 1].split(",") if a.strip())
+            i += 2
+        elif arg in {"-h", "--help"}:
+            print(__doc__ or "bridge import-ccswitch")
+            return 0
+        else:
+            print(f"unknown arg: {arg}", file=sys.stderr)
+            return 2
+    try:
+        block, key_env = providers.ccswitch_config_block(db_path, apps, env_indirect=True)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    provider_count = len(block.get("providers") or {})
+    print(json.dumps(block, ensure_ascii=True, indent=2))
+    print(f"# imported {provider_count} provider(s) from cc-switch (keys use env refs, see below)", file=sys.stderr)
+    if key_env:
+        env_file = BROKER_DIR / "ccswitch-keys.env"
+        try:
+            providers.write_ccswitch_env_file(key_env, env_file)
+            print(f"# API keys written to {env_file} (git-ignored, keep it out of the repo)", file=sys.stderr)
+            print(f"# Source this file before running the broker: set -a; source {env_file}; set +a", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: failed to write {env_file}: {exc}", file=sys.stderr)
+    if write:
+        if provider_count == 0:
+            print("Nothing to write (no importable providers).", file=sys.stderr)
+            return 0
+        cfg = load_config() or {}
+        existing = cfg.get("providers") or {}
+        if isinstance(existing, dict):
+            existing.update(block.get("providers") or {})
+        else:
+            existing = block.get("providers") or {}
+        cfg["providers"] = existing
+        try:
+            from atomic_io import atomic_write_text
+
+            atomic_write_text(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: failed to write {CONFIG_PATH}: {exc}", file=sys.stderr)
+            return 1
+        print(f"# merged into {CONFIG_PATH}", file=sys.stderr)
+        # Reset the registry so the new providers are picked up lazily.
+        try:
+            _cli_registry._registry = None
+        except Exception:  # noqa: BLE001
+            pass
+    return 0
+
+
 def handle_bridge_cli(argv: list[str]) -> int:
     if not argv or argv[0] in {"help", "-h", "--help"}:
         print(
@@ -13319,6 +14609,8 @@ def handle_bridge_cli(argv: list[str]) -> int:
             "managed-claude (create <supervisor_id> [--project <dir>] [--objective <text>] [--permission-mode <m>] [--decision-mode record_only|codex] | "
             "send <supervisor_id> <prompt> [--interrupt-current] [--confirm-timeout <s>] | status <supervisor_id> [--recent <n>] | list | stop <supervisor_id> [--timeout <s>]) | "
             "probe sdk [--json] [--run-prompt <text>] [--model <name>] | "
+            "openai-serve [--port <n>] [--host <h>] [--foreground] | "
+            "import-ccswitch [--db <path>] [--apps claude,codex] [--write] | "
             "doctor [--json])"
         )
         return 0
@@ -13330,6 +14622,10 @@ def handle_bridge_cli(argv: list[str]) -> int:
         else:
             print(render_doctor(report))
         return 0
+    if command == "openai-serve":
+        return openai_gateway.handle_openai_gateway_cli(argv[1:])
+    if command == "import-ccswitch":
+        return handle_import_ccswitch_cli(argv[1:])
     if command == "goal":
         return goal_supervisor.handle_goal_cli(argv[1:])
     if command == "claude-pool":
@@ -13477,6 +14773,10 @@ def handle_bridge_cli(argv: list[str]) -> int:
         if len(argv) < 2:
             raise ValueError("run-claude-request requires <request_id>")
         result = run_claude_request_worker(argv[1])
+    elif command == "run-cli-request":
+        if len(argv) < 2:
+            raise ValueError("run-cli-request requires <request_id>")
+        result = run_cli_request_worker(argv[1])
     elif command == "completed-unnotified":
         limit = int(argv[1]) if len(argv) > 1 else 20
         result = get_unnotified_antigravity_completions(limit)

@@ -18,7 +18,9 @@
       "skill-repository-maintainer",
       "environment-bootstrap",
       "skill-quality-gate",
-      "agent-switchboard-ops"
+      "agent-switchboard-ops",
+      "dsh-config-sync",
+      "weekly-work-summary"
     ]
   },
   "skills": [
@@ -174,6 +176,34 @@
         "minimal-implementation",
         "clarify-before-change"
       ]
+    },
+    {
+      "name": "dsh-config-sync",
+      "path": "./skills/dsh-config-sync",
+      "version": "1.0.0",
+      "description": "把 DSH 用户配置（~/.dsh 的偏好与模型路由骨架）打包并在设备间安全同步恢复，含只读审计、显式应用与 SHA-256 校验，绝不携带凭据与运行态",
+      "lang": [
+        "zh"
+      ],
+      "category": "maintenance",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": [
+        "skill-repository-maintainer"
+      ]
+    },
+    {
+      "name": "weekly-work-summary",
+      "path": "./skills/weekly-work-summary",
+      "version": "1.0.0",
+      "description": "按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel",
+      "lang": [
+        "zh"
+      ],
+      "category": "reporting",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": []
     }
   ]
 }

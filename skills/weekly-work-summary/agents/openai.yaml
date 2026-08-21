@@ -1,0 +1,4 @@
+interface:
+  display_name: "固定周报汇总"
+  short_description: "按上海工作日汇总三人日报并生成固定格式中文 Excel 文件。"
+  default_prompt: "使用 $weekly-work-summary 汇总本周三人日报并生成固定格式的中文 Excel。"

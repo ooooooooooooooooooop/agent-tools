@@ -7,6 +7,10 @@ agent-broker.log
 # --- local machine config (ship config.example.json instead) ---
 config.json
 
+# --- imported relay secrets (env refs in config.json; secrets live here, never commit) ---
+ccswitch-keys.env
+*.keys.env
+
 # --- runtime artifacts / user data ---
 codex-inbox/
 claude-inbox/
