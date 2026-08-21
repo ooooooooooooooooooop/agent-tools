@@ -1,0 +1,18 @@
+# ============================================================================
+# token-saver：子代理上下文摘要化 —— cordis.patch.yml 可移植片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   dsh-subagent-context-summary.js 复制到同 profile 的 plugins/ 目录。
+#
+# ⚠️ 部署时必改：把 <你的DSH profile目录> 替换为目标设备的实际路径
+#   （Windows 示例：C:\Users\<用户名>\.dsh\profiles\web）。
+#   该条目不能被别的条目覆盖；同一 profile 只注册一次。
+# ============================================================================
+
+- insert:
+  - id: dsh-subagent-context-summary
+    name: '<你的DSH profile目录>\plugins\dsh-subagent-context-summary.js'
+    config:
+      thresholdChars: 30000   # 父会话超过此字符数才启用摘要化（≈7.5k token）
+      tailTurns: 1            # seed 保留最近几轮完整对话
