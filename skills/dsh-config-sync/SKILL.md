@@ -46,24 +46,38 @@ depends_on:
 - 不以旧目标文件、stdout 或 apply exit code 单独作为成功证据。
 - 回滚应从已知稳定归档/提交重新复制，不使用递归删除。
 
+## 模板渲染（跨设备路径适配）
+
+导出时加 `--template` 自动将已知设备路径替换为占位符，恢复时渲染回目标设备值：
+
+| 占位符 | 替换场景 | 示例 |
+|---|---|---|
+| `{{DSH_HOME}}` | `~/.dsh` 目录下的任何路径 | `C:\Users\<user>\.dsh\profiles\web` → `{{DSH_HOME}}\profiles\web` |
+| `{{DESKTOP}}` | 桌面路径（含 Windows 双反斜杠形式） | `C:\Users\<user>\Desktop\work` → `{{DESKTOP}}\work` |
+| `{{HOME}}` | 用户主目录 | `C:\Users\<user>\` → `{{HOME}}\` |
+
+> 替换顺序按最长优先，防止嵌套路径（如 `{{DSH_HOME}}` 在 `{{HOME}}` 之前替换）。恢复时同步处理 Windows 双反斜杠路径。`--with-optional` 导出 `profiles/` 或 `.agent-presets/` 时模板渲染尤其有用，因为这些目录常含设备绝对路径。特殊自定义路径（如非标准布局的 `C:\Desktop\`）需手动模板化后按 `{{DSH_HOME}}`/`{{HOME}}` 同样处理。
+
 ## 打包（export）
 
 1. 确认源 `$DSH_HOME` 存在，并解析其真实路径。
 2. 按“纳入/排除清单”收集要打包的配置项；`.credentials.yaml`、`sessions/`、`storages/` 无论是否显式指定都强制排除。
-3. 在仓库内建立一个脱敏架构录（例如 `dsh-config/` 或打包器输出目录），把每个纳入路径复制进去。复制后跑一次敏感扫描：若发现 `apiKeyEnv` 之外的疑似密钥、`.credentials.yaml` 或运行时文件，把该包标为 FAIL 并停止。
-4. 为每个文件计算 SHA-256，生成 `manifest.json`（含路径、版本号、SHA-256、打包时间）。
-5. 报告：源路径、纳入项、排除项、SHA-256、敏感扫描结果。只有扫描干净才报 `PASS`。
+3. 可选：`--with-optional` 额外纳入 `profiles/`、`.agent-presets/`、`patches/` 目录中的文件。
+4. 在仓库内建立一个脱敏架构录（例如 `dsh-config/` 或打包器输出目录），把每个纳入路径复制进去。复制后跑一次敏感扫描：若发现 `apiKeyEnv` 之外的疑似密钥、`.credentials.yaml` 或运行时文件，把该包标为 FAIL 并停止。
+5. 可选：`--template` 把已知设备路径（`~/.dsh`、桌面、主目录）替换为 `{{DSH_HOME}}`/`{{DESKTOP}}`/`{{HOME}}` 占位符，使包可跨设备复用。渲染后的文件 SHA-256 记录在 manifest 中，恢复时跳过 SHA 校验（因为内容会因设备而异）。
+6. 为每个文件计算 SHA-256，生成 `manifest.json`（含路径、版本号、SHA-256、打包时间、模板渲染记录）。
+7. 报告：源路径、纳入项、排除项、SHA-256、敏感扫描结果、模板化文件列表。只有扫描干净才报 `PASS`。
 
 ## 恢复（restore）
 
 1. 明确目标 `$DSH_HOME`（Windows 常见 `C:\Users\<user>\.dsh`），不得猜测其他用户目录。
-2. 先做只读 `check`：对比归档与目标端，列出 missing / different / extra，不写任何文件。
-3. 用户明确要求时执行 `apply`，然后对同一目标端再次 `check` 并核对 SHA-256。
+2. 先做只读 `check`：对比归档与目标端，列出 missing / different / extra、已模板化文件（跳过 SHA 校验），不写任何文件。
+3. 用户明确要求时执行 `apply`，自动将 `{{DSH_HOME}}`/`{{DESKTOP}}`/`{{HOME}}` 渲染为目标设备路径；然后对同一目标端再次 `check` 并核对 SHA-256（模板化文件仅验证存在性）。
 4. 目标端仅此文件（额外文件）保持不动，并在报告中列明。
 
 ## 输出契约
 
-报告：模式（`check`/`apply`/`export`）、源/目标路径、纳入与排除项数量、`missing`/`different`/`extra`、每个文件的 SHA-256、敏感扫描结果、剩余风险。只有 post-apply 校验干净且敏感扫描为空时才报 `PASS`；有明确的非阻塞目标差异时报 `PARTIAL`。
+报告：模式（`check`/`apply`/`export`）、源/目标路径、纳入与排除项数量、`missing`/`different`/`extra`、每个文件的 SHA-256、敏感扫描结果、模板化文件列表、剩余风险。只有 post-apply 校验干净且敏感扫描为空时才报 `PASS`；有明确的非阻塞目标差异时报 `PARTIAL`。
 
 ## 验证
 
@@ -73,6 +87,6 @@ depends_on:
 export: completed
 sensitive-data scan: PASS (no .credentials.yaml, no runtime files, no inline secrets)
 apply: completed
-post-apply SHA-256 check: PASS
+post-apply SHA-256 check: PASS (templated files: existence verified)
 destination-only files: preserved and reported
 ```

@@ -142,6 +142,97 @@ class RepositoryContractTests(unittest.TestCase):
         result = self.run_script(QUALITY, "--root", str(ROOT), "--strict")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_subagent_usage_observer_behaviors(self) -> None:
+        plugin = ROOT / "dsh" / "subagent-usage-observer" / "subagent-usage-observer-v1.mjs"
+        script = r'''
+import { pathToFileURL } from 'node:url';
+const mod = await import(pathToFileURL(process.argv[1]).href);
+const definitions = [];
+const calls = [
+  { type:'assistant/message', data:{ usage:{ inputTokens:999, outputTokens:999 }, message:{ content:[] } } },
+  { type:'turn/start', data:{} },
+  { type:'turn/start', data:{} },
+  { type:'turn/start', data:{} },
+  { type:'assistant/message', data:{ usage:{ inputTokens:10, outputTokens:2, cacheReadTokens:3, cacheWriteTokens:4, reasoningTokens:5 }, message:{ content:[] } } },
+  { type:'tool/call', data:{ callId:'ok', name:'edit' } },
+  { type:'tool/result', data:{ message:{ content:[{ type:'tool-result', toolCallId:'ok', content:[], isError:false }] } } },
+  { type:'tool/call', data:{ callId:'bad', name:'write' } },
+  { type:'tool/result', data:{ error:{ name:'FsError', code:'DENIED' }, message:{ content:[{ type:'tool-result', toolCallId:'bad', content:[], isError:true }] } } },
+  { type:'tool/call', data:{ callId:'probe', name:'read' } },
+];
+const ctx = {
+  sessionQuery: { readSession: async () => ({ session:{ agentPreset:'cc', seedLength:1 }, events:calls }) },
+  tools: { register: (definition) => definitions.push(definition) },
+};
+mod.apply(ctx);
+const usage = await definitions[0].execute({ sessionId:'s' }, { signal:new AbortController().signal });
+const mutated = await definitions[1].execute({ sessionId:'s', mutationBudget:1, toolBudget:1, turnBudget:1 }, { signal:new AbortController().signal });
+const probeEvents = [
+  { type:'turn/start', data:{} }, { type:'turn/start', data:{} }, { type:'turn/start', data:{} },
+  { type:'tool/call', data:{ callId:'cmd', name:'pwsh', arguments:'{"command":"Get-ChildItem"}' } },
+  { type:'tool/call', data:{ callId:'r1', name:'read' } }, { type:'tool/call', data:{ callId:'r2', name:'read' } },
+  { type:'tool/call', data:{ callId:'r3', name:'read' } }, { type:'tool/call', data:{ callId:'r4', name:'read' } },
+  { type:'tool/call', data:{ callId:'r5', name:'read' } },
+];
+const probeDefs=[]; mod.apply({ sessionQuery:{ readSession:async()=>({ session:{ agentPreset:'cc' }, events:probeEvents }) }, tools:{ register:(d)=>probeDefs.push(d) } });
+const stalled = await probeDefs[1].execute({ sessionId:'s', toolBudget:6, turnBudget:3 }, {});
+const commandEvents = [...probeEvents, { type:'tool/call', data:{ callId:'writecmd', name:'pwsh', arguments:'{"command":"Set-Content -Path x -Value y"}' } }];
+const commandDefs=[]; mod.apply({ sessionQuery:{ readSession:async()=>({ session:{ agentPreset:'cc' }, events:commandEvents }) }, tools:{ register:(d)=>commandDefs.push(d) } });
+const indeterminate = await commandDefs[1].execute({ sessionId:'s', toolBudget:6, turnBudget:3 }, {});
+const blockedDefs=[]; mod.apply({ sessionQuery:{ readSession:async()=>({ session:{ agentPreset:'cc' }, events:[
+  { type:'assistant/message', data:{ message:{ content:[{ type:'text', text:'missing_fact: x\nwhy_required: y\nalready_checked: z\nrequested_context: q' }] } } },
+] }) }, tools:{ register:(d)=>blockedDefs.push(d) } });
+const blocked = await blockedDefs[1].execute({ sessionId:'s' }, {});
+const errorDefs=[]; mod.apply({ sessionQuery:{ readSession:async()=>{ throw new Error('boom') } }, tools:{ register:(d)=>errorDefs.push(d) } });
+const readFailure = await errorDefs[0].execute({ sessionId:'s' }, {});
+console.log(JSON.stringify({ usage, mutated, stalled, indeterminate, blocked, readFailure }));
+'''
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script, str(plugin)],
+            cwd=str(ROOT), text=True, capture_output=True, encoding="utf-8", check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["usage"]["preset"], "cc")
+        self.assertEqual(data["usage"]["seedLength"], 1)
+        self.assertEqual(data["usage"]["tokens"]["uncachedInput"], 10)
+        self.assertEqual(data["usage"]["tokens"]["cacheWrite"], 4)
+        self.assertEqual(data["usage"]["tokens"]["reasoning"], 5)
+        self.assertEqual(data["usage"]["mutations"], 1)
+        self.assertEqual(data["mutated"]["state"], "MUTATED")
+        self.assertEqual(data["stalled"]["state"], "STALLED")
+        self.assertEqual(data["indeterminate"]["state"], "IMPLEMENTING")
+        self.assertIn("explicit mutation intent", data["indeterminate"]["evidence"])
+        self.assertEqual(data["blocked"]["state"], "BLOCKED")
+        self.assertEqual(data["readFailure"]["error"], "session read failed")
+
+    def test_subagent_splice_summarizer_preserves_non_text_blocks(self) -> None:
+        plugin = ROOT / "dsh" / "subagent-splice-summarizer" / "subagent-splice-summarizer-v1.mjs"
+        script = r'''
+import { pathToFileURL } from 'node:url';
+const mod = await import(pathToFileURL(process.argv[1]).href);
+let listener; const ctx={ on:(_name, fn)=>{ listener=fn } }; mod.apply(ctx,{ thresholdChars:20 });
+const image={ type:'image', attachment:{ id:'a' } };
+const raw=['## Status','DONE','','## Changed','a.js','','## Validation','PASS','','details '.repeat(100)].join('\n');
+const report={ id:'r', role:'user', source:{ kind:'subagent-report' }, content:[{ type:'text', text:raw }, image] };
+const human={ id:'h', role:'user', source:{ kind:'human' }, content:[{ type:'text', text:'keep' }] };
+const short={ id:'s', role:'user', source:{ kind:'subagent-report' }, content:[{ type:'text', text:'short' }] };
+let nextCalls=0; const out=await listener({}, async()=>{ nextCalls++; return { kind:'enter', messages:[human, short, report] } });
+console.log(JSON.stringify({ nextCalls, humanSame:out.messages[0]===human, shortSame:out.messages[1]===short, imageSame:out.messages[2].content[1]===image, types:out.messages[2].content.map(x=>x.type), summary:out.messages[2].content[0].text }));
+'''
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script, str(plugin)],
+            cwd=str(ROOT), text=True, capture_output=True, encoding="utf-8", check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["nextCalls"], 1)
+        self.assertTrue(data["humanSame"])
+        self.assertTrue(data["shortSame"])
+        self.assertTrue(data["imageSame"])
+        self.assertEqual(data["types"], ["text", "image"])
+        self.assertIn("## Status", data["summary"])
+
     def test_taskflow_lifecycle_in_isolated_project(self) -> None:
         with tempfile.TemporaryDirectory(prefix="skills-taskflow-") as raw:
             project = Path(raw)

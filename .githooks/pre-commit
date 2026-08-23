@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Pre-commit gate for the agent-tooling repository.
+#
+# Install once per clone:
+#   git config core.hooksPath .githooks
+#
+# Runs the deterministic local gates: repo structure, skill quality, Python
+# syntax, unit tests, and whitespace checks. Markdown linting and MCP tests run
+# in CI (they need external tools); the hook stays dependency-free and fast.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+PY="${PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python
+
+step() { printf '\n== %s ==\n' "$1"; }
+
+step "validate_repo.py --strict"
+"$PY" scripts/validate_repo.py --strict
+
+step "skill-quality-gate --strict"
+"$PY" skills/skill-quality-gate/scripts/quality_report.py --root . --strict
+
+step "python syntax (py_compile)"
+FAILED=0
+while IFS= read -r -d '' f; do
+  "$PY" -m py_compile "$f" || FAILED=1
+done < <(find . -name "*.py" -not -path "*/__pycache__/*" -print0)
+if [ "$FAILED" -ne 0 ]; then
+  echo "python syntax check: FAIL"
+  exit 1
+fi
+
+step "repository regression tests"
+"$PY" -m unittest discover -s tests -q
+
+step "whitespace check (git diff --check)"
+git diff --cached --check
+git diff --check
+
+echo
+echo "pre-commit gate: PASS"

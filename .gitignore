@@ -31,6 +31,11 @@ _db_schema.py
 _mem_src.py
 _sqlite_src.py
 
+# One-off local dsh probe / token audit scripts — never publish
+dsh-*.js
+dsh-*.json
+scripts/summarize_all_sessions.js
+
 # Local CLI-adapter design/survey docs (contain local model names & relay details) —
 # keep on this machine, never publish to GitHub
 docs/cli-adapter-*.md

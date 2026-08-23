@@ -1,0 +1,15 @@
+# ============================================================================
+# subagent-usage-observer：子代理用量观测 —— cordis.patch.yml 可移植片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   subagent-usage-observer-v1.mjs 复制到同 profile 的 plugins/ 目录。
+#
+# 加载器按 patch 文件所在目录解析 './plugins/...'，所以相对路径即可跨设备，
+# 无需绝对路径（参照同仓库 dsh/llm-overflow-classifier）。
+# 该条目不能被别的条目覆盖；同一 profile 只注册一次。
+# ============================================================================
+
+- insert:
+  - id: subagent-usage-observer
+    name: './plugins/subagent-usage-observer-v1.mjs'

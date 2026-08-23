@@ -1,0 +1,42 @@
+{
+  "checkpoint_id": "cp-001",
+  "objective": "原始目标（逐字拷贝自 create_goal，禁止改写）",
+  "phase": "阶段名或里程碑描述",
+  "created_at": "ISO-8601 时间戳",
+  "evidence": [
+    {
+      "type": "command_output",
+      "cmd": "pytest -q --tb=short tests/test_perm.py",
+      "exit_code": 0,
+      "last_lines": "最后 20~30 行日志摘要"
+    },
+    {
+      "type": "file_hash",
+      "path": "src/auth/query.py",
+      "sha256": "abc123..."
+    },
+    {
+      "type": "worker_skip_register",
+      "worker_id": "w2",
+      "skipped": [
+        {
+          "file": "src/legacy/v2_query.py",
+          "line": 42,
+          "reason": "ambiguous pattern"
+        }
+      ]
+    }
+  ],
+  "alignment_decision": "PASS",
+  "decider_notes": "验收判定依据说明；如含未决项必须如实记录为 PARTIAL",
+  "gates_run": [
+    {
+      "gate": "gate_consistency",
+      "verdict": "PASS"
+    },
+    {
+      "gate": "gate_cost",
+      "verdict": "OK"
+    }
+  ]
+}

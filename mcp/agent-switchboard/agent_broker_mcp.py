@@ -8865,6 +8865,25 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         "claude", "claude_code", "claude_cli", "claude_ext", "claude_app",
         "gemini", "gemini_cli",
     }
+    # Early provider model match: if target_model is named and matches any configured
+    # provider (e.g. CPA declaring gemini-3.7-flash or gpt-5.6-luna), route straight to that
+    # provider unless the caller explicitly named a different non-provider agent.
+    if target_model.strip() and (explicit_target_agent is None or str(explicit_target_agent).strip().lower() in _BUILTIN_AGENT_SPELLINGS):
+        _m_lower = target_model.strip().lower()
+        for _p in providers_from_config_loaded():
+            if _p.models and any(str(m).strip().lower() == _m_lower for m in _p.models):
+                _p_backend = cli_registry().get(_p.name)
+                if _p_backend is not None:
+                    return _dispatch_custom_cli_backend(
+                        _p_backend,
+                        prompt,
+                        target_model,
+                        args.get("effort") or args.get("reasoning_effort"),
+                        project,
+                        resolve_project(project).root_path if project else None,
+                        args,
+                    ) | {"target_agent": _p_backend.name, "route": "provider_model_match"}
+
     if explicit_target_agent is not None:
         _custom = cli_registry().get(explicit_target_agent)
         if (

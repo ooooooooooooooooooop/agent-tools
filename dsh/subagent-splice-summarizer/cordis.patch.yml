@@ -1,0 +1,17 @@
+# ============================================================================
+# subagent-splice-summarizer：子代理报告 splice 摘要化 —— cordis.patch.yml 可移植片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   subagent-splice-summarizer-v1.mjs 复制到同 profile 的 plugins/ 目录。
+#
+# 加载器按 patch 文件所在目录解析 './plugins/...'，所以相对路径即可跨设备，
+# 无需绝对路径（参照同仓库 dsh/llm-overflow-classifier）。
+# 该条目不能被别的条目覆盖；同一 profile 只注册一次。
+# ============================================================================
+
+- insert:
+  - id: subagent-splice-summarizer
+    name: './plugins/subagent-splice-summarizer-v1.mjs'
+    config:
+      thresholdChars: 8000   # 子代理报告超过此字符数才摘要化（≈5.3k token）

@@ -32,6 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 |---|---|---|
 | [simulate-elite-experts](./skills/simulate-elite-experts) | 模拟顶级专家视角，交叉质询并综合复杂决策 | 可选 |
 | [unified-taskflow](./skills/unified-taskflow) | 管理真正复杂的多阶段任务，追踪锚点、检查点与验收 | 条件启用 |
+| [decision-gates](./skills/decision-gates) | 为决策层加装五道防偏闸门：原始证据锚、对抗审计、一致性校验、成本比对与防御自检 | 可选 |
 | [clarify-before-change](./skills/clarify-before-change) | 在修改前澄清范围、风险、假设与验收标准 | 核心 |
 | [task-mode-router](./skills/task-mode-router) | 按任务规模与风险选择执行深度 | 核心 |
 | [natural-rewrite](./skills/natural-rewrite) | 在保持事实、语气和含义的前提下自然改写文本 | 可选 |
@@ -39,6 +40,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [skill-repository-maintainer](./skills/skill-repository-maintainer) | 审计、验证并安全同步 Skill 包 | 核心 |
 | [environment-bootstrap](./skills/environment-bootstrap) | 恢复 Codex Skill 环境并校验文件哈希 | 核心 |
 | [skill-quality-gate](./skills/skill-quality-gate) | 评估 Skill 的触发边界、输出契约与回归质量 | 核心 |
+| [execution-discipline](./skills/execution-discipline) | 在长程会话中强制五条执行纪律：零轮询、门禁自修、窄探针、委派探查与进度回报 | 核心 |
+| [subagent-execution-governance](./skills/subagent-execution-governance) | 子代理契约型治理：探查/实现分离、契约快照含负空间、三级有界读取、行动门槛与结构化 BLOCKED，附会话纪律体检脚本 | 条件 |
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
 | [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
 | [weekly-work-summary](./skills/weekly-work-summary) | 按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel | 可选 |
@@ -58,6 +61,8 @@ npx skills add https://github.com/ooooooooooooooooooop/agent-tools --skill <skil
 | 插件 | 简介 | 目标 profile |
 |---|---|---|
 | [llm-overflow-classifier](./dsh/llm-overflow-classifier) | 把 "Input token exceed the limit" 措辞归类为 CONTEXT_WINDOW_EXCEEDED，触发压缩/重试 | web |
+| [subagent-usage-observer](./dsh/subagent-usage-observer) | 从子代理会话日志查询模型、token、工具与保守状态判定 | 任意已安装 profile |
+| [subagent-splice-summarizer](./dsh/subagent-splice-summarizer) | 有损压缩超长子代理文本报告，同时保留非文本块 | 任意已安装 profile |
 
 DSH 插件不设注册表；包内 `README.md` 提供跨设备安装步骤，发布内容不含本机路径。
 

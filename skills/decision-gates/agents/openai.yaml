@@ -1,0 +1,4 @@
+interface:
+  display_name: "决策闸门"
+  short_description: "为长程任务决策层加装五道防偏闸门：原始证据锚、对抗审计、一致性校验、成本比对、防御自检。"
+  default_prompt: "使用 $decision-gates，在长程任务的每个 checkpoint 落盘原始证据锚，按闸门协议独立验收、防摘要偏差，确保决策层不跑偏。"
