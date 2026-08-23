@@ -129,6 +129,34 @@ class FileLockTests(unittest.TestCase):
             self.assertFalse(second.acquire())
             first.release()
 
+    def test_windows_permission_error_on_existing_lock_is_contention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "lock"
+            lock_path.write_text("holder", encoding="utf-8")
+            lock = atomic_io.FileLock(lock_path, timeout=0.0, stale_seconds=3600.0)
+            with mock.patch.object(atomic_io.os, "name", "nt"), \
+                    mock.patch.object(atomic_io.os, "open", side_effect=PermissionError(13, "denied", str(lock_path))):
+                self.assertFalse(lock.acquire())
+
+    def test_permission_error_without_lock_file_still_surfaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "lock"
+            lock = atomic_io.FileLock(lock_path, timeout=0.0)
+            with mock.patch.object(atomic_io.os, "name", "nt"), \
+                    mock.patch.object(atomic_io.os, "open", side_effect=PermissionError(13, "denied", str(lock_path))):
+                with self.assertRaises(PermissionError):
+                    lock.acquire()
+
+    def test_non_windows_permission_error_always_surfaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "lock"
+            lock_path.write_text("holder", encoding="utf-8")
+            lock = atomic_io.FileLock(lock_path, timeout=0.0)
+            with mock.patch.object(atomic_io.os, "name", "posix"), \
+                    mock.patch.object(atomic_io.os, "open", side_effect=PermissionError(13, "denied", str(lock_path))):
+                with self.assertRaises(PermissionError):
+                    lock.acquire()
+
     def test_context_manager_raises_timeout_error_and_never_proceeds(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock_path = Path(tmp) / "lock"

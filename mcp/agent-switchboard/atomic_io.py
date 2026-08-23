@@ -121,6 +121,19 @@ class FileLock:
                 if time.monotonic() >= deadline:
                     return False
                 time.sleep(self.poll_interval)
+            except PermissionError:
+                # Windows can report EACCES while another thread/process is
+                # creating or deleting this exact O_EXCL lock file. Retry that
+                # race within the normal bounded wait, but never hide a real
+                # ACL/directory failure or change non-Windows semantics.
+                if os.name != "nt":
+                    raise
+                self._remove_if_stale()
+                if time.monotonic() >= deadline:
+                    if self.path.exists():
+                        return False
+                    raise
+                time.sleep(self.poll_interval)
 
     def release(self) -> None:
         if self._fd is not None:

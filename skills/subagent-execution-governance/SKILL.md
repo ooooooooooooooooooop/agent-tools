@@ -264,4 +264,3 @@ Details:    artifact://agent-A/report
 - `splice-ab-experiment.js <session id|zstd 路径>`：A/B 体积对比（全量注入 vs 摘要化的字符/token 节省，按轮聚合，top 条目前 5）。
 
 两个脚本均 Node ≥22（`node:zlib` 内置 zstd），支持直接传会话 ID 自动定位。
-

@@ -34,7 +34,7 @@ depends_on:
 | `.agent-presets/` | 目录 | ⚠️ 可选 |
 | `patches/` | 目录 | ⚠️ 可选 |
 | `.credentials.yaml` | 文件 | ❌ **强制排除**（真实凭据，打进公开仓库即泄密） |
-| `sessions/ `storages/` | 目录 | ❌ **强制排除**（运行时态，仓库硬约束禁止） |
+| `sessions/`storages/` | 目录 | ❌ **强制排除**（运行时态，仓库硬约束禁止） |
 | `skills/` | 目录 | ⛔ 不归本 skill，交给 `environment-bootstrap` |
 
 ## 安全边界

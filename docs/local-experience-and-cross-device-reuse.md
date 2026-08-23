@@ -143,10 +143,10 @@
 
 ### 3.4 既有已验证业界对照（execution-discipline 内嵌，2026-08-22 已 web 核验）
 
-- Anthropic Agent Teams mailbox（零轮询）：https://code.claude.com/docs/en/agent-teams
-- LangGraph RetryPolicy / Durable Execution：https://docs.langchain.com/oss/python/langgraph/use-graph-api#add-retry-policies 、https://docs.langchain.com/oss/python/langgraph/durable-execution
-- Azure Circuit Breaker 模式：https://learn.microsoft.com/azure/architecture/patterns/circuit-breaker
-- 上下文/记忆：https://code.claude.com/docs/en/how-claude-code-works 、https://langchain-ai.github.io/langgraph/concepts/persistence/ 、https://docs.mem0.ai/migration/platform-v2-to-v3 、https://help.getzep.com/v2/memory
+- Anthropic Agent Teams mailbox（零轮询）：<https://code.claude.com/docs/en/agent-teams>
+- LangGraph RetryPolicy / Durable Execution：<https://docs.langchain.com/oss/python/langgraph/use-graph-api#add-retry-policies> 、<https://docs.langchain.com/oss/python/langgraph/durable-execution>
+- Azure Circuit Breaker 模式：<https://learn.microsoft.com/azure/architecture/patterns/circuit-breaker>
+- 上下文/记忆：<https://code.claude.com/docs/en/how-claude-code-works> 、<https://langchain-ai.github.io/langgraph/concepts/persistence/> 、<https://docs.mem0.ai/migration/platform-v2-to-v3> 、<https://help.getzep.com/v2/memory>
 
 ---
 
