@@ -89,10 +89,10 @@ depends_on:
 
 | 铁律 | 业界做法 | 来源 |
 |------|---------|------|
-| 一 等通知不轮询 | Anthropic Agent Teams mailbox：子代理 `SendMessage` 主动投递，主代理无需轮询 | https://code.claude.com/docs/en/agent-teams |
-| 三 防惊群 | 指数退避：LangGraph `RetryPolicy` / CrewAI `max_retries`；在途接管：LangGraph Durable Execution | https://docs.langchain.com/oss/python/langgraph/use-graph-api#add-retry-policies / https://docs.langchain.com/oss/python/langgraph/durable-execution |
-| 三 熔断 | Circuit Breaker 模式：连续 N 次失败后快速失败、冷却后重试（框架多需外置） | https://learn.microsoft.com/azure/architecture/patterns/circuit-breaker |
-| 四 上下文 | auto-compact（Claude Code）/ LangGraph checkpoint（按 thread_id 恢复）/ Mem0·Zep 结构化记忆 | https://code.claude.com/docs/en/how-claude-code-works / https://langchain-ai.github.io/langgraph/concepts/persistence/ / https://docs.mem0.ai/migration/platform-v2-to-v3 / https://help.getzep.com/v2/memory |
+| 一 等通知不轮询 | Anthropic Agent Teams mailbox：子代理 `SendMessage` 主动投递，主代理无需轮询 | <https://code.claude.com/docs/en/agent-teams> |
+| 三 防惊群 | 指数退避：LangGraph `RetryPolicy` / CrewAI `max_retries`；在途接管：LangGraph Durable Execution | <https://docs.langchain.com/oss/python/langgraph/use-graph-api#add-retry-policies> / <https://docs.langchain.com/oss/python/langgraph/durable-execution> |
+| 三 熔断 | Circuit Breaker 模式：连续 N 次失败后快速失败、冷却后重试（框架多需外置） | <https://learn.microsoft.com/azure/architecture/patterns/circuit-breaker> |
+| 四 上下文 | auto-compact（Claude Code）/ LangGraph checkpoint（按 thread_id 恢复）/ Mem0·Zep 结构化记忆 | <https://code.claude.com/docs/en/how-claude-code-works> / <https://langchain-ai.github.io/langgraph/concepts/persistence/> / <https://docs.mem0.ai/migration/platform-v2-to-v3> / <https://help.getzep.com/v2/memory> |
 
 **熔断补充（业界有、本 skill 此前缺）**：同一工具/通道**连续失败 3 次**即熔断——停止重试、记入 checkpoint、切换方案或等待冷却后再试；严禁在同一通道上无限退避重试。与铁律一"收到重复调用警告立即换策略"联动。
 

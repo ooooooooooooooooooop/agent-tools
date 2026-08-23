@@ -109,7 +109,6 @@ python -m unittest discover -s tests -v
 python -m unittest discover -s mcp/agent-switchboard/tests -v
 ```
 
-
 ## 许可证
 
 - 仓库自有内容与 Skills：根目录 [MIT](./LICENSE)。
