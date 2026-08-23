@@ -6,11 +6,13 @@
       "minimal-implementation",
       "skill-repository-maintainer",
       "environment-bootstrap",
-      "skill-quality-gate"
+      "skill-quality-gate",
+      "execution-discipline"
     ],
     "full": [
       "simulate-elite-experts",
       "unified-taskflow",
+      "decision-gates",
       "clarify-before-change",
       "task-mode-router",
       "natural-rewrite",
@@ -18,6 +20,8 @@
       "skill-repository-maintainer",
       "environment-bootstrap",
       "skill-quality-gate",
+      "execution-discipline",
+      "subagent-execution-governance",
       "agent-switchboard-ops",
       "dsh-config-sync",
       "weekly-work-summary"
@@ -204,6 +208,55 @@
       "priority": "P1",
       "tier": "optional",
       "depends_on": []
+    },
+    {
+      "name": "decision-gates",
+      "path": "./skills/decision-gates",
+      "version": "0.1.0",
+      "description": "为决策层加装五道防偏闸门（原始证据锚、对抗审计、一致性校验、成本比对、防御自检），防止长程任务目标漂移与验收失真",
+      "lang": [
+        "zh"
+      ],
+      "category": "workflow",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": [
+        "task-mode-router",
+        "minimal-implementation"
+      ]
+    },
+    {
+      "name": "execution-discipline",
+      "path": "./skills/execution-discipline",
+      "version": "0.1.0",
+      "description": "在 DSH 长程/多工具会话中强制五条执行纪律，防止高频反模式重演：禁止无 wait 轮询、禁止把门禁拒绝当交付物抛回决策、外部研究先探测通道再极窄探针、探查派子代理不肉身 Read、子代理派发带进度回报协议。用于接手长任务、等待子代理/后台任务、发起外部研究、收到 INVALID/FAIL/PARTIAL 门禁结果、收到“重复工具调用”系统警告、需要读取多个源码文件或大文件，以及任何需要“执行层不空转、不惊群、不绕门禁”的执行场景。不用于单轮小修改或无需持久化的临时问答。",
+      "lang": [
+        "zh"
+      ],
+      "category": "workflow",
+      "priority": "P0",
+      "tier": "core",
+      "depends_on": [
+        "task-mode-router",
+        "minimal-implementation"
+      ]
+    },
+    {
+      "name": "subagent-execution-governance",
+      "path": "./skills/subagent-execution-governance",
+      "version": "0.1.0",
+      "description": "把子代理派发从监督型治理升级为契约型治理：探查/实现/验证角色分离、契约快照（含负空间）、三级有界读取、单写者文件所有权、行动门槛替代轮次门槛、结构化 BLOCKED、token/工具/轮次预算、结构化结果回收与 repair-contract 恢复。用于派发实现型子代理、设计或评审子代理执行协议、子代理空转/并行写冲突/上下文膨胀复盘。不用于纯问答、单轮小修改或已有成熟任务流程的普通委派。",
+      "lang": [
+        "zh"
+      ],
+      "category": "workflow",
+      "priority": "P1",
+      "tier": "conditional",
+      "depends_on": [
+        "task-mode-router",
+        "execution-discipline",
+        "minimal-implementation"
+      ]
     }
   ]
 }

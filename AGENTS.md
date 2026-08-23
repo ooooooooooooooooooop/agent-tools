@@ -36,3 +36,15 @@ git diff --check                                  # 空白错误
 
 - `mcp/agent-switchboard/_sdk_probe_deps/` 曾放 Claude Agent SDK 缓存（约 360MB，含打包的 claude.exe）。**已移到** `~/.cache/agent-switchboard-sdk/`，`claude_sdk_backend.py` 从那里探测（可用 `AGENT_BROKER_CLAUDE_SDK_DEPS` 覆盖）。仓库不应再出现这种大体积缓存目录。
 - 任何 `state.sqlite`、`.jsonl`、`.log`、用户路径、会话/任务 ID、模型/认证信息都是运行时态，**禁止**由 `mcp.json` 或 CI 校验放行到发布集。
+
+## 本地经验与跨设备复用入口（新会话/新设备先读这里）
+
+本仓库既是浏览导航，也是**本地特有经验的事实源**。新会话或新设备上第一个会话，先按此索引直达，不重复发明：
+
+| 文档 | 用途 |
+|---|---|
+| [`docs/sync-ongoing.md`](./docs/sync-ongoing.md) | **优化→同步闭环 SOP**：日常优化流程、跨设备首次/增量同步、各层 SSOT 归属 |
+| [`docs/publishing.md`](./docs/publishing.md) | 可发布性矩阵（哪些包能进哪些市场）+ 发布检查清单 |
+| [`docs/local-experience-and-cross-device-reuse.md`](./docs/local-experience-and-cross-device-reuse.md) | 本地特有经验全景总结（治理/插件/技能/证据链）+ 业界做法对照 |
+
+跨设备同步工具：`scripts/sync_skills.py`（技能栈）、`skills/dsh-config-sync`（配置骨架，含 `--template` 路径适配）、`scripts/publish_check.py` / `scripts/run_skill_evals.py`（发布与质量门禁）。凭据纪律：同步/发布永远只带环境变量名引用，`.credentials.yaml` 与运行态绝不出包。

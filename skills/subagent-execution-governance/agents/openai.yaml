@@ -1,0 +1,4 @@
+interface:
+  display_name: "子代理执行治理"
+  short_description: "把子代理派发从监督型治理升级为契约型治理：探查/实现/验证角色分离、契约快照（含负空间）、三级有界读取、单写者文件所有权、行动门槛替代轮次门槛、结构化 BLOCKED、token/工具/轮次预算、结构化结果回收与 repair-contract 恢复。用于派发实现型子代理、审计子代理空转、复盘长会话子代理纪律。"
+  default_prompt: "使用 $subagent-execution-governance，在派发实现型子代理时先过契约快照（含负空间）+ 三级读取 + 单写者检查 + 行动门槛 + 状态机 + 预算 + 结构化结果回收，防止子代理空转、并行写冲突、上下文膨胀与 token 浪费。"

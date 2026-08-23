@@ -44,3 +44,13 @@ jobs:
 
       - name: Run portable elite-experts smoke tests
         run: python3 skills/simulate-elite-experts/scripts/run_examples.py
+
+      - name: Run structural skill evals
+        run: python3 scripts/run_skill_evals.py
+
+      - name: Verify local pre-commit hook installs and passes
+        run: |
+          bash -n .githooks/pre-commit
+          git config core.hooksPath .githooks
+          chmod +x .githooks/pre-commit
+          ./.githooks/pre-commit
