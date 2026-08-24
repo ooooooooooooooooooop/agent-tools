@@ -544,6 +544,22 @@ class AsyncCliRequestTests(unittest.TestCase):
                 )
         self.assertEqual(queued["status"], "queued")
 
+    def test_request_result_truncates_large_responses_by_default(self):
+        # A large worker answer must not blow up the caller context: default
+        # max_chars caps the response and flags truncation; max_chars=0 returns full.
+        b = self.broker
+        long_reply = "A" * 5000
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, long_reply, "")):
+                queued = b.queue_cli_request("echo", "big", project="p", autorun=False)
+                b.run_cli_request_worker(queued["id"])
+        short = b.request_result(queued["id"])
+        self.assertTrue(short["response_truncated"])
+        self.assertLess(len(short["response"]), 3000)
+        full = b.request_result(queued["id"], max_chars=0)
+        self.assertFalse(full["response_truncated"])
+        self.assertEqual(full["response"], long_reply)
+
     def test_worker_marks_cli_not_found(self):
         b = self.broker
         with mock.patch.object(self.reg.get("echo"), "discover", return_value=None):

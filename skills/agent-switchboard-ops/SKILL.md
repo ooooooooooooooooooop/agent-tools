@@ -66,7 +66,7 @@ description: |
 - **看门狗必须对用户可见**：启动长监督/跨轮等待时，必须在回复中报告「下一次检查触发时间」（精确到时分秒，含时区），不能黑箱等待；超时无事件则由 stall 事件接管，管理者不得静默循环。
 - **回合结束自查一次**：每个 goal round / 长等待结束时，`list_managed_claude_supervisors` 检查本项目存活 supervisor；任务已完成但仍存活的立即 close；`attention_required` 的先收集最终结果再关闭。
 - **stale 记录识别**：`daemon_alive=false` 但状态非终态（`stopped`/`failed`）的 supervisor 会带 `stale_uncollected: true`——daemon 已死无法回收，状态残留；出现时在 checkpoint 登记后清理状态记录，不让它永久残留。
-- **返修轮次预算（防套娃）**：同一 artifact 的 review→repair 循环最多 **2 轮**；第 3 轮发现仍需返修时，禁止继续同一链——暂停，重新设计合同（或升级决策），并在验收报告记录 `repair_rounds`。参照 GitLab `retry:max`/Jenkins `retry(N)` 的收敛上限思想；此预算在决策层执行（broker 无法语义判断"同一 artifact"）。
+- **返修轮次预算（防套娃，broker 强制）**：同一 artifact 的 review→repair 循环最多 **2 轮**（第 3 轮起被 broker 拒绝）。**实现方式**：每次 `route_agent_task` / `queue_cli_request` 派发同一 artifact 的返修时，必须传 `chain_key=<artifact 稳定 id>`（同一链同 key）；broker 对同一 chain_key 计数 ≥3 时直接拒绝（`chain_budget_exceeded`）。若收到该错误：停止该链，重新设计合同（或升级决策），并在验收报告记录 `repair_rounds`。参照 GitLab `retry:max`/Jenkins `retry(N)` 的收敛上限思想。
 - **悬挂即处置，不留过夜**：任何 supervisor 若已无待处理命令且事件流停滞，即使本回合没有它的结果，也 `stop_managed_claude_supervisor` 并在 checkpoint 记录，由下一会话续接，而不是长期悬挂。
 
 ### 等待纪律：WAIT 与 GET 不得夹用（防轮询变体）
