@@ -235,6 +235,19 @@ class ManagedClaudeTests(unittest.TestCase):
         status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
         self.assertFalse(status["stale_uncollected"])
 
+    def test_status_summary_is_truncated_on_output(self):
+        # Large stored summaries must not be returned in full on every status read:
+        # the output is capped (stored value untouched) to protect caller context.
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state["last_result_summary"] = "Z" * 5000
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertLess(len(status["last_result_summary"]), 400)
+        self.assertTrue(status["last_result_summary_truncated"])
+        stored = managed_claude._read_json(state_path)
+        self.assertEqual(len(stored["last_result_summary"]), 5000)  # stored value untouched
+
     def test_start_requires_stall_timeout(self):
         with self.assertRaisesRegex(ValueError, "stall_timeout_seconds is required"):
             broker.start_managed_claude_supervisor(
