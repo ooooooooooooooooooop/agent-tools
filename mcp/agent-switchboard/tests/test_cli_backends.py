@@ -518,11 +518,37 @@ class AsyncCliRequestTests(unittest.TestCase):
         self.assertEqual(listing["requests"][0]["backend"], "echo")
         self.assertIn("echo", listing["backends"])
 
+    def test_chain_budget_blocks_review_repair_nesting(self):
+        # Same chain_key may be queued up to CHAIN_BUDGET_MAX times; the next
+        # attempt is refused so a review->repair loop cannot nest forever.
+        b = self.broker
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
+                for i in range(b.CHAIN_BUDGET_MAX):
+                    queued = b.queue_cli_request(
+                        "echo", f"review round {i}", project="p",
+                        autorun=False, chain_key="artifact-x",
+                    )
+                    self.assertEqual(queued["status"], "queued")
+                with self.assertRaisesRegex(ValueError, "chain_budget_exceeded"):
+                    b.queue_cli_request(
+                        "echo", "review round 4", project="p",
+                        autorun=False, chain_key="artifact-x",
+                    )
+        # A different chain key is unaffected.
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
+                queued = b.queue_cli_request(
+                    "echo", "other chain", project="p",
+                    autorun=False, chain_key="artifact-y",
+                )
+        self.assertEqual(queued["status"], "queued")
+
     def test_worker_marks_cli_not_found(self):
         b = self.broker
         with mock.patch.object(self.reg.get("echo"), "discover", return_value=None):
             queued = b.queue_cli_request("echo", "x", project="p", autorun=False)
-        res = b.run_cli_request_worker(queued["id"])
+            res = b.run_cli_request_worker(queued["id"])
         self.assertEqual(res["status"], "error")
         self.assertIn("not found", b.request_result(queued["id"])["response"])
 

@@ -11,11 +11,15 @@ start_managed_claude_supervisor(
   objective="修复 parser 在空输入下的崩溃，回归全绿",
   policy="红线：不改公共 API；里程碑：复现→修复→回归；验收：新增用例通过且全套件绿",
   decision_mode="record_only",
-  permission_mode="acceptEdits"
+  permission_mode="acceptEdits",
+  allowed_tools=["Bash(git add:*)", "Bash(git commit:*)", "Read"],  # 可选：命令级硬白名单
+  mcp="none"  # 可选：硬禁用全部 MCP（如 memory），inherit 为默认
 )
 ```
 
 要点：默认用 broker 的保守默认 `acceptEdits` 启动，保持最小权限；仅当用户明确授权且目标范围受控（红线已写入 policy）时才升级为 `bypassPermissions`——受管窗口无人点批准，升级前必须确认授权来源。遇到认证类失败或被要求破坏性操作时停止上报，不得自行升级绕过。`objective` 要具体到可验收。
+
+**优先用硬约束代替软约束**：需要 git 写等操作时，先尝试 `allowed_tools`（命令级白名单，引擎强制拒绝白名单外命令，不需要人工批准也不全放行）；`bypassPermissions` 是最后手段。只读/文件类任务用 `mcp="none"` 硬禁用无关 MCP（如 memory server），比在 policy 里写"禁止调用"可靠——工具不存在就不可能被调用。
 
 ## 2. 切片派工
 

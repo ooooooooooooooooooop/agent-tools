@@ -24,10 +24,26 @@
       "subagent-execution-governance",
       "agent-switchboard-ops",
       "dsh-config-sync",
-      "weekly-work-summary"
+      "weekly-work-summary",
+      "systematic-optimization"
     ]
   },
   "skills": [
+    {
+      "name": "systematic-optimization",
+      "path": "./skills/systematic-optimization",
+      "version": "1.0.0",
+      "description": "系统化优化流程：量化基线→全量列问题→根因分类→机制方案→业界调研→归纳取舍→实施→验证实装→度量闭环；规则存在≠被执行，机制优先于建议",
+      "lang": [
+        "zh"
+      ],
+      "category": "workflow",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": [
+        "minimal-implementation"
+      ]
+    },
     {
       "name": "simulate-elite-experts",
       "path": "./skills/simulate-elite-experts",

@@ -45,6 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
 | [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
 | [weekly-work-summary](./skills/weekly-work-summary) | 按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel | 可选 |
+| [systematic-optimization](./skills/systematic-optimization) | 系统化优化流程：量化基线→全量列问题→根因分类→机制方案→业界调研→归纳取舍→实施→验证实装→度量闭环 | 可选 |
 
 Skill 安装 profile 定义在 [skills.json](./skills.json)。
 
@@ -63,6 +64,7 @@ npx skills add https://github.com/ooooooooooooooooooop/agent-tools --skill <skil
 | [llm-overflow-classifier](./dsh/llm-overflow-classifier) | 把 "Input token exceed the limit" 措辞归类为 CONTEXT_WINDOW_EXCEEDED，触发压缩/重试 | web |
 | [subagent-usage-observer](./dsh/subagent-usage-observer) | 从子代理会话日志查询模型、token、工具与保守状态判定 | 任意已安装 profile |
 | [subagent-splice-summarizer](./dsh/subagent-splice-summarizer) | 有损压缩超长子代理文本报告，同时保留非文本块 | 任意已安装 profile |
+| [model-persona](./dsh/model-persona) | 按当前 agent 的具体模型自动注入官方来源的行为 steering（防过度思考/过度工程/跑偏） | 任意已安装 profile |
 
 DSH 插件不设注册表；包内 `README.md` 提供跨设备安装步骤，发布内容不含本机路径。
 

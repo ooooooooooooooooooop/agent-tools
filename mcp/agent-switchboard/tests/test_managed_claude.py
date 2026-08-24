@@ -110,6 +110,140 @@ class ManagedClaudeTests(unittest.TestCase):
         )
         return row
 
+    def test_interrupt_budget_rejects_third_corrective_interrupt(self):
+        # Two corrective interrupts are allowed; the third must be refused so a
+        # manager cannot enter an endless micromanagement loop.
+        managed_claude.queue_command(
+            self.home, SUPERVISOR_ID, "fix A", interrupt_current=True,
+            confirmation_timeout_seconds=0,
+        )
+        managed_claude.queue_command(
+            self.home, SUPERVISOR_ID, "fix B", interrupt_current=True,
+            confirmation_timeout_seconds=0,
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "managed_claude_interrupt_budget_exceeded"
+        ):
+            managed_claude.queue_command(
+                self.home, SUPERVISOR_ID, "fix C", interrupt_current=True,
+                confirmation_timeout_seconds=0,
+            )
+        # Non-interrupt commands are unaffected.
+        result = managed_claude.queue_command(
+            self.home, SUPERVISOR_ID, "plain follow-up", confirmation_timeout_seconds=0,
+        )
+        self.assertEqual(result["status"], "queued")
+
+    def test_zombie_idle_supervisor_is_reclaimed_on_status_read(self):
+        # Watchdog semantics: an idle supervisor with no pending commands and no
+        # activity for longer than the threshold gets a stop command queued so it
+        # cannot hang forever without anyone closing it.
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "idle",
+                "last_activity_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertTrue(status["zombie_reclaimed"])
+        stops = [
+            p for p in (self.state_dir / "commands").glob("*.json")
+            if (managed_claude._read_json(p) or {}).get("type") == "stop"
+        ]
+        self.assertEqual(len(stops), 1)
+
+    def test_zombie_reclaim_skipped_with_pending_command(self):
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "idle",
+                "last_activity_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        self.queued_command()
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertFalse(status["zombie_reclaimed"])
+
+    def test_zombie_reclaim_skipped_with_recent_activity(self):
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "idle",
+                "last_activity_at": managed_claude.utc_now(),
+                "updated_at": managed_claude.utc_now(),
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertFalse(status["zombie_reclaimed"])
+        self.assertFalse(status["stale_uncollected"])
+
+    def test_dead_daemon_nonterminal_state_is_flagged_stale(self):
+        # A supervisor whose daemon died while its state is still non-terminal
+        # (e.g. attention_required) can never be zombie-reclaimed (pid not alive)
+        # and should be flagged stale so a manager can clean the record instead
+        # of it lingering forever.
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "attention_required",
+                "daemon_pid": 99999999,  # not alive
+                "last_activity_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertFalse(status["zombie_reclaimed"])
+        self.assertTrue(status["stale_uncollected"])
+
+    def test_terminal_state_is_not_flagged_stale(self):
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "stopped",
+                "daemon_pid": 99999999,
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertFalse(status["stale_uncollected"])
+        self.assertFalse(status["zombie_reclaimed"])
+
+    def test_busy_state_is_not_flagged_stale(self):
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "busy",
+                "daemon_pid": os.getpid(),
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        status = managed_claude.get_supervisor_status(self.home, SUPERVISOR_ID)
+        self.assertFalse(status["stale_uncollected"])
+
+    def test_start_requires_stall_timeout(self):
+        with self.assertRaisesRegex(ValueError, "stall_timeout_seconds is required"):
+            broker.start_managed_claude_supervisor(
+                project=str(self.project),
+                supervisor_id="gate-supervisor",
+                objective="O",
+                policy="P",
+            )
+
     def test_dry_run_is_windowless_and_does_not_override_model(self):
         result = managed_claude.create_supervisor(
             self.home,
@@ -158,6 +292,58 @@ class ManagedClaudeTests(unittest.TestCase):
             "SetClipboardData",
         ):
             self.assertNotIn(forbidden, source)
+
+    def test_allowed_tools_are_injected_as_cli_allowlist(self):
+        result = managed_claude.create_supervisor(
+            self.home,
+            str(self.project),
+            "allowlist-supervisor",
+            "Do the task",
+            permission_mode="acceptEdits",
+            allowed_tools=["Bash(git add:*)", "Bash(git commit:*)", "Read"],
+            claude_path="claude",
+            dry_run=True,
+        )
+        self.assertEqual(result["status"], "ready")
+        daemon = self.daemon()
+        daemon.config["allowed_tools"] = ["Bash(git add:*)", "Read"]
+        daemon.config["permission_mode"] = "acceptEdits"
+        command = daemon._claude_command(resume=False)
+        self.assertIn("--allowedTools", command)
+        self.assertIn("Bash(git add:*)", command)
+        self.assertIn("Read", command)
+        self.assertNotIn("--dangerously-skip-permissions", command)
+
+    def test_mcp_mode_none_injects_strict_empty_config(self):
+        daemon = self.daemon()
+        daemon.config["mcp_mode"] = "none"
+        daemon.config["allowed_tools"] = []
+        command = daemon._claude_command(resume=False)
+        self.assertIn("--strict-mcp-config", command)
+        mcp_index = command.index("--mcp-config")
+        config_path = Path(command[mcp_index + 1])
+        self.assertTrue(config_path.exists())
+        self.assertIn('"mcpServers":{}', config_path.read_text(encoding="utf-8"))
+
+    def test_mcp_mode_inherit_does_not_inject_strict_config(self):
+        daemon = self.daemon()
+        daemon.config["mcp_mode"] = "inherit"
+        daemon.config["allowed_tools"] = []
+        command = daemon._claude_command(resume=False)
+        self.assertNotIn("--strict-mcp-config", command)
+        self.assertNotIn("--mcp-config", command)
+
+    def test_validate_allowed_tools_rejects_unknown_patterns(self):
+        with self.assertRaises(ValueError):
+            managed_claude.validate_allowed_tools(["not a tool pattern!!"])
+        self.assertEqual(managed_claude.validate_allowed_tools(None), [])
+        self.assertEqual(managed_claude.validate_allowed_tools(["Bash(git add:*)", "Bash(git add:*)"]), ["Bash(git add:*)"])
+
+    def test_validate_mcp_mode_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            managed_claude.validate_mcp_mode("everything")
+        self.assertEqual(managed_claude.validate_mcp_mode("none"), "none")
+        self.assertEqual(managed_claude.validate_mcp_mode("inherit"), "inherit")
 
     def test_queue_result_does_not_expose_prompt_body(self):
         secret_prompt = "PRIVATE_IMPLEMENTATION_TEXT"
