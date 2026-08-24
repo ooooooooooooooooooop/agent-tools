@@ -1,0 +1,14 @@
+{
+  "task": "novel-main 接手根因修复（跨项目沉淀）",
+  "stages": [
+    {"name": "baseline", "status": "done", "evidence": "3018 collected / 564 tracked / 12 untracked / 6 consistency anomalies"},
+    {"name": "problems", "status": "done", "evidence": "A1 baseline drift, A2 registry drift, C4 stale cache, B4 privacy, C1 size, C2 monoliths"},
+    {"name": "root-cause", "status": "done", "evidence": "missing constraint (no mandatory sync/validation mechanism)"},
+    {"name": "borrow", "status": "done", "evidence": "https://www.anthropic.com/engineering/building-effective-agents + https://openai.com/index/harness-engineering/ + https://www.nasa.gov/wp-content/uploads/2015/09/413721main_esmd-rmp-04.06_rev_2_final.pdf + https://www.scrum.org/resources/blog/navigating-scrum-events-sprint-retrospective"},
+    {"name": "tradeoff", "status": "done", "evidence": "executable script = system layer; SKILL.md prose = process layer (not constant)"},
+    {"name": "decision-gate", "status": "confirmed", "evidence": "user: 同意 (twice: S1+S2 merge, then S2 upgrade)"},
+    {"name": "implement", "status": "done", "evidence": "takeover_check.py + flow_check.py created; SKILL.md updated (iron law 8 + flow-completeness section + 3 case rows)"},
+    {"name": "verify", "status": "done", "evidence": "validate_repo --strict errors=0; quality_report 16/16; git diff --check clean; selftest exit 0"},
+    {"name": "measure", "status": "done", "evidence": "before: 3 recurrences of skipped flow; after: executable gates + prose constraint; upgrade path documented"}
+  ]
+}

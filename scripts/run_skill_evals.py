@@ -34,7 +34,7 @@ GOLDEN_SET = ROOT / "scripts" / "evals" / "golden_set.json"
 VALID_CATEGORIES = {"normal", "edge", "failure", "safety"}
 CORE_TIERS = {"core"}
 CPA_BASE = os.environ.get("CPA_BASE", "http://127.0.0.1:8317/v1")
-CPA_MODEL = os.environ.get("CPA_GOLDEN_MODEL", "gpt-5.6-luna-max")
+CPA_MODEL = os.environ.get("CPA_GOLDEN_MODEL", "gemini-3.7-flash-high")
 CPA_TIMEOUT = 90
 
 

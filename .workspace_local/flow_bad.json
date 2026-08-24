@@ -1,0 +1,50 @@
+﻿{
+    "task":  "bad",
+    "stages":  [
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "baseline"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "problems"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "root-cause"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "凭记忆写的出处",
+                       "name":  "borrow"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "tradeoff"
+                   },
+                   {
+                       "status":  "pending",
+                       "evidence":  "未确认",
+                       "name":  "decision-gate"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "implement"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "verify"
+                   },
+                   {
+                       "status":  "done",
+                       "evidence":  "x",
+                       "name":  "measure"
+                   }
+               ]
+}
