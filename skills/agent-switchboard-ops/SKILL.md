@@ -77,6 +77,15 @@ description: |
 - 只有 wait 返回了 material 事件（turn_completed / stall / failed / exited），才去 GET 详情或收结果；
 - 长等待依赖 `stall_timeout_seconds` 的事件驱动兜底，而不是人工每 3 分钟查一次。
 
+### 跨通道等待纪律总纲（防轻量状态查询轮询）
+
+> **反模式**：2026-08-22 监督会话 pollCount=305（`request_status`×96、`list_agents`×265、`job_list`×15、`get_goal`×25）——监督者反复调用轻量状态查询工具"看进度"，而非转入单次长轮询。AGENTS.md 模块七/八已确立纪律，这是**规则确立后的执行回归**（见 evolution-inbox 提案 #1）。业界共识（AWS SQS Long Polling / LangGraph event streaming / Claude SDK streaming 等）：等待应靠"任务句柄 + 单次阻塞等待/事件流 + 超时恢复"，polling 仅限调试。
+
+- **等待阶段唯一合法动作是单次长轮询**：派发 subagent / CLI 请求 / supervisor 后，等待结果只能用 `wait_supervisor_event` / `request_result(wait_seconds=60~120)` / `job_output(wait=true)` 单次挂起；
+- **轻量状态查询仅限"首次确认请求存在"调用一次**：`request_status` / `job_list` / `list_agents` / `get_goal` / `get_topic_status` / `get_cli_requests` / `get_codex_requests` 等，仅在派发后第一次确认"请求已入队/已存在"时可调用一次；确认后必须转入对应的长轮询工具；
+- **禁止把反复无 wait 状态查询当作等待策略**：连续 ≥2 次无 wait 的轻量查询即构成轮询反模式，会被 `scripts/evolution_scan.js` 检测并写入 evolution-inbox；
+- **超时接管而非重查**：长轮询超时返回 ≠ 通道死亡——直接再次长轮询（推进 since_seq / 同一 request_id），或先查一次在途队列确认存在后继续长轮询；禁止切回短周期查询循环。
+
 ## 跨模型委派规则
 
 - **模型档位与执行层解耦（统一 Provider 优先）**：
