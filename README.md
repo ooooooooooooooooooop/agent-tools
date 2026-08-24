@@ -45,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
 | [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
 | [weekly-work-summary](./skills/weekly-work-summary) | 按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel | 可选 |
-| [systematic-optimization](./skills/systematic-optimization) | 系统化优化流程：量化基线→全量列问题→根因分类→机制方案→业界调研→归纳取舍→实施→验证实装→度量闭环 | 可选 |
+| [systematic-optimization](./skills/systematic-optimization) | 系统化问题解决与优化流程（领域无关）：量化→列问题→根因→结构性方案→借鉴→取舍→实施→验证→度量 | 可选 |
 
 Skill 安装 profile 定义在 [skills.json](./skills.json)。
 
