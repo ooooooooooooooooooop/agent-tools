@@ -1,21 +1,27 @@
 // User-level Cordis plugin: inject per-model steering guidance into the system
-// prompt, selected automatically by the exact provider/model route of the
-// current agent. Each entry is sourced from the vendor's own official docs /
+// prompt, selected automatically by the CURRENT provider/model route of the
+// live agent. Each entry is sourced from the vendor's own official docs /
 // prompts (source URL in the table), so no local benchmark budget is needed —
 // the vendors already spent it.
 //
 // Why a plugin instead of a persona config: `dsh-persona` is a static
 // template (`{{model}}` only interpolates the model name, no per-model
-// branching). This plugin registers one system-prompt section whose `text` is
-// a FUNCTION evaluated at every assembly with the assemble context, so it can
-// read the live agent route and return the matching steering — or an empty
-// string, which `renderPrompt` drops, costing zero tokens for unmatched
-// models.
+// branching). This plugin registers one system-prompt section and rewrites
+// its text on the `system-prompt/assemble` waterfall AFTER downstream
+// listeners ran, reading `variables.provider/model` — which
+// `installModelSelection` has already overwritten with the selection in
+// effect for THIS request. That matters because a conversation can switch
+// models mid-session: `agent.options` is only the creation-time snapshot,
+// while the assembled variables carry the model the request will actually
+// use. Unmatched models render an empty string, which `renderPrompt` drops,
+// costing zero tokens.
 //
 // Mechanism (verified against dsh-system-prompt + dsh-agent sources):
-// - `SystemPrompt.assemble()` evaluates `section.text(context)` per assembly.
-// - `dsh-agent` extends `AssembleContext` with `agent?: Agent`, and
-//   `Agent.options` carries `{ provider, model, maxTokens }`.
+// - `SystemPrompt.assemble()` runs the `system-prompt/assemble` waterfall;
+//   `dsh-agent.installModelSelection()` is a scoped listener on that waterfall
+//   that overwrites `variables.provider/model` from `selection.current`.
+// - This plugin's own listener awaits `next()` first, so it observes the
+//   post-selection values, then patches its section's text in place.
 // - Matching order per model id: exact `provider:model` first, then bare
 //   `model` across providers (so the table stays portable when another device
 //   names its routes differently).
@@ -170,18 +176,34 @@ function renderPersona(provider, model) {
 export const name = "model-persona";
 export const inject = ["systemPrompt"];
 
+/**
+ * Apply: register a placeholder section, then rewrite its text on the
+ * `system-prompt/assemble` waterfall AFTER downstream listeners (notably
+ * `installModelSelection`, which overrides `variables.provider/model` with the
+ * CURRENT selection) have run. This keeps the steering in sync with
+ * mid-conversation model switches — `agent.options` alone is only the
+ * creation-time snapshot, while the assembled `variables` carry the model the
+ * request will actually use.
+ */
 export function apply(ctx) {
 	const systemPrompt = ctx.systemPrompt;
 	ctx.effect(() =>
 		systemPrompt.section({
 			name: SECTION_NAME,
 			order: SECTION_ORDER,
-			text: (context) => {
-				const agent = context.agent;
-				const options = agent?.options;
-				if (!options?.model) return "";
-				return renderPersona(options.provider, options.model);
-			}
+			text: "" // placeholder; rewritten on the assemble waterfall
 		})
 	);
+	ctx.on("system-prompt/assemble", async (assembly, _context, next) => {
+		const result = await next();
+		const model = result.variables?.model;
+		if (!model) return result;
+		const text = renderPersona(result.variables.provider, model);
+		return {
+			...result,
+			sections: result.sections.map((section) =>
+				section.name === SECTION_NAME ? { ...section, text } : section
+			)
+		};
+	});
 }
