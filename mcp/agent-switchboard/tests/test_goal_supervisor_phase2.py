@@ -265,6 +265,8 @@ class Phase2Tests(unittest.TestCase):
             {"id": "C-02", "required_evidence": ["tests/b.py"], "verifier": "python -c \"print('y')\"", "stopping_test": "exit 0"},
         ]
         goal_ref = self._create(criteria=criteria)
+        # Blocking requires an attempted dispatch first.
+        goal_supervisor.dispatch_criterion(goal_ref)
         blocked = goal_supervisor.record_evidence(goal_ref, "C-01", ["tests/a.py"], status_hint="blocked")
         self.assertTrue(blocked["recorded"])
         status = goal_supervisor.get_goal_status(goal_ref)
@@ -281,7 +283,9 @@ class Phase2Tests(unittest.TestCase):
             {"id": "C-02", "required_evidence": ["tests/b.py"], "verifier": "python -c \"print('y')\"", "stopping_test": "exit 0", "dependencies": ["C-01"]},
         ]
         goal_ref = self._create(criteria=criteria)
+        goal_supervisor.dispatch_criterion(goal_ref)  # C-01
         goal_supervisor.record_evidence(goal_ref, "C-01", ["tests/a.py"], status_hint="blocked")
+        goal_supervisor.dispatch_criterion(goal_ref)  # C-02
         goal_supervisor.record_evidence(goal_ref, "C-02", ["tests/b.py"], status_hint="blocked")
         status = goal_supervisor.get_goal_status(goal_ref)
         # C-02 depends on C-01 and both are blocked -> proven global block.
@@ -293,6 +297,7 @@ class Phase2Tests(unittest.TestCase):
             {"id": "C-02", "required_evidence": ["tests/b.py"], "verifier": "python -c \"print('y')\"", "stopping_test": "exit 0", "dependencies": ["C-01"]},
         ]
         goal_ref = self._create(criteria=criteria)
+        goal_supervisor.dispatch_criterion(goal_ref)  # C-01
         goal_supervisor.record_evidence(goal_ref, "C-01", ["tests/a.py"], status_hint="blocked")
         # C-02 not blocked yet; C-01's chain has no dependency so it is local -> attention, not global.
         status = goal_supervisor.get_goal_status(goal_ref)
@@ -375,6 +380,113 @@ class Phase2Tests(unittest.TestCase):
         unit = goal_supervisor.build_work_unit(goal_ref, "C-01")
         self.assertTrue(unit["built"])
         self.assertEqual(unit["work_unit"]["route"], "codex_alt")
+
+    # --- recoverable-pause gate: blocked is the LAST rung, not the first -------
+
+    def test_blocked_without_attempt_is_rejected(self):
+        # Never record a block before real work was attempted: a fresh pending
+        # criterion cannot be declared blocked by an operator.
+        goal_ref = self._create()
+        rejected = goal_supervisor.record_evidence(
+            goal_ref, "C-01", ["tests/a.py"], status_hint="blocked"
+        )
+        self.assertFalse(rejected["recorded"])
+        self.assertIn("blocked_without_attempt", rejected["error"])
+        status = goal_supervisor.get_goal_status(goal_ref)
+        self.assertEqual(status["criteria"]["C-01"]["status"], "pending")
+
+    def test_blocked_with_untried_alternative_route_is_rejected(self):
+        # A declared alternative route that was never tried must be tried before
+        # the criterion may be blocked: RETRY -> REPLAN -> alternative route -> block.
+        criteria = [{
+            "id": "C-01",
+            "required_evidence": ["tests/a.py"],
+            "verifier": "python -c \"print('x')\"",
+            "stopping_test": "exit 0",
+            "alternative_routes": ["codex_alt1", "codex_alt2"],
+        }]
+        goal_ref = self._create(criteria=criteria)
+        goal_supervisor.dispatch_criterion(goal_ref)  # primary route attempted
+        rejected = goal_supervisor.record_evidence(
+            goal_ref, "C-01", ["tests/a.py"], status_hint="blocked"
+        )
+        self.assertFalse(rejected["recorded"])
+        self.assertIn("blocked_with_untried_route", rejected["error"])
+        self.assertIn("codex_alt1", rejected["error"])
+
+    def test_blocked_reopens_on_new_evidence(self):
+        # Recoverable pause, not a tombstone: new evidence on a blocked
+        # criterion reopens it as inconclusive so it can be dispatched again.
+        goal_ref = self._create()
+        goal_supervisor.dispatch_criterion(goal_ref)
+        blocked = goal_supervisor.record_evidence(
+            goal_ref, "C-01", ["tests/a.py"], status_hint="blocked"
+        )
+        self.assertTrue(blocked["recorded"])
+        reopened = goal_supervisor.record_evidence(goal_ref, "C-01", ["tests/new.py"])
+        self.assertTrue(reopened["recorded"])
+        self.assertEqual(reopened["status"], "inconclusive")
+        status = goal_supervisor.get_goal_status(goal_ref)
+        self.assertEqual(status["criteria"]["C-01"]["status"], "inconclusive")
+        dispatch = goal_supervisor.dispatch_criterion(goal_ref)
+        self.assertTrue(dispatch["dispatched"])
+
+    def test_blocked_criterion_recovers_via_untried_alternative_route(self):
+        # A blocked criterion with an untried alternative route is re-dispatched
+        # on that route (blocked_recovery) instead of stopping the goal.
+        criteria = [{
+            "id": "C-01",
+            "required_evidence": ["tests/a.py"],
+            "verifier": "python -c \"print('x')\"",
+            "stopping_test": "exit 0",
+            "alternative_routes": ["codex_alt1"],
+        }]
+        goal_ref = self._create(criteria=criteria)
+        # Primary route exhausted via verifier failures -> auto blocked
+        # (verifier-driven block carries hard evidence and bypasses the gate).
+        with mock.patch.object(goal_supervisor, "_run_command", return_value={
+            "ok": False, "exit_code": 1, "stdout": "", "stderr": "fail", "timed_out": False,
+        }), mock.patch.dict(os.environ, {"GOAL_MAX_VERIFIER_ATTEMPTS": "2"}):
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+        status = goal_supervisor.get_goal_status(goal_ref)
+        self.assertEqual(status["criteria"]["C-01"]["status"], "blocked")
+        # The untried alternative route keeps the goal alive.
+        result = goal_supervisor.dispatch_criterion(goal_ref)
+        self.assertTrue(result["dispatched"])
+        self.assertEqual(result["route"], "codex_alt1")
+        self.assertEqual(result["via"], "blocked_recovery")
+        status = goal_supervisor.get_goal_status(goal_ref)
+        self.assertEqual(status["criteria"]["C-01"]["status"], "running")
+
+    def test_blocked_after_all_routes_tried_stays_blocked(self):
+        # Once every declared route was tried, a blocked criterion is terminal:
+        # no dispatch remains, and the goal reports attention_required.
+        criteria = [{
+            "id": "C-01",
+            "required_evidence": ["tests/a.py"],
+            "verifier": "python -c \"print('x')\"",
+            "stopping_test": "exit 0",
+            "alternative_routes": ["codex_alt1"],
+        }]
+        goal_ref = self._create(criteria=criteria)
+        fail = {
+            "ok": False, "exit_code": 1, "stdout": "", "stderr": "fail", "timed_out": False,
+        }
+        with mock.patch.object(goal_supervisor, "_run_command", return_value=fail), \
+                mock.patch.dict(os.environ, {"GOAL_MAX_VERIFIER_ATTEMPTS": "2"}):
+            # Primary route: two verifier failures -> blocked.
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+            # Alternative route recovered and also exhausted -> blocked again.
+            goal_supervisor.dispatch_criterion(goal_ref)
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+            goal_supervisor.run_verifier(goal_ref, "C-01")
+        status = goal_supervisor.get_goal_status(goal_ref)
+        self.assertEqual(status["criteria"]["C-01"]["status"], "blocked")
+        result = goal_supervisor.dispatch_criterion(goal_ref)
+        self.assertFalse(result["dispatched"])
+        self.assertEqual(result["reason"], "nothing_to_dispatch")
 
 
 if __name__ == "__main__":

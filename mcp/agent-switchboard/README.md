@@ -279,6 +279,16 @@ python agent_broker_mcp.py bridge goal enforce   <goal_ref> [--require-telemetry
   unrelated ready criteria: the Goal becomes `attention_required` and other
   criteria keep dispatching. It is a global `blocked` only when the dependency
   graph proves every mandatory path is fully blocked (criterion `dependencies`).
+- **Blocking is gated and recoverable** — an operator-requested `blocked`
+  (`evidence --status blocked`) is rejected unless the criterion was actually
+  dispatched/failed a verifier AND every declared `alternative_routes` entry was
+  tried (`blocked_without_attempt` / `blocked_with_untried_route`); a block is
+  the last rung of RETRY -> alternative route -> block, never the first reaction.
+  Verifier-driven blocks (max attempts) and budget breaches carry their own hard
+  evidence and bypass the gate. A blocked criterion with an untried alternative
+  route is re-dispatched on it (`via: blocked_recovery`), and recording new
+  evidence reopens a blocked criterion as `inconclusive` — recoverable pause,
+  not a tombstone.
 - **Repeated no-progress fingerprint** — `dispatch` never re-runs the same route
   on an unchanged `last_fingerprint`: it advances to a declared
   `alternative_routes` entry, or emits `attention_required` with the exact

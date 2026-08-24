@@ -269,6 +269,9 @@ class GoalSupervisorTests(unittest.TestCase):
             "reproduce bug #123", criteria, budgets=BOUNDED_BUDGET
         )
         goal_ref = result["goal_ref"]
+        # Blocking requires an attempted dispatch first (recoverable-pause gate).
+        dispatched = goal_supervisor.dispatch_criterion(goal_ref)
+        self.assertTrue(dispatched["dispatched"])
         blocked = goal_supervisor.record_evidence(goal_ref, "C-01", ["tests/a.py"], status_hint="blocked")
         self.assertTrue(blocked["recorded"])
         self.assertEqual(blocked["status"], "blocked")
