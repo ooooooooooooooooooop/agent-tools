@@ -513,10 +513,27 @@ class AsyncCliRequestTests(unittest.TestCase):
         with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
             with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
                 queued = b.queue_cli_request("echo", "job", project="projx", autorun=False)
+                b.run_cli_request_worker(queued["id"])
+        # Finished by default: excluded from listing (active-only default).
+        listing = b.get_cli_requests("projx")
+        self.assertEqual(listing["count"], 0)
+        # include_finished=true shows the history row.
+        full = b.get_cli_requests("projx", include_finished=True)
+        self.assertEqual(full["count"], 1)
+        self.assertEqual(full["requests"][0]["backend"], "echo")
+        self.assertIn("echo", full["backends"])
+        # Prompt/response bodies never ride the listing.
+        self.assertNotIn("job", json.dumps(full))
+        self.assertNotIn("ok", json.dumps(full))
+
+    def test_get_cli_requests_active_only_default(self):
+        b = self.broker
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
+                b.queue_cli_request("echo", "job-a", project="projx", autorun=False)  # stays queued
         listing = b.get_cli_requests("projx")
         self.assertEqual(listing["count"], 1)
-        self.assertEqual(listing["requests"][0]["backend"], "echo")
-        self.assertIn("echo", listing["backends"])
+        self.assertEqual(listing["requests"][0]["state"], "queued")
 
     def test_chain_budget_blocks_review_repair_nesting(self):
         # Same chain_key may be queued up to CHAIN_BUDGET_MAX times; the next
