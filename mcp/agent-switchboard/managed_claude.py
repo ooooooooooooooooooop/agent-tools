@@ -708,6 +708,14 @@ def public_status(state_dir: Path, recent_events: int = 10) -> dict[str, Any]:
         "updated_at",
     }
     result = {key: value for key, value in state.items() if key in allowed}
+    # Context guard: the stored last_result_summary can be several KB; status reads
+    # (get/list) must not drag the whole body into the caller context every poll.
+    # Summaries are capped here on output only — the stored value is untouched.
+    if result.get("last_result_summary"):
+        result["last_result_summary"] = compact_text(result["last_result_summary"], 300)
+        result["last_result_summary_truncated"] = len(
+            str(state.get("last_result_summary") or "")
+        ) > 300
     result["daemon_alive"] = pid_is_alive(state.get("daemon_pid"))
     result["claude_alive"] = pid_is_alive(state.get("claude_pid"))
     result["pending_commands"] = commands
