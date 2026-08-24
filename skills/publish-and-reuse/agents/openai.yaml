@@ -1,0 +1,4 @@
+interface:
+  display_name: "发布与跨设备复现"
+  short_description: "完整发布与跨设备复现一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP，agent 自动加载即可执行。"
+  default_prompt: "使用 $publish-and-reuse，完整发布本仓库（跑一键门禁）或在新设备复现/更新环境。"
