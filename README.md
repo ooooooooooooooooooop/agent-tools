@@ -61,7 +61,7 @@ npx skills add https://github.com/ooooooooooooooooooop/agent-tools --skill <skil
 
 | 插件 | 简介 | 目标 profile |
 |---|---|---|
-| [llm-overflow-classifier](./dsh/llm-overflow-classifier) | 把 "Input token exceed the limit" 措辞归类为 CONTEXT_WINDOW_EXCEEDED，触发压缩/重试 | web |
+| [token-saver](./dsh/token-saver) | 子代理 fork 不再全量复制父会话，注入「摘要 + 最近 1 轮」控上下文 | 任意已安装 profile |
 | [subagent-usage-observer](./dsh/subagent-usage-observer) | 从子代理会话日志查询模型、token、工具与保守状态判定 | 任意已安装 profile |
 | [subagent-splice-summarizer](./dsh/subagent-splice-summarizer) | 有损压缩超长子代理文本报告，同时保留非文本块 | 任意已安装 profile |
 | [model-persona](./dsh/model-persona) | 按当前 agent 的具体模型自动注入官方来源的行为 steering（防过度思考/过度工程/跑偏） | 任意已安装 profile |

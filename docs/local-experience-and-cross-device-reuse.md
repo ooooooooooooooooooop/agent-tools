@@ -28,13 +28,16 @@
 | 七 | 外部研究两段式物理隔离：异步队列 + 单次 `request_result` 接管；极窄探针（≤100 字）；防惊群；共识直接收敛 | 阻断 MCP 超时（-32001）与并发风暴 |
 | 八 | 执行纪律防再犯：五条铁律（等通知不轮询/门禁是诊断信号/先探测通道再窄探针/探查派子代理/派发带进度回报协议） | 由一次 13 小时真实长程会话审计固化 |
 
-### 1.2 插件层：3 个自研 DSH 插件（`profiles/web/plugins/`）
+### 1.2 插件层：4 个自研 DSH 插件（`profiles/web/plugins/`）
 
 | 插件 | 解决什么 | 量化效果 |
 |---|---|---|
 | `dsh-subagent-context-summary.js` | fork 子代理父上下文 >30k 字符时，只注入 compaction 摘要 + 最近 1 轮完整对话 | 典型省子代理侧 ~50–70% 输入 token |
-| `llm-retry-claude-code.js` | 将普通模型请求 retry 抬升到 Claude Code 风格基线（max 10 次 / 初始 500ms / 单次上限 8s / 25% jitter），不覆盖已有更强/always 策略 | 弱策略自动补齐，故障自愈 |
-| `llm-overflow-classifier.js` | 把 provider"输入超限"错误统一重分类为 `CONTEXT_WINDOW_EXCEEDED` | 触发正确的 compaction/retry 链，不再当普通失败误处理 |
+| `subagent-splice-summarizer-v1.mjs` | 超长子代理文本报告有损压缩成结构化摘要（保留 status/blocker/artifact 等字段），非文本块原样保留 | 阻止报告全文拼入父上下文导致的压缩风暴 |
+| `subagent-usage-observer-v1.mjs` | 只读工具 `subagent_usage` / `subagent_stalled_check`：从子代理会话日志查模型、token、工具与空转判定 | 派发预算审计闭环 |
+| `model-persona.js` | 按当前 agent 的实际模型（跟随会话中途切换）注入官方来源的行为 steering（防过度思考/过度工程/跑偏/过度主动） | 模型个性差异自动适配，零测试成本 |
+
+> 注：`llm-retry-claude-code.js`、`llm-overflow-classifier.js` 两个早期插件已于 2026-08-20 废弃——`dsh-llm rc.7` 原生实现（Claude Code 基线重试默认 + `CONTEXT_WINDOW_EXCEEDED` 分类），插件与仓库包均已移除。
 
 配套架构经验：**插件优于 node_modules 补丁**（`cordis.patch.yml` 固化，npm update 后仍保留）；**冻结输入对象不突变**（包装时构造新对象）。
 
@@ -137,7 +140,7 @@
 |---|---|---|
 | Mailbox 事件驱动 | CrewAI Flows / LangGraph Send-Command / Anthropic Agent Teams | DSH 主动完成通知 + 单次 wait 长轮询 |
 | Circuit Breaker 熔断 | Resilience4j/Polly/pybreaker（框架多需外置） | execution-discipline"连续失败 3 次即熔断" |
-| 重试与退避 | LangGraph RetryPolicy / CrewAI task 层 | `llm-retry-claude-code.js` 插件（10 次/500ms/8s/jitter 25%） |
+| 重试与退避 | LangGraph RetryPolicy / CrewAI task 层 | `dsh-llm` 原生 Claude Code 基线（rc.7 内置：10 次/500ms/8s/jitter 25%），旧插件已废弃 |
 | 上下文压缩/Checkpoint | LangGraph Checkpointer + durable execution | Goal/Todo/Work Memory 三位一体 + fork 摘要插件 |
 | 结构化记忆 | LangGraph Store / CrewAI Memory / Mem0·Zep | `.agent-broker/topics/*/work_memory.md` 黑板 |
 
