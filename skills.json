@@ -7,7 +7,8 @@
       "skill-repository-maintainer",
       "environment-bootstrap",
       "skill-quality-gate",
-      "execution-discipline"
+      "execution-discipline",
+      "publish-and-reuse"
     ],
     "full": [
       "simulate-elite-experts",
@@ -26,7 +27,8 @@
       "dsh-config-sync",
       "weekly-work-summary",
       "systematic-optimization",
-      "evolution-proposal"
+      "evolution-proposal",
+      "publish-and-reuse"
     ]
   },
   "skills": [
@@ -291,6 +293,23 @@
         "minimal-implementation",
         "execution-discipline",
         "systematic-optimization"
+      ]
+    },
+    {
+      "name": "publish-and-reuse",
+      "path": "./skills/publish-and-reuse",
+      "version": "1.0.0",
+      "description": "完整发布与跨设备复现的一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP，agent 自动加载即可执行，无需用户逐步教学",
+      "lang": [
+        "zh"
+      ],
+      "category": "maintenance",
+      "priority": "P0",
+      "tier": "core",
+      "depends_on": [
+        "skill-repository-maintainer",
+        "dsh-config-sync",
+        "environment-bootstrap"
       ]
     }
   ]
