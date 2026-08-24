@@ -4,6 +4,7 @@ description: 在 DSH 长程/多工具会话中强制七条执行纪律，防止�
 version: 0.1.0
 triggers:
   - "接手/恢复长任务（.taskflow、goal、跨轮委派）"
+  - "接手/交接项目（先跑接手一致性门禁，见下文专用节）"
   - "等待 subagent / 后台任务 / CLI 请求返回"
   - "发起外部研究、文献调研、跨模型长推理"
   - "收到门禁拒绝（INVALID / FAIL / PARTIAL）"
@@ -84,6 +85,31 @@ depends_on:
 - **每回合自查**：回合开始前估算"本回合必须重载什么"——历史摘要够用就不要带全文；上一回合的临时结果本回合还要用 → 先落盘再引用。
 - 规则来源：2026-08-24 论文会话 166 万/小时（回合重载为主因）+ 业界调研（LangGraph checkpoint / Claude Code memory / OpenAI Batch）。
 
+## 铁律八：接手/交接先跑一致性门禁（防隐性不一致）
+
+> **根因**：接手项目时，"基线数字漂移、状态登记失联、残留缓存失效、隐私红线突破、大文件入 git" 五类问题靠人翻文档核对必然漏检，靠文档约定必然复发。**根因是缺约束（无强制校验机制），不是人不够小心。**
+> **来源案例**：novel-main 接手分析检出 AGENTS.md 基线 2940 vs 实测 3018 冲突、.taskflow/index.json 未登记活跃任务、pytest lastfailed 2 个失效 nodeid、工作区 12 条未跟踪研究产物。单仓手写脚本是临时方案（其他项目照样重犯），故沉淀为本 skill 通用门禁。
+
+- **接手/交接/恢复长任务的项目，第一步先跑通用门禁**：`python <本skill>/scripts/takeover_check.py --root <项目根> [--config <项目配置>]`（纯标准库，只读，不改任何文件）。
+- 门禁六项检查：**baseline-lock**（测试收集数 vs 合同锁）、**registry-consistency**（active 目录 vs 登记表 index）、**cache-stale**（lastfailed 失效 nodeid）、**privacy-tracked**（隐私红线路径入 git）、**oversized-tracked**（大文件入 git）、**workspace-hygiene**（未跟踪/分支，INFO）。
+- 复制模板到目标项目 `scripts/` 并按项目配置隐私前缀/基线常量后，纳入该项目的"必跑检查"（AGENTS.md/README）——**流程层，观察执行**；同一问题复发即升级为 pre-commit hook（系统层）。
+- **门禁报 FAIL = 诊断信号，不是交付物**：定位根因（数据/构造/门禁本身）→ 修机制 → 复跑至绿；既有实际问题（悬挂任务、残留清理、未提交产物）记录后留给处置，不混入机制修复。
+- 门禁自身必须可自检：`takeover_check.py --selftest` exit 0 才可交付给项目（防门禁腐化）。
+
+## 流程完整执行（防跳步，2026-08-24 复盘沉淀 + 升级为可执行门禁）
+
+> **根因**：加载了方法论 skill 却跳过其步骤（尤其"有约束不执行"）是最高频复发模式。纯文字规则（流程层）已实证复发；按业界结论（Anthropic Building effective agents / OpenAI Harness engineering）升级为**可执行门禁（系统层）**：多步流程由程序化门禁强制执行，不靠提示词。
+> **来源**：novel-main 接手分析跳第 4-6 步直接实施；复盘本身又跳"借鉴→决策门"；借鉴凭记忆编造出处（已联网核验 NASA AAR / Scrum.org / PMI / Agent Skills 官方机制后沉淀）。
+
+- **可执行门禁（强制，不靠自觉）**：
+  - `python <本skill>/scripts/flow_check.py --check-flow <流程记录.json>` —— 校验九步全、决策门已确认、借鉴含真实 URL；**FAIL 则禁止实施**（exit 1）。
+  - `python <本skill>/scripts/flow_check.py --check-review <复盘.md>` —— 校验复盘含 NASA AAR 六段（预期→事实→差异→经验→行动→**验证闭环**）；缺闭环=复盘未完成。
+  - `--selftest` exit 0 才可交付（防门禁腐化）。
+- **流程记录契约**（`--check-flow` 输入）：九步 stage 名固定为 baseline→problems→root-cause→borrow→tradeoff→decision-gate→implement→verify→measure；`decision-gate.status` 必须 `confirmed` 且位于 implement 之前；`borrow.evidence` 必须含 http(s) URL（**编造来源比不借鉴更糟**，门禁直接拦截）。
+- **落点三问**（任何"修根因"动作前，由流程记录 `root-cause`/`tradeoff` 证据承载）：①是否跨项目/跨对话？（→ 沉淀到 skill 层，不写单仓脚本）②现有 skill 是否已覆盖？（→ 复用/优化，不新建）③改动面积是否最小？（→ 落点正确优先于改动少）。
+- **借鉴必须有真实来源**：外部机制一律先探测通道→极窄探针→回收带 URL 的结论（铁律三），然后写入流程记录 `borrow` 证据；**禁止凭记忆写"出处"**。
+- **复盘本身也走完整流程**：产出复盘文件后必须过 `--check-review` 门禁，六段齐全（含验证闭环）才算复盘完成。
+
 ## 回合开始前自查（每次新 goal round / 长等待 / 大研究前，10 秒过一遍）
 
 1. 我是不是在轮询？（→ 应等通知，最多查一次）
@@ -113,6 +139,9 @@ depends_on:
 | 2026-08-24 微观纠偏超限 | 同一执行者 8+ 次 interrupt 纠偏（memory、Grep、路径），但管理者未停用，持续救火 | 铁律六：2 次纠偏无效即停用，换通道或重写派工（陷阱一次性写死） |
 | 2026-08-24 派工陷阱未模板化 | 执行者反复误用 memory MCP、Grep 非法参数、OWN 路径误写 `.taskflow/`、reference 路径猜错，管理者 8+ 次 interrupt 纠偏 | 派工模板固化：`mcp="none"` 硬禁用、OWN 绝对路径写前 glob 确认、reference 以 receipt 登记字段为准、BLOCKED 结构化 |
 | 2026-08-24 打断方向丢失 | 320 合同设计被 provenance 紧急事件打断后未恢复，方向蒸发 | 紧急打断必须登记"待恢复方向"到 todo+checkpoint，下一轮先处理 |
+| 2026-08-24 三步连跳（novel-main 接手） | 跳第 4 步（借鉴）、第 5 步（取舍）、第 6 步（决策门）直接实施单仓脚本；"借鉴"凭记忆编造来源 | 第 6 步未确认不进实施；落点三问：跨项目→skill 层；借鉴先联网搜索拿真实 URL |
+| 2026-08-24 复盘又跳步 | 复盘走到"错误清单→根因"后，跳"借鉴→决策门"直接到"机制化修复"，且方案是约定层（"下次注意"） | 复盘走完六段（NASA AAR 标准），借鉴必须真实来源，决策门必须展示确认，最后一环"后续验证闭环"不可跳 |
+| 2026-08-24 约束层标注错误 | 把 SKILL.md 文字规则标注为"系统层"（实际是流程层，触发时注入非常驻） | 引用 Anthropic Agent Skills 官方文档确认加载机制后，正确标注约束层：可执行脚本=系统层，SKILL.md=流程层 |
 
 ## 业界对照验证（2026-08-22 web 研究回收，与七条铁律一致）
 

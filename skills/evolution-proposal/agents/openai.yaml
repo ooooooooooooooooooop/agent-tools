@@ -1,0 +1,4 @@
+interface:
+  display_name: "进化提案"
+  short_description: "把 evolution-inbox 审计异常转化为可评审的规则/技能/插件进化提案，证据驱动、分级处理、不越权固化。"
+  default_prompt: "当用户要求处理 evolution-inbox 异常条目、复盘高频反模式或固化会话经验时，使用 $evolution-proposal。"
