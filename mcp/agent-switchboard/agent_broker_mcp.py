@@ -6534,15 +6534,31 @@ def queue_codex_request(
     }
 
 
-def get_codex_requests(project: str | None, limit: int = 20) -> dict[str, Any]:
+_CODEX_LIST_COLUMNS = (
+    "id, backend, project, topic, target_model, effort, task_kind, token_budget, "
+    "status, created_at, completed_at, responder, responder_model, "
+    "error IS NOT NULL AND length(error) > 0 AS has_error"
+)
+
+
+def get_codex_requests(
+    project: str | None, limit: int = 20, include_finished: bool = False
+) -> dict[str, Any]:
+    """List Codex requests. By default only active (queued/running/awaiting) rows are
+    returned and prompt/response bodies are never included, so polling the queue does
+    not blow up the caller context. Pass include_finished=True for the full history."""
     init_db()
     limit = max(1, min(int(limit or 20), 100))
+    active_filter = (
+        "AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')"
+    )
     if not project or str(project).strip() == "*":
         with db_connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                """
-                SELECT * FROM codex_requests
+                f"""
+                SELECT {_CODEX_LIST_COLUMNS} FROM codex_requests
+                WHERE 1=1 {'' if include_finished else active_filter}
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
@@ -6553,9 +6569,10 @@ def get_codex_requests(project: str | None, limit: int = 20) -> dict[str, Any]:
     with db_connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """
-            SELECT * FROM codex_requests
-            WHERE lower(project) = lower(?) OR root_path = ?
+            f"""
+            SELECT {_CODEX_LIST_COLUMNS} FROM codex_requests
+            WHERE (lower(project) = lower(?) OR root_path = ?)
+              {'' if include_finished else active_filter}
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -7194,32 +7211,39 @@ def _project_info_from_root() -> ProjectInfo:
     return ProjectInfo(name=safe_slug(Path(root).name), root_path=root)
 
 
-def get_cli_requests(project: str | None = None, limit: int = 20) -> dict[str, Any]:
-    """List async requests queued for registered CLI backends (filtered by project, newest first)."""
+def get_cli_requests(
+    project: str | None = None, limit: int = 20, include_finished: bool = False
+) -> dict[str, Any]:
+    """List async requests queued for registered CLI backends (filtered by project, newest first).
+    By default only active rows are listed; pass include_finished=True for full history."""
     init_db()
     try:
         cap = max(1, min(int(limit or 20), 100))
     except (TypeError, ValueError):
         cap = 20
+    active_filter = (
+        "AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')"
+    )
     with db_connect() as conn:
         conn.row_factory = sqlite3.Row
         if project:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, backend, project, topic, target_model, status, created_at, completed_at,
                        response IS NOT NULL AND length(response) > 0 AS answered
                 FROM cli_requests
-                WHERE lower(project) = lower(?)
+                WHERE lower(project) = lower(?) {'' if include_finished else active_filter}
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (project, cap),
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, backend, project, topic, target_model, status, created_at, completed_at,
                        response IS NOT NULL AND length(response) > 0 AS answered
                 FROM cli_requests
+                WHERE 1=1 {'' if include_finished else active_filter}
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (cap,),
@@ -8428,15 +8452,30 @@ def queue_claude_request(
     }
 
 
-def get_claude_requests(project: str | None, limit: int = 20) -> dict[str, Any]:
+_CLAUDE_LIST_COLUMNS = (
+    "id, project, topic, target_model, effort, cli_model, task_kind, token_budget, "
+    "status, created_at, completed_at, responder, responder_model, "
+    "error IS NOT NULL AND length(error) > 0 AS has_error"
+)
+
+
+def get_claude_requests(
+    project: str | None, limit: int = 20, include_finished: bool = False
+) -> dict[str, Any]:
+    """List Claude requests. Same context-aware default as get_codex_requests:
+    active-only rows, no prompt/response bodies."""
     init_db()
     limit = max(1, min(int(limit or 20), 100))
+    active_filter = (
+        "AND status NOT IN ('completed','error','cancelled','canceled','expired','failed')"
+    )
     if not project or str(project).strip() == "*":
         with db_connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                """
-                SELECT * FROM claude_requests
+                f"""
+                SELECT {_CLAUDE_LIST_COLUMNS} FROM claude_requests
+                WHERE 1=1 {'' if include_finished else active_filter}
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
@@ -8447,9 +8486,10 @@ def get_claude_requests(project: str | None, limit: int = 20) -> dict[str, Any]:
     with db_connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """
-            SELECT * FROM claude_requests
-            WHERE lower(project) = lower(?) OR root_path = ?
+            f"""
+            SELECT {_CLAUDE_LIST_COLUMNS} FROM claude_requests
+            WHERE (lower(project) = lower(?) OR root_path = ?)
+              {'' if include_finished else active_filter}
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -9722,12 +9762,13 @@ TOOLS = [
     },
     {
         "name": "get_cli_requests",
-        "description": "List async requests queued for registered CLI backends (codex/claude/antigravity/gemini built-ins or config.json cli_backends custom).",
+        "description": "List async requests queued for registered CLI backends (codex/claude/antigravity/gemini built-ins or config.json cli_backends custom). By default only active rows are returned (no prompt/response bodies) so polling the queue does not bloat context; pass include_finished=true for full history.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "project": {"type": "string"},
                 "limit": {"type": "integer"},
+                "include_finished": {"type": "boolean", "description": "Include completed/errored requests in the listing (default false = active only)."},
             },
         },
     },
@@ -10047,12 +10088,13 @@ TOOLS = [
     },
     {
         "name": "get_codex_requests",
-        "description": "List requests queued for Codex.",
+        "description": "List requests queued for Codex. By default only active rows are returned without prompt/response bodies, so polling the queue does not bloat the caller context; pass include_finished=true for full history.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "project": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "include_finished": {"type": "boolean", "description": "Include completed/errored requests (default false = active only)."},
             },
         },
     },
@@ -10090,6 +10132,7 @@ TOOLS = [
             "properties": {
                 "project": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "include_finished": {"type": "boolean", "description": "Include completed/errored requests (default false = active only)."},
             },
         },
     },
