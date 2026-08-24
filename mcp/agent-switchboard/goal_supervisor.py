@@ -769,6 +769,41 @@ def get_goal_status(goal_ref: str, recent_actions: int = 10) -> dict[str, Any]:
 
 # --- 5. evidence recording (operator-driven, no auto-verify) -----------------
 
+def _blocked_gate(goal_ref: str, criterion_id: str) -> dict[str, Any]:
+    """Gate an operator-requested ``blocked`` (issue: never record a block
+    before real work was attempted and every declared alternative route was
+    tried). A block is the LAST rung of the escalation ladder — RETRY -> REPLAN
+    -> alternative route -> block — never the first reaction to difficulty.
+    Deterministic; no model call. Verifier-driven blocks (max attempts) and
+    budget breaches bypass this gate: they already carry hard evidence."""
+    config = _read_json(goal_dir(BROKER_DIR, goal_ref) / "config.json", None)
+    ledger = _read_json(goal_dir(BROKER_DIR, goal_ref) / "ledger.json", None)
+    if not isinstance(config, dict) or not isinstance(ledger, dict):
+        return {"allowed": False, "error": "goal_supervisor_unknown_goal"}
+    criterion = next(
+        (c for c in (config.get("criteria") or []) if c.get("id") == criterion_id), {}
+    )
+    item = (ledger.get("criteria") or {}).get(criterion_id) or {}
+    item = item if isinstance(item, dict) else {}
+    tried = [str(r) for r in (item.get("tried_routes") or [])] if isinstance(item, dict) else []
+    attempted = bool(item.get("route")) or int(item.get("attempts") or 0) > 0 or bool(tried)
+    if not attempted:
+        return {
+            "allowed": False,
+            "error": "blocked_without_attempt: criterion was never dispatched; dispatch work first (or record evidence as inconclusive)",
+            "hint": f"dispatch {goal_ref}",
+        }
+    alternatives = [str(r).strip() for r in (criterion.get("alternative_routes") or []) if str(r).strip()]
+    untried = [r for r in alternatives if r not in tried]
+    if untried:
+        return {
+            "allowed": False,
+            "error": f"blocked_with_untried_route: alternative routes still untried {untried}; dispatch one before blocking",
+            "hint": f"dispatch {goal_ref} --route {untried[0]}",
+        }
+    return {"allowed": True}
+
+
 def record_evidence(
     goal_ref: str,
     criterion_id: str,
@@ -778,12 +813,22 @@ def record_evidence(
     """Append observed evidence to a criterion and, optionally, move it to
     ``inconclusive`` or ``blocked`` (operator judgement). Phase 1 never sets
     ``verified``: only a configured verifier may do that (Phase 2), so a worker
-    can never complete a Goal on its own prose."""
+    can never complete a Goal on its own prose.
+
+    ``blocked`` is gated by :func:`_blocked_gate`: it is rejected unless the
+    criterion was actually dispatched (or failed a verifier) AND every declared
+    alternative route was tried. Recording evidence without a status hint on a
+    blocked criterion reopens it as ``inconclusive`` (recoverable pause, not a
+    tombstone)."""
     goal_ref = validate_goal_ref(goal_ref)
     criterion_id = validate_criterion_id(criterion_id)
     refs = [str(item).strip() for item in (evidence_refs or []) if str(item).strip()]
     if status_hint is not None and status_hint not in ("pending", "running", "inconclusive", "blocked"):
         return {"recorded": False, "error": f"status_not_allowed: {status_hint}"}
+    if status_hint == "blocked":
+        gate = _blocked_gate(goal_ref, criterion_id)
+        if not gate["allowed"]:
+            return {"recorded": False, "error": gate["error"], "hint": gate["hint"]}
 
     state = _update_ledger(
         goal_ref,
@@ -819,12 +864,18 @@ def _apply_evidence(state: dict[str, Any], criterion_id: str, refs: list[str], s
         item = {}
         criteria[criterion_id] = item
     observed = list(item.get("observed_evidence") or [])
+    new_refs = [ref for ref in refs if ref not in observed]
     for ref in refs:
         if ref not in observed:
             observed.append(ref)
     item["observed_evidence"] = observed
     if status_hint is not None:
         item["status"] = status_hint
+    elif item.get("status") == "blocked" and new_refs:
+        # Recoverable pause, not a tombstone: new evidence reopens a blocked
+        # criterion as inconclusive so it can be dispatched again.
+        item["status"] = "inconclusive"
+        item["attention"] = "reopened_by_new_evidence"
     item["updated_at"] = utc_now()
     _recompute_status(state)
 
@@ -1089,14 +1140,22 @@ def dispatch_criterion(goal_ref: str, *, route: str | None = None) -> dict[str, 
             if not isinstance(item, dict):
                 return cid, None
             status = item.get("status")
-            if status == "verified" or status == "blocked":
+            if status == "verified":
+                continue
+            routes = list(criterion.get("alternative_routes") or []) or None
+            if status == "blocked":
+                # Recoverable pause, not a tombstone: a blocked criterion with an
+                # untried alternative route may be re-dispatched on that route.
+                tried = [str(r) for r in (item.get("tried_routes") or [])] if isinstance(item, dict) else []
+                untried = [r for r in (routes or []) if r not in tried]
+                if untried:
+                    return cid, routes
                 continue
             if status in (None, "pending"):
                 return cid, None
             # inconclusive: route advance only when the fingerprint is NOT a repeat.
             fingerprint = item.get("last_fingerprint")
             item_fingerprint = fingerprint if fingerprint else None
-            routes = list(criterion.get("alternative_routes") or []) or None
             return cid, routes
         return None, None
 
@@ -1110,6 +1169,26 @@ def dispatch_criterion(goal_ref: str, *, route: str | None = None) -> dict[str, 
 
     # Fingerprint repeat on an inconclusive criterion: never re-dispatch the same route.
     repeated = bool(status == "inconclusive" and fingerprint)
+
+    if status == "blocked":
+        # Recoverable pause: _pick_target only returns a blocked criterion when an
+        # untried alternative route remains. Re-dispatch it on the next untried route.
+        routes = alternative_routes or []
+        already_tried = [str(r) for r in (item.get("tried_routes") or [])] if isinstance(item, dict) else []
+        next_route = next((r for r in routes if r not in already_tried), None)
+        if next_route is not None:
+            outcome = _update_ledger(
+                goal_ref,
+                lambda s: _mark_dispatch(s, target, route=next_route, tried=[*already_tried, next_route]),
+            )
+            _append_action(goal_ref, "work_dispatched", criterion_id=target, route=next_route, via="blocked_recovery")
+            return {"dispatched": True, "criterion_id": target, "route": next_route, "via": "blocked_recovery"}
+        return {
+            "dispatched": False,
+            "reason": "attention_required",
+            "criterion_id": target,
+            "condition": "blocked_no_untried_route",
+        }
 
     if repeated and not route:
         routes = alternative_routes or []
