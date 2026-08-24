@@ -10,17 +10,22 @@
 ## 为什么是插件而不是 persona 配置
 
 `dsh-persona` 是**静态模板**（`{{model}}` 只插值模型名，不按模型分支）。
-本插件注册一个 `system-prompt` section，其 `text` 是**函数**——每次提示词组装时
-读取当前 agent 的 `provider/model`，查画像表返回对应 steering；未匹配的模型
-返回空串（`renderPrompt` 自动丢弃，零 token 成本）。
+本插件注册一个 `system-prompt` section，并在 `system-prompt/assemble` 瀑布中
+读取**当前请求实际生效的模型**（`variables.provider/model`），查画像表返回对应
+steering；未匹配的模型返回空串（`renderPrompt` 自动丢弃，零 token 成本）。
 
 ## 机制
 
-- 使用 `dsh-system-prompt` 的 `section.text(ctx)` 函数特性（`SystemPrompt.assemble()`
-  对每个 section 调用 `typeof text === "function" ? text(context) : text`），
-  在 `context.agent.options` 读到当前 `provider/model`。
+- 使用 `dsh-system-prompt` 的 `system-prompt/assemble` 瀑布：本插件在瀑布
+  `next()` **之后**读取组装结果中的 `variables.provider/model`，再改写本插件的
+  section 文本。
+- **对话途中切换模型也能正确跟随**：`dsh-agent.installModelSelection()` 是
+  `system-prompt/assemble` 瀑布上的监听器，会把 `variables.provider/model`
+  覆盖为**当前请求实际生效的模型选择**（`agent.options` 只是创建时快照）。
+  本插件的监听器先 `await next()` 再读值，因此拿到的是覆盖后的当前模型——
+  会话中途切模型后，persona 与 steering 一起跟随，不会错配。
 - 匹配顺序：`<provider>:<model>` 精确 → `model` 跨 provider 兜底。
-- 同一模型每次返回相同文本，KV cache 前缀稳定；切换模型时该 section 文本变化
+- 同一模型每次渲染相同文本，KV cache 前缀稳定；切换模型时该 section 文本变化
   （模型切换本来就会失效前缀）。
 - 不含 `{{}}` 变量引用，不与 `renderPrompt` 的插值冲突。
 
