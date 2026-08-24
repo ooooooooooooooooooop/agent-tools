@@ -17,7 +17,7 @@
 
 1. 复制 `dsh-subagent-context-summary.js` 到目标设备 `~/.dsh/profiles/web/plugins/`（profile 名按实际）；
 2. 把 `cordis.patch.yml` 的条目合并进同 profile 的 `cordis.patch.yml`；
-3. ⚠️ **部署时必改**：条目中 `name` 的 `<你的DSH profile目录>` 替换为目标设备实际路径（如 `C:\Users\用户名\.dsh\profiles\web`）。Windows 路径反斜杠要写成 YAML 单引号字符串。
+3. 保持条目中的 `name: './plugins/dsh-subagent-context-summary.js'` 不变。加载器会相对 patch 文件所在的 profile 目录解析它；不要改成 Windows 绝对路径。
 
 > 依赖：DSH ≥ rc.7（`dsh-subagent-in-process-driver` 导出 `startInProcessRun`）。
 > 效果：父会话超过 30k 字符后，`subagent_fork` 子代理的初始上下文从「全量历史」变为「compaction 摘要 + 最近 1 轮」，典型场景可省子代理侧约 50-70% 输入 token。

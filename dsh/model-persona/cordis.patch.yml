@@ -1,0 +1,5 @@
+# Drop-in user patch layer for a DSH profile (e.g. ~/.dsh/profiles/web/cordis.patch.yml).
+# Merge only the `insert` list below into the existing array; do not overwrite.
+- insert:
+  - id: model-persona
+    name: './plugins/model-persona.js'

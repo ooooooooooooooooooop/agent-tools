@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import datetime
 import hashlib
 import json
 import os
@@ -49,11 +50,23 @@ ALLOWED_PERMISSION_MODES = {
 ALLOWED_DECISION_MODES = {"record_only", "codex"}
 ALLOWED_DECISIONS = {"ACK", "SEND", "INTERRUPT", "ASK_USER", "ACCEPT"}
 ALLOWED_INTERRUPT_MODES = {"native", "hard"}
+ALLOWED_MCP_MODES = {"inherit", "none"}
+ALLOWED_TOOL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\s*\([^)]*\))?$|^Bash\(.+\)$")
 MAX_PROMPT_CHARS = 200_000
 POLL_SECONDS = 0.20
 STREAM_STARTUP_TIMEOUT_SECONDS = 60.0
 CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 INTERRUPT_RESULT_TIMEOUT_SECONDS = 60.0
+
+# Governance guardrails (anti-pattern prevention, not just policy text):
+# 1) A manager may correct the same supervisor at most this many times via
+#    interrupt; beyond that the dispatch prompt is the defect, not the worker.
+MAX_MANAGER_INTERRUPTS = 2
+# 2) A supervisor idle/attention_required with no pending commands for longer
+#    than this is reclaimed (stop queued; session stays recoverable). Watchdog
+#    semantics: lazy check on status reads, so forgotten supervisors cannot
+#    hang forever without anyone closing them.
+ZOMBIE_RECLAIM_SECONDS = 1800
 
 
 def utc_now() -> str:
@@ -126,6 +139,51 @@ def validate_interrupt_mode(value: Any) -> str:
     return mode
 
 
+def validate_allowed_tools(value: Any) -> list[str]:
+    """Command-level allowlist for supervised sessions (hard permission boundary).
+
+    Each entry is a Claude Code tool-permission pattern, e.g. ``Bash(git add:*)``,
+    ``Bash(git commit:*)``, ``Read``. Empty/None means no CLI allowlist is injected
+    (mode default behavior). This is the hard-constraint alternative to
+    bypassPermissions: with ``permission_mode=acceptEdits`` the engine refuses
+    anything outside the patterns instead of requesting an unattended approval.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = [value]
+    elif isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        raise ValueError("allowed_tools must be a string or list of strings")
+    tools: list[str] = []
+    for item in raw:
+        tool = str(item or "").strip()
+        if not tool:
+            continue
+        if not ALLOWED_TOOL_RE.fullmatch(tool):
+            raise ValueError(
+                f"invalid allowed_tools pattern: {tool!r}; expected e.g. 'Bash(git add:*)' or 'Read'"
+            )
+        if tool not in tools:
+            tools.append(tool)
+    return tools
+
+
+def validate_mcp_mode(value: Any) -> str:
+    """MCP loading policy for supervised sessions.
+
+    ``inherit``: use the user's normal Claude MCP servers (status quo).
+    ``none``: hard-disable all MCP servers via ``--strict-mcp-config`` with an
+    empty config, so unrelated tools (e.g. memory) cannot be invoked at all --
+    a hard constraint that prompt-level prohibitions cannot provide.
+    """
+    mode = str(value or "inherit").strip().lower()
+    if mode not in ALLOWED_MCP_MODES:
+        raise ValueError("mcp_mode must be inherit or none")
+    return mode
+
+
 def supervisor_dir(broker_home: Path, supervisor_id: str) -> Path:
     return Path(broker_home) / "supervisors" / validate_supervisor_id(supervisor_id)
 
@@ -177,6 +235,18 @@ def _daemon_command(state_dir: Path) -> list[str]:
     return [sys.executable, str(Path(__file__).resolve()), "daemon", "--state-dir", str(state_dir)]
 
 
+def empty_mcp_config_path(state_dir: Path) -> Path:
+    """Per-supervisor empty MCP config for --strict-mcp-config (MCP hard-disable)."""
+    path = Path(state_dir) / "empty-mcp.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text('{"mcpServers":{}}', encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - filesystem failure path
+        raise RuntimeError(f"cannot create empty MCP config at {path}: {exc}") from exc
+    return path
+
+
 def _hook_event_server_command(broker_dir: Path) -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable, "hook-event-server", "--broker-dir", str(broker_dir)]
@@ -220,6 +290,8 @@ def _create_supervisor_unlocked(
     max_autonomous_actions: int = 4,
     stall_timeout_seconds: int = 900,
     startup_timeout_seconds: float = 8.0,
+    allowed_tools: list[str] | None = None,
+    mcp_mode: str = "inherit",
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Create or restart one detached supervisor without sending a model prompt."""
@@ -237,6 +309,8 @@ def _create_supervisor_unlocked(
         raise ValueError("policy exceeds 8000 characters")
     mode = validate_permission_mode(permission_mode)
     decision = validate_decision_mode(decision_mode)
+    clean_tools = validate_allowed_tools(allowed_tools)
+    clean_mcp = validate_mcp_mode(mcp_mode)
     max_actions = int(max_autonomous_actions)
     if max_actions < 0 or max_actions > 50:
         raise ValueError("max_autonomous_actions must be between 0 and 50")
@@ -292,6 +366,8 @@ def _create_supervisor_unlocked(
         "codex_effort": str(codex_effort or "").strip() or None,
         "max_autonomous_actions": max_actions,
         "stall_timeout_seconds": stall_seconds,
+        "allowed_tools": clean_tools,
+        "mcp_mode": clean_mcp,
         "session_id": session_id,
         "resume_existing": bool(old_config.get("has_started")),
         "has_started": bool(old_config.get("has_started")),
@@ -368,6 +444,8 @@ def create_supervisor(
     max_autonomous_actions: int = 4,
     stall_timeout_seconds: int = 900,
     startup_timeout_seconds: float = 8.0,
+    allowed_tools: list[str] | None = None,
+    mcp_mode: str = "inherit",
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Serialize launches so one supervisor id can never acquire two daemons."""
@@ -387,6 +465,8 @@ def create_supervisor(
         "max_autonomous_actions": max_autonomous_actions,
         "stall_timeout_seconds": stall_timeout_seconds,
         "startup_timeout_seconds": startup_timeout_seconds,
+        "allowed_tools": allowed_tools,
+        "mcp_mode": mcp_mode,
         "dry_run": dry_run,
     }
     if dry_run:
@@ -422,6 +502,18 @@ def queue_command(
         raise ValueError(f"prompt exceeds {MAX_PROMPT_CHARS} characters")
     mode = validate_interrupt_mode(interrupt_mode)
     command_id = str(uuid.uuid4())
+    if interrupt_current:
+        prior_interrupts = 0
+        for path in sorted((state_dir / "commands").glob("*.json")):
+            row = _read_json(path, {}) or {}
+            if row.get("type") == "message" and bool(row.get("interrupt_current")):
+                prior_interrupts += 1
+        if prior_interrupts >= MAX_MANAGER_INTERRUPTS:
+            raise RuntimeError(
+                f"managed_claude_interrupt_budget_exceeded: {sid} already had "
+                f"{prior_interrupts} corrective interrupts (limit {MAX_MANAGER_INTERRUPTS}); "
+                "close this supervisor or create a new one instead of further correction"
+            )
     payload = {
         "schema_version": 1,
         "id": command_id,
@@ -520,10 +612,67 @@ def _recent_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
     return result
 
 
+def _maybe_reclaim_zombie(state_dir: Path, state: dict[str, Any]) -> str:
+    """Watchdog lazy reclaim. Returns:
+    - "" (no action): busy, pending commands, recent activity, or terminal status;
+    - "zombie_reclaimed": idle/attention_required + no pending commands + older
+      than ZOMBIE_RECLAIM_SECONDS -> a stop command was queued (recoverable);
+    - "stale_uncollected": daemon already dead but state not terminal -> nothing
+      to stop; the record is flagged so it can be cleaned up instead of lingering.
+    """
+    status = state.get("status")
+    if status in {"stopped", "failed", "launching"}:
+        return ""
+    if status not in {"idle", "attention_required"}:
+        # busy / starting / accepted / deciding: still active, leave alone
+        return ""
+    commands_dir = state_dir / "commands"
+    pending = False
+    if commands_dir.exists():
+        for path in sorted(commands_dir.glob("*.json")):
+            row = _read_json(path, {}) or {}
+            if row.get("type") == "message" and row.get("status") in {
+                "queued", "submitting", "submitted", "confirmed",
+                "delivery_unconfirmed_after_restart", "outcome_unconfirmed_after_restart",
+            }:
+                pending = True
+                break
+    if pending:
+        return ""
+    if not pid_is_alive(state.get("daemon_pid")):
+        # daemon already dead: nothing to stop, but the record is stale and
+        # should be flagged so a manager can clean it up instead of it lingering.
+        return "stale_uncollected"
+    last = state.get("last_activity_at") or state.get("updated_at") or ""
+    try:
+        last_ts = (
+            datetime.datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=datetime.timezone.utc)
+            .timestamp()
+        )
+    except (TypeError, ValueError):
+        return ""
+    age = time.time() - last_ts
+    if age < ZOMBIE_RECLAIM_SECONDS:
+        return ""
+    command_id = str(uuid.uuid4())
+    payload = {
+        "schema_version": 1, "id": command_id, "type": "stop", "status": "queued",
+        "created_at": utc_now(), "updated_at": utc_now(),
+    }
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(state_dir / "commands.lock", timeout=5):
+        _write_json(commands_dir / f"{command_id}.json", payload)
+    return "zombie_reclaimed"
+
+
 def public_status(state_dir: Path, recent_events: int = 10) -> dict[str, Any]:
     state = _read_json(Path(state_dir) / "state.json", {}) or {}
     if not state:
         raise ValueError(f"managed_claude_unknown_supervisor: {Path(state_dir).name}")
+    reclaim = _maybe_reclaim_zombie(Path(state_dir), state)
+    reclaimed = reclaim == "zombie_reclaimed"
+    stale_uncollected = reclaim == "stale_uncollected"
     commands = []
     for path in sorted((Path(state_dir) / "commands").glob("*.json")):
         row = _read_json(path, {}) or {}
@@ -562,6 +711,8 @@ def public_status(state_dir: Path, recent_events: int = 10) -> dict[str, Any]:
     result["daemon_alive"] = pid_is_alive(state.get("daemon_pid"))
     result["claude_alive"] = pid_is_alive(state.get("claude_pid"))
     result["pending_commands"] = commands
+    result["zombie_reclaimed"] = reclaimed
+    result["stale_uncollected"] = stale_uncollected
     result["recent_events"] = _recent_jsonl(
         Path(state_dir) / "events.jsonl", max(0, min(int(recent_events), 50))
     )
@@ -722,6 +873,22 @@ class ManagedClaudeDaemon:
             str(self.config["permission_mode"]),
             "--no-chrome",
         ]
+        # Command-level hard allowlist: with acceptEdits/manual the engine refuses
+        # anything outside these patterns instead of queueing an unattended approval
+        # request. This is the hard-constraint alternative to bypassPermissions.
+        for tool in self.config.get("allowed_tools") or []:
+            command.extend(["--allowedTools", str(tool)])
+        # MCP hard-disable: an empty --strict-mcp-config removes unrelated servers
+        # (e.g. memory) from the session entirely, so prompt-level prohibitions are
+        # never the last line of defense.
+        if str(self.config.get("mcp_mode") or "inherit").lower() == "none":
+            command.extend(
+                [
+                    "--strict-mcp-config",
+                    "--mcp-config",
+                    str(empty_mcp_config_path(self.state_dir)),
+                ]
+            )
         if resume:
             command.extend(["--resume", self.session_id])
         else:

@@ -55,12 +55,35 @@ description: |
 4. **验收**：对照 objective 与 policy 独立核验证据，不接受执行者自述。
 5. **关闭归档**：`close_supervisor` 写入归档摘要（做了什么、证据、风险、下一步），供跨会话续接。
 
+### 生命周期强制收尾（看门狗兜底）
+
+> **根因**：2026-08-24 会话 9 个 supervisor 在验收完成后仍悬挂（leaderboard-reground、impact-gold-rootcause-audit、taskflow-dashboard-update 等全部 `attention_required`、daemon+claude 存活）。"及时关闭"规则早已存在，缺的是执行拦截——人工"记得 close"不可靠。
+
+**收尾不是靠记忆，是靠看门狗兜底**：
+
+- **验收后立即 close**：验收通过或确认不再需要 → `close_supervisor` 归档摘要，这是验收流程第 5 步的自然延续。
+- **启动时设 stall 兜底**：`start_managed_claude_supervisor` 必填 `stall_timeout_seconds`（300~600），超时无 token 自动产出 stall 事件供处置。
+- **看门狗必须对用户可见**：启动长监督/跨轮等待时，必须在回复中报告「下一次检查触发时间」（精确到时分秒，含时区），不能黑箱等待；超时无事件则由 stall 事件接管，管理者不得静默循环。
+- **回合结束自查一次**：每个 goal round / 长等待结束时，`list_managed_claude_supervisors` 检查本项目存活 supervisor；任务已完成但仍存活的立即 close；`attention_required` 的先收集最终结果再关闭。
+- **stale 记录识别**：`daemon_alive=false` 但状态非终态（`stopped`/`failed`）的 supervisor 会带 `stale_uncollected: true`——daemon 已死无法回收，状态残留；出现时在 checkpoint 登记后清理状态记录，不让它永久残留。
+- **返修轮次预算（防套娃）**：同一 artifact 的 review→repair 循环最多 **2 轮**；第 3 轮发现仍需返修时，禁止继续同一链——暂停，重新设计合同（或升级决策），并在验收报告记录 `repair_rounds`。参照 GitLab `retry:max`/Jenkins `retry(N)` 的收敛上限思想；此预算在决策层执行（broker 无法语义判断"同一 artifact"）。
+- **悬挂即处置，不留过夜**：任何 supervisor 若已无待处理命令且事件流停滞，即使本回合没有它的结果，也 `stop_managed_claude_supervisor` 并在 checkpoint 记录，由下一会话续接，而不是长期悬挂。
+
+### 等待纪律：WAIT 与 GET 不得夹用（防轮询变体）
+
+> **反模式**：2026-08-24 会话 `wait_supervisor_event`（180s）每次超时返回后立即夹一次 `get_managed_claude_supervisor`，形成 WAIT→GET 轮询循环，连续 44 分钟无看门狗、无用户可见检查时间。
+
+- `wait_supervisor_event` 超时返回 ≠ 有事件：直接再次 wait（`since_seq` 推进到最新已知 seq），**禁止**在两次 wait 之间夹 `get_managed_claude_supervisor` / `list_managed_claude_supervisors` 查询；
+- 只有 wait 返回了 material 事件（turn_completed / stall / failed / exited），才去 GET 详情或收结果；
+- 长等待依赖 `stall_timeout_seconds` 的事件驱动兜底，而不是人工每 3 分钟查一次。
+
 ## 跨模型委派规则
 
 - **模型档位与执行层解耦（统一 Provider 优先）**：
   - **禁止死板按厂商猜工具**：不要将 Gemini 绑定到 Antigravity，也不要将 OpenAI 模型绑定到 Codex CLI。任何注册在 Provider（如 CPA）或 CLI 中的模型均可通过 `route_agent_task(target_model=...)` 直接分发。
   - **执行层默认使用廉价工作马**：默认首选廉价档（如 `gpt-5.6-luna`、`gemini-3.7-flash`），两者互为热备；除非用户显式要求前沿档（sol/fable），否则禁止使用昂贵模型。
   - **网络检索/开放调研委托执行层**：凡需最新资料、论文检索或外网调研，禁止主会话直接调用 `web_search` 灌入脏网页，优先委托带搜索能力的执行层 Worker（如 `gemini-3.7-flash` via CPA）处理并回收提炼摘要。
+  - **web_search 不可用时的标准通道（CLI worker 搜索）**：内置 `web_search` 工具（`web-search-deepseek` provider）需要 DeepSeek 官方 API key；未配置或调用失败时**不阻塞**，改用已登录的 CLI worker 联网搜索：`queue_cli_request(backend=codex_cli, target_model=gpt-5.6-luna, effort=medium, prompt="联网搜索…返回URL")` → 单次 `request_result(wait_seconds=120)` 回收。零新增成本、复用已有订阅额度；代价是 1~3 分钟延迟与结构化提示词约束。完整可复制模板见 `examples/web-search-via-cli-worker.md`。
 - 审查/评审/辩论类任务优先派给当前最强模型（如 Codex 的 `gpt-5.6-sol` max 档），`mode=read-only`；评审意见作为返修指令来源。
 - Gemini 路由：经 `consult_gemini` / `route_agent_task(target_agent="gemini")` 走 Gemini CLI 或 Gemini API；适用咨询类任务，与 Codex/Claude 同属异厂咨询通道。
 - **权限默认最小**：broker 默认的受管权限模式是 `acceptEdits`，实现类委派先以默认最小权限启动；`bypassPermissions` 仅在用户明确授权且目标范围受控（有界目录、红线已写入 policy）时才升级使用。
@@ -76,12 +99,16 @@ description: |
 | 陷阱 | 症状 | 对策 | 来源 |
 |---|---|---|---|
 | 权限模式误配 | 受管会话读项目根外文件时空转，等不到人工批准；或 worker 落在只读会话拒绝执行 | 默认用 broker 的保守默认 `acceptEdits` 启动；仅当用户明确授权且目标范围受控时才升级 `bypassPermissions`（受管窗口无人可点批准）；遇到认证类失败停止上报，不得自行升级绕过 | broker 实现依据（默认 `acceptEdits`）+ 来自 2026-08-18 生产复盘，本仓库无可复核测试 |
+| git 写操作无人批准卡死 | acceptEdits 下 `git add/commit/tag` 触发人工批准请求，受管窗口无人可批 → 只能被迫升级 bypassPermissions | 优先用 `allowed_tools` 命令级白名单（如 `["Bash(git add:*)","Bash(git commit:*)","Bash(git tag:*)","Read"]`），引擎强制拒绝白名单外命令且无需人工批准；`bypassPermissions` 仅作最后手段 | 2026-08-24 生产复盘（leaderboard-source-freeze 卡死）；实现有单测覆盖 |
+| memory 等无关 MCP 反复调用 | policy 文字禁止无效，模型仍尝试调用 `mcp__memory_server__*` | 只读/文件类任务启动时用 `mcp="none"` 硬禁用全部 MCP（`--strict-mcp-config` 空配置），工具不存在即不可能被调用；需要特定 MCP 时再显式放开 | 2026-08-24 生产复盘（两次 supervisor 均撞 memory）；实现有单测覆盖 |
 | 客户端超时假死 | 大上下文请求被客户端掐断，但上游实际健康 | 为执行者客户端配置长超时（如 Claude 的 `API_TIMEOUT_MS=600000`），注意只对新进程生效 | 来自 2026-08-18 生产复盘，本仓库无可复核测试 |
 | MCP超时与惊群重试 | 同步调用长任务触发 MCP 32001，误判通道死亡，连发多个新请求打瘫队列 | 耗时任务强制改用异步队列（`queue_*` 拿 ID）+ 单次 `request_result(wait_seconds=60~120)` 挂起；遇超时先查在途队列接管 ID，严禁重发或并发切换通道 | 2026-08 生产复盘与治理闭环 |
 | 微小差异套娃核验 | 回收两路结果后因次要格式或模型标识微差推翻一切，再次拉 Subagent 全量重查 | 实行 Diff-Only 收敛门禁：共识部分直接锁定，仅对有实质冲突的单一事实/公式发微探针，禁止全盘重推 | 2026-08 生产复盘与治理闭环 |
 | 上游配额耗尽 | 事件流反复 `api_retry` / `api_retry_exhausted` 且含 `rate_limit` | 报告用户并暂停，切换上游/接口后重试；禁止无限重试 | broker 实现/测试依据（supervision 事件流含 `api_retry_exhausted`） |
 | 多窗口消息串线 | 中断一条消息时它可能已送达另一窗口 | 中断前确认目标窗口；返修时先核对提交归属再决定 reset | 来自 2026-08-18 生产复盘，本仓库无可复核测试 |
-| 闲置窗口悬挂 | supervisor 完成但长期不关闭 | 验收通过即 `close_supervisor`，摘要归档进 topic memory | broker 实现依据（`close_supervisor` 归档语义） |
+| 闲置窗口悬挂 | supervisor 完成但长期不关闭（2026-08-24 一次 9 个悬挂） | 验收通过即 `close_supervisor`，摘要归档进 topic memory；回合结束自查存活列表，悬挂即处置，见上文「生命周期强制收尾（看门狗兜底）」 | broker 实现依据 + 2026-08-24 生产复盘（9 supervisor 悬挂） |
+| WAIT→GET 轮询变体 | `wait_supervisor_event` 每次超时后立即夹 `get_managed_claude_supervisor`，形成 3 分钟一次的轮询循环（2026-08-24 连续 44 分钟） | wait 超时直接再次 wait（推进 since_seq）；只有 material 事件返回才 GET 详情；长等待靠 `stall_timeout_seconds` 事件兜底 | 2026-08-24 生产复盘（10:08-10:52 无看门狗 Deep diving 段） |
+| 管理者微观纠偏循环 | 同一执行者 2 次以上 interrupt 纠偏仍无效（memory MCP、Grep 参数、路径猜错），管理者反复救火 | 派工提示词一次性写死陷阱（`mcp="none"`、`allowed_tools`、OWN 绝对路径）；同一执行者第 2 次纠偏无效即停用，改走 Codex worker 或重写派工，不继续第 3、4、5 次 | 2026-08-24 生产复盘（8+ 次 interrupt） |
 | 工具可用性臆断 | 声明目录里没有某工具就断言"物理上无法使用" | 先做一次真实调用，失败再降级；目录清单不是可用性证据（热重载可能迟注册） | 来自 2026-08-18 生产复盘（热重载迟注册），本仓库无可复核测试 |
 | 省略模型档位 | 省略 `model_policy`/`effort` 的派工被路由到前沿档，悄悄烧额度 | 派工单必填显式档位；环境默认值（如 `set_model_default`）只是局部补丁，不作约束 | 2026-08-18 生产复盘，本仓库无可复核测试 |
 | worker 越权改 git 状态 | 受管 worker 切换分支或动暂存区，管理者的提交落到非预期分支 | 派工红线显式禁止一切 git 写操作（含 checkout/switch）；提交前必查 `git branch --show-current` 与 `git status`；提交后核对远端实际落点 | 2026-08-18 生产复盘，本仓库无可复核测试 |

@@ -1,0 +1,4 @@
+interface:
+  display_name: "系统化优化流程"
+  short_description: "从量化基线到机制落地到验证实装的完整优化方法论，拒绝临时补丁。"
+  default_prompt: "使用 $systematic-optimization，先量化基线再全量列问题，找根因并给出机制方案（非临时补丁），业界调研后归纳，实施并验证实装，最后度量对比。"

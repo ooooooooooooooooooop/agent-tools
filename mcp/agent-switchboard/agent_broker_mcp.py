@@ -1096,6 +1096,17 @@ def init_db() -> None:
             )
             """
         )
+        cli_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(cli_requests)").fetchall()
+        }
+        if "chain_key" not in cli_columns:
+            try:
+                conn.execute("ALTER TABLE cli_requests ADD COLUMN chain_key TEXT")
+            except sqlite3.OperationalError as exc:
+                if "readonly" in str(exc).lower():
+                    pass  # read-only sandbox/test DB: skip migration, column unused there
+                else:
+                    raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS shared_context_blobs (
@@ -7068,6 +7079,11 @@ CLI_ASYNC_WORKER_TIMEOUT_SECONDS = max(
     30, _env_int("AGENT_BROKER_CLI_ASYNC_TIMEOUT_SECONDS", CODEX_ASYNC_WORKER_TIMEOUT_SECONDS)
 )
 
+# Convergence limit for explicit review->repair chains (GitLab retry:max style):
+# the same chain_key may be queued at most this many times; the next attempt is
+# refused so endless repair retry nesting is impossible at the platform layer.
+CHAIN_BUDGET_MAX = _env_int("AGENT_BROKER_CHAIN_BUDGET_MAX", 3)
+
 
 def queue_cli_request(
     backend_name: str,
@@ -7080,12 +7096,18 @@ def queue_cli_request(
     task_kind: str | None = None,
     timeout: int | None = None,
     autorun: Any = None,
+    chain_key: str | None = None,
 ) -> dict[str, Any]:
     """Queue a prompt for a registered CLI backend as an async cli_requests row.
 
     The owner then calls start_cli_request_worker(id) to run it in a detached process,
     or the caller can pass autorun=True (default) to start the worker immediately.
     Always returns an id (deduped when an identical pending row exists).
+
+    ``chain_key`` marks an explicit review->repair iteration chain (same artifact).
+    The broker refuses more than CHAIN_BUDGET_MAX requests under the same chain key,
+    so review->repair loops cannot become endless retry nesting (GitLab retry:max
+    style convergence limit enforced at the platform layer, not as a doc rule).
     """
     init_db()
     backend = cli_registry().get(backend_name)
@@ -7093,6 +7115,20 @@ def queue_cli_request(
         raise ValueError(f"unknown CLI backend: {backend_name!r}")
     if not prompt or not prompt.strip():
         raise ValueError("prompt is required")
+    clean_chain = str(chain_key or "").strip()
+    if clean_chain:
+        with db_connect() as conn:
+            conn.row_factory = sqlite3.Row
+            prior = conn.execute(
+                "SELECT COUNT(*) AS n FROM cli_requests WHERE chain_key = ?",
+                (clean_chain,),
+            ).fetchone()
+            if prior and int(prior["n"]) >= CHAIN_BUDGET_MAX:
+                raise ValueError(
+                    f"chain_budget_exceeded: chain_key {clean_chain!r} already has "
+                    f"{int(prior['n'])} requests (limit {CHAIN_BUDGET_MAX}); "
+                    "stop this review->repair chain and redesign the contract instead"
+                )
     project_info = resolve_project(project) if project else _project_info_from_root()
     request_id = str(uuid.uuid4())
     now = utc_now()
@@ -7130,8 +7166,8 @@ def queue_cli_request(
             """
             INSERT INTO cli_requests (
                 id, backend, project, root_path, topic, prompt, status, created_by, created_at,
-                target_model, effort, mode
-            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                target_model, effort, mode, chain_key
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -7145,6 +7181,7 @@ def queue_cli_request(
                 target_model,
                 stored_effort,
                 stored_mode,
+                clean_chain or None,
             ),
         )
     if autorun_enabled:
@@ -10118,6 +10155,16 @@ TOOLS = [
                 "policy": {"type": "string", "description": "Compact milestone, safety, and acceptance rules."},
                 "permission_mode": {"type": "string", "enum": ["plan", "manual", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]},
                 "decision_mode": {"type": "string", "enum": ["record_only", "codex"]},
+                "allowed_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Command-level hard allowlist patterns for the supervised session, e.g. ['Bash(git add:*)', 'Bash(git commit:*)', 'Read']. With acceptEdits the engine refuses anything outside these patterns instead of requesting an unattended approval. This is the hard-constraint alternative to bypassPermissions.",
+                },
+                "mcp": {
+                    "type": "string",
+                    "enum": ["inherit", "none"],
+                    "description": "MCP loading policy. 'inherit' uses the user's normal Claude MCP servers (status quo). 'none' hard-disables all MCP servers via --strict-mcp-config so e.g. memory cannot be invoked at all.",
+                },
                 "codex_model": {"type": "string", "description": "Optional per-decision model override. Omit to inherit the current Codex configuration."},
                 "codex_effort": {"type": "string", "description": "Optional per-decision effort override. Omit to inherit the current Codex configuration."},
                 "max_autonomous_actions": {"type": "integer", "minimum": 0, "maximum": 50},
@@ -11813,14 +11860,21 @@ def start_managed_claude_supervisor(
     policy: str | None = None,
     permission_mode: str = "acceptEdits",
     decision_mode: str = "record_only",
+    allowed_tools: list[str] | None = None,
+    mcp: str | None = None,
     codex_model: str | None = None,
     codex_effort: str | None = None,
     max_autonomous_actions: Any = 4,
-    stall_timeout_seconds: Any = 900,
+    stall_timeout_seconds: Any = None,
     dry_run: Any = None,
 ) -> dict[str, Any]:
     project_info = resolve_project(project)
     config = load_config()
+    if stall_timeout_seconds is None:
+        raise ValueError(
+            f"stall_timeout_seconds is required (30-86400); "
+            "without it the supervisor has no stall watchdog and can hang forever"
+        )
     return managed_claude.create_supervisor(
         BROKER_DIR,
         project_info.root_path,
@@ -11833,6 +11887,8 @@ def start_managed_claude_supervisor(
         codex_path=discover_codex(config),
         codex_model=codex_model,
         codex_effort=codex_effort,
+        allowed_tools=allowed_tools,
+        mcp_mode=mcp or "inherit",
         max_autonomous_actions=int(max_autonomous_actions if max_autonomous_actions is not None else 4),
         stall_timeout_seconds=int(stall_timeout_seconds if stall_timeout_seconds is not None else 900),
         dry_run=truthy(dry_run),
@@ -14603,6 +14659,8 @@ def handle_managed_claude_cli(argv: list[str]) -> int:
         objective = _arg("--objective") or ""
         permission = _arg("--permission-mode") or "acceptEdits"
         decision = _arg("--decision-mode") or "record_only"
+        raw_tools = _arg("--allowed-tools")
+        allowed_tools = [t.strip() for t in raw_tools.split(",") if t.strip()] if raw_tools else None
         result = start_managed_claude_supervisor(
             project,
             sid,
@@ -14610,6 +14668,8 @@ def handle_managed_claude_cli(argv: list[str]) -> int:
             policy=_arg("--policy"),
             permission_mode=permission,
             decision_mode=decision,
+            allowed_tools=allowed_tools,
+            mcp=_arg("--mcp") or "inherit",
             codex_model=_arg("--codex-model"),
             codex_effort=_arg("--codex-effort"),
         )
