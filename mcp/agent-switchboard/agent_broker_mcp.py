@@ -7804,15 +7804,25 @@ def request_status(request_id: str, wait_seconds: Any = None) -> dict[str, Any]:
     }
 
 
-def request_result(request_id: str, wait_seconds: Any = None) -> dict[str, Any]:
+def request_result(request_id: str, wait_seconds: Any = None, max_chars: Any = 2500) -> dict[str, Any]:
     """Read-only: return the recorded answer for a request, or its current state if it has
     not been answered yet. With wait_seconds > 0, long-poll (single call) until the answer
     lands or the bounded deadline passes — the reliable way for a turn-based MCP caller to
-    collect a pending consult without ending its turn empty-handed."""
+    collect a pending consult without ending its turn empty-handed.
+
+    ``max_chars`` caps the returned ``response`` (default 2500) so a large worker answer
+    does not blow up the caller's context; pass 0 for the full response when the caller
+    really needs it (e.g. during acceptance). The returned ``response_truncated`` flag
+    tells the caller the answer was cut.
+    """
     init_db()
     rid = str(request_id or "").strip()
     if not rid:
         raise ValueError("request_id is required")
+    try:
+        cap = max(0, int(max_chars if max_chars is not None else 2500))
+    except (TypeError, ValueError):
+        cap = 2500
     polled = _poll_request(rid, wait_seconds)
     if not polled:
         return {"id": rid, "found": False, "error": "unknown request id"}
@@ -7832,6 +7842,13 @@ def request_result(request_id: str, wait_seconds: Any = None) -> dict[str, Any]:
         if table == "codex_requests" and (effort_label in {"top", "max", "xhigh"} or "max" in str(row.get("target_model") or "")):
             pending_note += "Max/xhigh-effort Sol consults typically take 5-15 minutes — this is normal, not a hang. "
         pending_note += f'Call request_result(request_id="{rid}", wait_seconds=180) to wait for it.'
+    truncated = False
+    if response and cap and len(response) > cap:
+        truncated = True
+        response = (
+            response[:cap]
+            + f"\n...[truncated to {cap} chars by request_result; pass max_chars=0 for the full response]"
+        )
     return {
         "id": rid,
         "found": True,
@@ -7843,6 +7860,7 @@ def request_result(request_id: str, wait_seconds: Any = None) -> dict[str, Any]:
         "responder_model": row.get("responder_model"),
         "completed_at": row.get("completed_at"),
         "response": response or None,
+        "response_truncated": truncated,
         "note": pending_note,
     }
 
@@ -8615,6 +8633,7 @@ def _dispatch_custom_cli_backend(
                 task_kind=args.get("task_kind"),
                 timeout=int(args.get("timeout") or CLI_ASYNC_WORKER_TIMEOUT_SECONDS),
                 autorun=True,
+                chain_key=args.get("chain_key"),
             )
             return {
                 "status": "delivered",
@@ -9646,6 +9665,7 @@ TOOLS = [
                 "forbidden_actions": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "Additional prohibitions; global Flash safety rules cannot be removed."},
                 "model_policy": {"type": "string", "description": "Explicit cost policy for Codex or Claude. 'cheap_read' selects Luna/low or Haiku (no effort); 'balanced'/'efficient'/'lower_effort' selects Terra/medium or Sonnet/medium. Omit for frontier/max consultation, audit, review, or debate."},
                 "native_unavailable_reason": {"type": "string", "description": "Required for same-vendor Codex/Claude MCP fallback after native subagent startup/access failure."},
+                "chain_key": {"type": "string", "description": "Stable id for one review->repair chain (same artifact). Pass the same chain_key on every iterative rework of the same artifact; the broker refuses more than 3 requests under one chain_key so repair loops cannot nest forever."},
                 "prompt": {"type": "string"},
             },
             "required": ["prompt"],
@@ -9681,7 +9701,7 @@ TOOLS = [
     },
     {
         "name": "queue_cli_request",
-        "description": "Queue a prompt for a registered CLI backend (built-in or config.json cli_backends custom) as an async request. Run by a detached worker; collect the answer with request_result(request_id=...).",
+        "description": "Queue a prompt for a registered CLI backend (built-in or config.json cli_backends custom) as an async request. Run by a detached worker; collect the answer with request_result(request_id=...). Pass chain_key for every request that is a review->repair iteration of the same artifact (same key for the whole chain); the broker refuses a chain longer than 3 requests so repair loops cannot nest forever.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -9695,6 +9715,7 @@ TOOLS = [
                 "task_kind": {"type": "string"},
                 "timeout": {"type": "integer"},
                 "autorun": {"type": "boolean"},
+                "chain_key": {"type": "string", "description": "Stable id for one review->repair chain (same artifact). Required on iterative rework; the broker refuses more than 3 requests under one chain_key."},
             },
             "required": ["backend", "prompt"],
         },
@@ -10108,6 +10129,7 @@ TOOLS = [
             "properties": {
                 "request_id": {"type": "string"},
                 "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 180, "description": "Long-poll up to this many seconds (bounded to the MCP window) for the answer before returning. 0/omitted = return immediately."},
+                "max_chars": {"type": "integer", "minimum": 0, "description": "Cap the returned response length (default 2500) so large worker answers do not blow up the caller context; 0 = full response. Use the full response only during acceptance."},
             },
             "required": ["request_id"],
         },
