@@ -179,6 +179,10 @@ Blocker:    none
 Details:    artifact://agent-A/report
 ```
 
+**报告体积硬约束（≤500 词，业界 LangChain Deep Agents 值）**：最终报告正文 ≤500 词；原始数据（完整日志、表格、证据）一律写文件，Details 只给路径。超长报告不得 splice 回主上下文——体积保护层配合前缀缓存保护，结构性防炸（实测：大量 inbox/spliced 注入与单步 204,869 输入 token / cache=0 高度相关）。
+
+**派发类别标注（[PREP]/[EXEC]，准备-执行平衡）**：每次 subagent 派发的 `description` 必须以 `[PREP]`（调查/审计/验证/合同）或 `[EXEC]`（实现/构建/运行/修复）开头；同一轮次内 `[PREP]` subagent 数量达到 6 个且 `[EXEC]` 为 0 时，必须停止派发调查类 subagent，先派一个 `[EXEC]` 动作（准备压倒执行是复发反模式，2026-08-25 实测：单日 19 个 subagent 全部为调查类、codex 派工 0 个 implementation，用户两次发火）。此约束为流程层，系统层插件版（自动计数拦截）待开发。
+
 禁止把子代理的完整工作过程（大量探查日志、多轮内部推理）splice 回主上下文。这是缓存保护的**结构性**方案，不是"少发几次消息"。多次大规模 splice 会杀死前缀缓存（实测单步 204,869 输入 token 且 cache=0 与大量 inbox/spliced 高度相关）。
 
 ## 十、恢复：checkpoint + repair contract（失败不重派全新 agent）
