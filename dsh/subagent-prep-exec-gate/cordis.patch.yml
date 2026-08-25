@@ -1,0 +1,20 @@
+# ============================================================================
+# subagent-prep-exec-gate：子代理准备/执行平衡守卫 —— cordis.patch.yml 可移植片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   subagent-prep-exec-gate.mjs 复制到同 profile 的 plugins/ 目录。
+#
+# 效果：同一轮次连续派发 >=6 个调查类 subagent（[PREP]）且无执行类（[EXEC]）
+#   时，模型下一步输入中会注入可见警告，强制先派一个 [EXEC] 动作
+#   （业界 OpenAI tool_choice="required" / Anthropic 终止条件思想的 subagent 通道版）。
+#   用户新指令（user 消息）会重置计数窗口。
+#
+# 分类规则：description 以 [EXEC] 或 implement/build/run/repair/fix/generate/
+#   execute/apply/produce/create 开头 → EXEC；其余（含 [PREP] 与裸描述）→ PREP。
+#   一次 EXEC 派发重置连续 PREP 计数。
+# ============================================================================
+
+- insert:
+  - id: subagent-prep-exec-gate
+    name: './plugins/subagent-prep-exec-gate.mjs'
