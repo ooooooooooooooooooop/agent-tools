@@ -1,0 +1,55 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+agent-presets: { default: cc }
+llm-pi-ai:
+  providers:
+    kimi-coding:
+      apiKeyEnv: KIMI_CODING_API_KEY
+      baseURL: https://api.kimi.com/coding/
+      models:
+        - id: k3-256k
+          name: Kimi K3-256K
+          contextWindow: 262144
+          maxTokens: 131072
+    deepseek:
+      apiKeyEnv: BAI_API_KEY
+      baseURL: https://api.b.ai/v1
+      retryPolicy:
+        mode: normal
+        maxRetries: 10
+        retryableCodes: [ EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT ]
+        backoff:
+          initialDelayMs: 3000
+          maxDelayMs: 60000
+          jitterRatio: 0
+      models:
+        - id: deepseek-v4-flash
+          contextWindow: 1000000
+          maxTokens: 384000
+        - id: deepseek-v4-pro
+          contextWindow: 1000000
+          maxTokens: 384000
+    cpa:
+      apiKeyEnv: CPA_API_KEY
+      api: openai-completions
+      baseURL: http://127.0.0.1:8317/v1
+      models:
+        - id: claude-sonnet-4-6
+          contextWindow: 200000
+        - id: claude-opus-4-6-thinking
+          contextWindow: 200000
+        - id: gpt-image-2
+          contextWindow: 262144
+        - id: gemini-3.7-flash-high
+          contextWindow: 1000000
+        - id: codex-auto-review
+          contextWindow: 262144
+        - id: gpt-5.6-luna-max
+          contextWindow: 272000
+          maxTokens: 128000
+        - id: gpt-5.6-sol-xhigh
+          contextWindow: 272000
+          maxTokens: 128000
+agent-default-model:
+  provider: cpa
+  model: gpt-5.6-sol-xhigh
