@@ -109,11 +109,14 @@ def sha1_file(path: Path) -> str:
 
 
 def collect_files(root: Path) -> dict[str, Path]:
-    return {
-        path.relative_to(root).as_posix(): path
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+    result: dict[str, Path] = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in HARD_EXCLUDE_DIRS]
+        base = Path(dirpath)
+        for name in filenames:
+            p = base / name
+            result[p.relative_to(root).as_posix()] = p
+    return result
 
 
 def compare(dest_root: Path, manifest: dict, templated: set[str] | None = None) -> tuple[list[str], list[str], list[str]]:
@@ -171,16 +174,16 @@ def main() -> int:
                 shutil.copy2(f, display / rel)
                 digests[rel] = sha1_file(f)
             elif f.is_dir():
-                for sub in f.rglob("*"):
-                    if not sub.is_file():
-                        continue
-                    if any(part in HARD_EXCLUDE_DIRS for part in sub.parts):
-                        continue
-                    rel_sub = (Path(rel) / sub.relative_to(f)).as_posix()
-                    target = display / rel_sub
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(sub, target)
-                    digests[rel_sub] = sha1_file(sub)
+                for dirpath, dirnames, filenames in os.walk(f, followlinks=False):
+                    dirnames[:] = [d for d in dirnames if d not in HARD_EXCLUDE_DIRS]
+                    base = Path(dirpath)
+                    for name in filenames:
+                        sub = base / name
+                        rel_sub = (Path(rel) / sub.relative_to(f)).as_posix()
+                        target = display / rel_sub
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(sub, target)
+                        digests[rel_sub] = sha1_file(sub)
         templated: dict[str, dict] = {}
         if args.template:
             for rel in list(digests):
