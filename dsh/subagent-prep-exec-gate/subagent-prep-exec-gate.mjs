@@ -39,7 +39,7 @@ function classify(description) {
 function counterFor(agent) {
   let c = chains.get(agent);
   if (!c) {
-    c = { prep: 0, exec: 0, interrupts: 0 };
+    c = { prep: 0, exec: 0, interrupts: 0, watchdogWarned: false };
     chains.set(agent, c);
   }
   return c;
@@ -71,6 +71,35 @@ export function apply(ctx, config = {}) {
   ctx.on('tools/post-execute', async (exec, _result, next) => {
     const downstream = await next();
     const toolName = exec.name;
+
+    // Guard C: self-sleep watchdog detection (铁律九三原则).
+    // A pwsh command that sleeps in a loop and claims to be a watchdog
+    // ("WATCHDOG"/"deadline" + Start-Sleep) cannot wake a finished session;
+    // inject the three-principle reminder once per user-message window.
+    if (toolName === 'pwsh') {
+      const cmd = String(exec.args?.command || '');
+      if (/Start-Sleep/.test(cmd) && /WATCHDOG|watchdog|deadline/.test(cmd)) {
+        const c = counterFor(exec.agent);
+        if (!c.watchdogWarned) {
+          c.watchdogWarned = true;
+          const reminder = {
+            type: 'text',
+            text: `[subagent-prep-exec-gate] 铁律九警告：此命令是"自睡看门狗"（Start-Sleep 循环 + WATCHDOG/deadline）——`
+                + `自睡 job 不算看门狗（业界：定时器必须在持久化状态机/服务端，agent 内 sleep 不能唤醒已结束会话）。`
+                + `正确模式：① job 只负责检查并产出结果（Test-Path → READY/PENDING）；`
+                + `② 唤醒必须来自 goal round 自动轮次（下一轮 goal 回来时用 job_output(job_id) 消费结果）；`
+                + `③ 不要把唤醒依赖在 job 完成通知上（通知不启动已结束会话）。`,
+            source: {
+              kind: 'governance',
+              form: 'notice',
+              summary: 'subagent-prep-exec-gate: self-sleep watchdog detected',
+            },
+          };
+          return withReminder(downstream, reminder);
+        }
+      }
+      return downstream;
+    }
 
     // Guard B: interrupt-and-redispatch budget.
     if (toolName === 'interrupt_agent') {
