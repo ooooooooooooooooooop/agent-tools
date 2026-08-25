@@ -260,7 +260,7 @@ class BuiltinAdapterTests(unittest.TestCase):
 
         with mock.patch.object(broker_mod, "consult_codex", return_value=fake) as m:
             with mock.patch.object(b, "discover", return_value="C:/bin/codex"):
-                res = b.execute("prompt", model="gpt-5.5", effort="max")
+                res = b.execute("prompt", model="gpt-5.6-luna", effort="max")
         self.assertEqual(res.status, "completed")
         self.assertTrue(res.model_attested)
         self.assertEqual(res.response, "codex answer")
@@ -316,8 +316,8 @@ class BuiltinAdapterTests(unittest.TestCase):
 def _fake_codex_result():
     class R:
         response = "codex answer"
-        requested_model = "gpt-5.5"
-        actual_model = "gpt-5.5"
+        requested_model = "gpt-5.6-luna"
+        actual_model = "gpt-5.6-luna"
         requested_effort = "max"
         actual_effort = "max"
         model_attested = True
@@ -534,6 +534,30 @@ class AsyncCliRequestTests(unittest.TestCase):
         listing = b.get_cli_requests("projx")
         self.assertEqual(listing["count"], 1)
         self.assertEqual(listing["requests"][0]["state"], "queued")
+
+    def test_work_structure_warning_fires_on_prep_overload(self):
+        # Preparation overwhelms execution: after many prep-type dispatches with
+        # zero implementation, the next dispatch carries a visible warning so the
+        # caller cannot pretend progress by only auditing/reviewing/contracting.
+        b = self.broker
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
+                result = None
+                for i in range(6):
+                    result = b.queue_cli_request(
+                        "echo", f"audit round {i}", project="prep-proj",
+                        autorun=False, task_kind="co_audit",
+                    )
+                self.assertIn("work_structure_warning", result)
+                self.assertIn("准备压倒执行", result["work_structure_warning"])
+        # An implementation dispatch clears the warning.
+        with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
+            with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
+                result = b.queue_cli_request(
+                    "echo", "do the work", project="prep-proj",
+                    autorun=False, task_kind="implementation",
+                )
+        self.assertNotIn("work_structure_warning", result)
 
     def test_chain_budget_blocks_review_repair_nesting(self):
         # Same chain_key may be queued up to CHAIN_BUDGET_MAX times; the next

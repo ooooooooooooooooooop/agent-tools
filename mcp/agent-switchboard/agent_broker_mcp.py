@@ -455,8 +455,8 @@ MODEL_ALIASES = {
     "sonnet 4.6": "Claude Sonnet 4.6 (Thinking)",
     "claude sonnet": "Claude Sonnet 4.6 (Thinking)",
     "claude sonnet 4.6": "Claude Sonnet 4.6 (Thinking)",
-    "gpt 5.5": "gpt-5.5",
-    "gpt-5.5": "gpt-5.5",
+    "gpt 5.5": CODEX_CHEAP_MODEL,
+    "gpt-5.5": CODEX_CHEAP_MODEL,
     "gpt 5.6": CODEX_FLAGSHIP_MODEL,
     "gpt-5.6": CODEX_FLAGSHIP_MODEL,
     "gpt 5.6 sol": CODEX_FLAGSHIP_MODEL,
@@ -650,11 +650,6 @@ STATIC_CODEX_MODELS = [
             "gpt-5.6-luna", "gpt 5.6 luna", "luna", "lunar",
             "5.6 luna", "5.6 lunar", "cheap codex", "fast codex",
         ],
-    },
-    {
-        "id": "gpt-5.5",
-        "display": "GPT-5.5",
-        "aliases": ["gpt-5.5", "GPT-5.5", "gpt 5.5"],
     },
     {
         "id": "gpt-5.4",
@@ -1105,6 +1100,14 @@ def init_db() -> None:
             except sqlite3.OperationalError as exc:
                 if "readonly" in str(exc).lower():
                     pass  # read-only sandbox/test DB: skip migration, column unused there
+                else:
+                    raise
+        if "task_kind" not in cli_columns:
+            try:
+                conn.execute("ALTER TABLE cli_requests ADD COLUMN task_kind TEXT")
+            except sqlite3.OperationalError as exc:
+                if "readonly" in str(exc).lower():
+                    pass
                 else:
                     raise
         conn.execute(
@@ -3297,7 +3300,7 @@ _PROMPT_MODEL_PATTERNS: list[tuple[str, str]] = [
     (r"sol|solar", CODEX_FLAGSHIP_MODEL),
     (r"terra", CODEX_BALANCED_MODEL),
     (r"luna|lunar", CODEX_CHEAP_MODEL),
-    (r"gpt[-\s]?5\.5", "gpt-5.5"),
+    (r"gpt[-\s]?5\.5", CODEX_CHEAP_MODEL),
     (r"gpt[-\s]?5\.4[-\s]?mini", "gpt-5.4-mini"),
     (r"gpt[-\s]?5\.4", "gpt-5.4"),
     (r"(?:gemini\s*)?4(?:\.0)?\s*pro\s*\(?\s*high\s*\)?", "gemini 4 pro high"),
@@ -4735,7 +4738,7 @@ def consult_codex(
         "-",
     ]
     # Reasoning effort is a config key, NOT part of the model name — keeping it separate
-    # is what fixes the "--model 'gpt-5.5 xhigh'" class of failures.
+    # is what fixes the "--model 'gpt-5.6-luna xhigh'" class of failures.
     if effort:
         command[2:2] = ["-c", f"model_reasoning_effort={effort}"]
     if model_name:
@@ -7101,6 +7104,59 @@ CLI_ASYNC_WORKER_TIMEOUT_SECONDS = max(
 # refused so endless repair retry nesting is impossible at the platform layer.
 CHAIN_BUDGET_MAX = _env_int("AGENT_BROKER_CHAIN_BUDGET_MAX", 3)
 
+# Work-structure watchdog: task kinds that count as "preparation" (auditing,
+# reviewing, contracting, verifying) versus the actual execution kind.
+PREP_TASK_KINDS = frozenset(
+    {
+        "review", "co_audit", "quick_check", "consult", "bug_hunt", "sanity_check",
+        "implementation_plan", "debate", "argue", "audit", "verification",
+        "contract", "discovery", "diagnostic",
+    }
+)
+WORK_STRUCTURE_WINDOW = 8
+WORK_STRUCTURE_MIN_PREP = 6  # >=6 of the last 8 requests are prep with zero impl -> warn
+
+
+def _work_structure_warning(project: str | None) -> str | None:
+    """Detect 'preparation overwhelms execution' on dispatch: if the last
+    WORK_STRUCTURE_WINDOW async requests for this project are almost all prep-type
+    (audit/review/contract/verification/...) with zero implementation, return a
+    visible warning so the caller cannot pretend progress by only dispatching
+    prep work. Mechanical, derived from stored task_kind rows; read-only and
+    advisory — never blocks dispatch."""
+    if not project:
+        return None
+    try:
+        init_db()
+        pinfo = resolve_project(project)
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+    kinds: list[str] = []
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        for table in ("cli_requests", "codex_requests"):
+            try:
+                rows = conn.execute(
+                    f"SELECT task_kind FROM {table} "
+                    "WHERE lower(project) = lower(?) ORDER BY created_at DESC LIMIT ?",
+                    (pinfo.name, WORK_STRUCTURE_WINDOW),
+                ).fetchall()
+            except sqlite3.Error:
+                continue
+            kinds.extend(str(row["task_kind"] or "") for row in rows)
+    kinds = [k for k in kinds if k][:WORK_STRUCTURE_WINDOW]
+    if len(kinds) < 4:
+        return None
+    prep = sum(1 for k in kinds if k in PREP_TASK_KINDS)
+    impl = sum(1 for k in kinds if k == "implementation")
+    if prep >= WORK_STRUCTURE_MIN_PREP and impl == 0:
+        return (
+            f"work_structure_warning: 最近 {len(kinds)} 个请求中 {prep} 个为准备类"
+            f"（audit/review/contract/verify...）、{impl} 个为 implementation；"
+            "准备压倒执行——先派发至少一个 implementation 类动作，否则视为空转"
+        )
+    return None
+
 
 def queue_cli_request(
     backend_name: str,
@@ -7133,6 +7189,7 @@ def queue_cli_request(
     if not prompt or not prompt.strip():
         raise ValueError("prompt is required")
     clean_chain = str(chain_key or "").strip()
+    stored_task_kind = str(task_kind or "").strip() or None
     if clean_chain:
         with db_connect() as conn:
             conn.row_factory = sqlite3.Row
@@ -7183,8 +7240,8 @@ def queue_cli_request(
             """
             INSERT INTO cli_requests (
                 id, backend, project, root_path, topic, prompt, status, created_by, created_at,
-                target_model, effort, mode, chain_key
-            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                target_model, effort, mode, task_kind, chain_key
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -7198,12 +7255,19 @@ def queue_cli_request(
                 target_model,
                 stored_effort,
                 stored_mode,
+                stored_task_kind,
                 clean_chain or None,
             ),
         )
     if autorun_enabled:
         start_cli_request_worker(request_id)
-    return {"id": request_id, "backend": backend.name, "status": "queued", "autorun": autorun_enabled}
+    result = {
+        "id": request_id, "backend": backend.name, "status": "queued", "autorun": autorun_enabled,
+    }
+    warning = _work_structure_warning(project_info.name if project else None)
+    if warning:
+        result["work_structure_warning"] = warning
+    return result
 
 
 def _project_info_from_root() -> ProjectInfo:
@@ -8603,6 +8667,9 @@ def route_agent_task(args: dict[str, Any]) -> dict[str, Any]:
             notice = prompt_budget_notice(args.get("project"), args.get("topic"), str(args.get("prompt") or ""))
             if notice:
                 result["prompt_notice"] = notice
+            warning = _work_structure_warning(args.get("project"))
+            if warning:
+                result["work_structure_warning"] = warning
     except Exception as exc:  # noqa: BLE001
         log(f"route_agent_task prompt guard failed: {exc}")
     return result
@@ -9534,7 +9601,7 @@ TOOLS = [
                 "max_response_chars": {"type": "integer", "minimum": 800, "maximum": 200000},
                 "model_policy": {"type": "string", "description": "Explicit cost policy: 'cheap_read' -> current live Codex reader/low; 'balanced'/'efficient'/'lower_effort' -> current live Codex workhorse/medium. Omit for frontier/max consultation."},
                 "native_unavailable_reason": {"type": "string", "description": "Required only when a Codex caller falls back to a Codex MCP session after the named native role failed to start or was unavailable."},
-                "target_model": {"type": "string", "description": "Model only — keep reasoning effort out of this string; use the 'effort' field. e.g. 'gpt-5.5', 'gpt-5.4-mini'."},
+                "target_model": {"type": "string", "description": "Model only — keep reasoning effort out of this string; use the 'effort' field. e.g. 'gpt-5.6-luna', 'gpt-5.4-mini'."},
                 "effort": {"type": "string", "description": "Single-agent reasoning effort: minimal|low|medium|high|xhigh|max. Omit for max (default); Ultra is an orchestration/delegation mode rather than a deeper single-agent consult tier."},
             },
             "required": ["prompt"],
@@ -14571,7 +14638,7 @@ def _default_official_models(cli: str | None) -> list[str]:
     if cli == "claude":
         return ["opus", "sonnet", "haiku", "fable"]
     if cli == "codex":
-        return ["gpt-5.5", "gpt-5.4-mini"]
+        return [CODEX_CHEAP_MODEL, "gpt-5.4-mini"]
     if cli == "gemini":
         return ["gemini-2.5-pro"]
     return []
