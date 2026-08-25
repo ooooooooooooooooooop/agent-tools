@@ -118,6 +118,11 @@ depends_on:
   - 无上述工具 → 绑定 **`goal round 自动触发`**（声明"下一轮 goal 唤醒时检查"——goal 轮次本身就是定时兜底）。
 - **无载体声明 = 未执行**：检查时间写入回复前，必须先确认载体存在（job id / schedule id / goal 活跃）；只有文字没有载体的时间声明不得写入回复。
 - **载体回读**：创建定时器/任务后，用 Describe/List/status 回读确认真实存在（Temporal Schedule 语义），不凭创建调用的成功返回自证。
+- **看门狗三原则（2026-08-25 调研落地）**：
+  1. **agent 内 sleep / 后台自睡 job 不算看门狗**（业界：LangGraph Cron/Temporal Timer/Step Functions Wait 的定时器都在**持久化状态机/服务端**，不是睡在 agent 进程里；"不要让 agent 自己 sleep 充当唯一调度器"）；
+  2. **唤醒必须来自外部机制**：goal round 自动轮次（DSH 的 scheduler 等效）或 dsh-schedule 定时器——job 完成通知**不唤醒已结束会话**（Claude Code 结论：通知本身不启动 agent，需显式 `--resume`）；
+  3. **分工分离**：job 负责"检查并产出结果"（如 Test-Path receipt → READY/PENDING），**goal round 负责"唤醒并消费"**（唤醒后 `job_output(job_id)` 取结果）——只有两者闭环才算看门狗。
+- 反模式实证（2026-08-25）：目标会话派 9 个 `Start-Sleep 600` 后台 job（含检查逻辑），job 按时完成但会话 1.8h 后才回来——"为什么没有触发"= job 完成通知无法唤醒会话。
 - 业界对照：OpenAI Structured Output（声明必须带 `status/resource_id/evidence`，缺证据拒绝 `scheduled=true`）；Temporal Schedule（create 后 Describe 回读）；"把承诺视为无效，只有可查询的资源 ID 与审计记录才算成立"。
 
 ## 铁律十：长任务结构化分阶段（防单会话无限膨胀）
