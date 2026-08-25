@@ -43,7 +43,8 @@ function counterFor(agent) {
 }
 
 function prependContext(block, additional) {
-  return block ? [...additional, ...block] : additional;
+  const base = Array.isArray(additional) ? additional : [];
+  return block ? [block, ...base] : base;
 }
 
 export function apply(ctx, config = {}) {
