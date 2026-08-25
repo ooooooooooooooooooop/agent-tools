@@ -1,0 +1,64 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# Removed 2026-08-20: llm-overflow-classifier and llm-retry-claude-code plugins.
+# dsh-llm rc.7 ships both fixes natively (INPUT_TOKEN_EXCEED_LIMIT classification
+# in isContextWindowExceededError, and Claude Code baseline retry defaults), so
+# the user plugins were redundant. Plugin files deleted from plugins/ dir.
+
+# MCP: agent-switchboard (local cross-agent broker from C:\Desktop\skills\mcp).
+# Host-plane row: registers tools as mcp__agent-switchboard__* for every session.
+# Reload marker: 2026-08-19 — force HMR respawn onto merged v1.0.33 code.
+- insert:
+  - id: mcp-agent-switchboard
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      transport: stdio
+      serverName: agent-switchboard
+      command: python
+      args:
+        - 'C:\Desktop\skills\mcp\agent-switchboard\agent_broker_mcp.py'
+      cwd: 'C:\Desktop\skills\mcp\agent-switchboard'
+      env:
+        PYTHONUTF8: '1'
+        PYTHONIOENCODING: 'utf-8'
+        DSH_BROKER_RELOAD: '20260819-1058'
+      toolCallTimeoutMs: 200000
+      failOnStartupError: false
+
+# Subagent context summarization (2026-08-22): fork 子代理不再全量复制父会话
+# 历史，超过 30k 字符时注入「父会话摘要（复用 compaction summary）+ 最近一轮」。
+# 阈值与保留轮数可调：thresholdChars / tailTurns。
+- insert:
+  - id: dsh-subagent-context-summary
+    name: './plugins/dsh-subagent-context-summary.js'
+    config:
+      thresholdChars: 30000
+      tailTurns: 1
+
+# Subagent usage observer (2026-08-24): 只读工具 subagent_usage /
+# subagent_stalled_check，从子代理会话日志查询模型、token、工具与空转判定。
+- insert:
+  - id: subagent-usage-observer
+    name: './plugins/subagent-usage-observer-v1.mjs'
+
+# Subagent splice summarizer (2026-08-24): 超长子代理文本报告有损压成结构化
+# 摘要（保留 status/changed/validation/blocker/artifact 字段），非文本块原样保留。
+- insert:
+  - id: subagent-splice-summarizer
+    name: './plugins/subagent-splice-summarizer-v1.mjs'
+    config:
+      thresholdChars: 8000
+
+# Subagent PREP/EXEC gate (2026-08-25): 连续 >=6 个调查类 subagent 且无执行类时，
+# 向模型注入可见警告（准备压倒执行守卫，subagent 通道版）。
+- insert:
+  - id: subagent-prep-exec-gate
+    name: './plugins/subagent-prep-exec-gate.mjs'
+    config:
+      warnPrep: 6
+- insert:
+  - id: model-persona
+    name: './plugins/model-persona.js'
+

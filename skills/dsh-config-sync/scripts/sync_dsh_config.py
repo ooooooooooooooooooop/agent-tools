@@ -21,7 +21,7 @@ from pathlib import Path
 
 DEFAULT_INCLUDE = ("AGENTS.md", "settings.yaml")
 OPTIONAL_INCLUDE = ("profiles", ".agent-presets", "patches")
-HARD_EXCLUDE_DIRS = {"sessions", "storages", "skills", "__pycache__"}
+HARD_EXCLUDE_DIRS = {"sessions", "storages", "skills", "__pycache__", "node_modules"}
 HARD_EXCLUDE_NAMES = {".credentials.yaml"}
 FORBIDDEN_SNIPPETS = {".jsonl", ".log"}
 SECRET_VALUE_RE = None  # placeholder; kept simple to avoid over-engineering

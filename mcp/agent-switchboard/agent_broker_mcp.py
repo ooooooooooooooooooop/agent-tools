@@ -5946,12 +5946,16 @@ def queue_antigravity_request(
     init_db()
     if not prompt or not prompt.strip():
         raise ValueError("prompt is required")
+    normalized_task = normalize_task_kind(task_kind or request_type)
+    if normalized_task in PREP_TASK_KINDS:
+        _, rejection = _work_structure_gate(project)
+        if rejection:
+            raise ValueError(rejection)
     project_info = resolve_project(project)
     request_id = str(uuid.uuid4())
     now = utc_now()
     created_by = os.environ.get("AGENT_BROKER_CALLER") or "mcp-client"
     normalized_model = normalize_model_name(target_model)
-    normalized_task = normalize_task_kind(task_kind or request_type)
     budget = int(token_budget or TASK_BUDGETS.get(normalized_task, TASK_BUDGETS["consult"]))
     strict = (
         truthy(strict_model)
@@ -6431,6 +6435,11 @@ def queue_codex_request(
     init_db()
     if not prompt or not prompt.strip():
         raise ValueError("prompt is required")
+    normalized_task_kind = normalize_task_kind(task_kind)
+    if normalized_task_kind in PREP_TASK_KINDS:
+        _, rejection = _work_structure_gate(project)
+        if rejection:
+            raise ValueError(rejection)
     project_info = resolve_project(project)
     request_id = str(uuid.uuid4())
     now = utc_now()
@@ -6438,7 +6447,6 @@ def queue_codex_request(
     clean_prompt = prompt.strip()
     model_label = (str(target_model).strip() or None) if target_model else None
     strict_flag = 1 if truthy(strict_model) else 0
-    normalized_task_kind = normalize_task_kind(task_kind)
     stored_token_budget = int(token_budget or 0) or None
     stored_effort = normalize_effort_token(effort) or (str(effort).strip().lower() if effort else None)
     autorun_enabled = CODEX_QUEUE_AUTORUN if autorun is None else truthy(autorun)
@@ -8420,6 +8428,11 @@ def queue_claude_request(
     init_db()
     if not prompt or not prompt.strip():
         raise ValueError("prompt is required")
+    stored_task_kind = str(task_kind or "").strip() or None
+    if stored_task_kind in PREP_TASK_KINDS:
+        _, rejection = _work_structure_gate(project)
+        if rejection:
+            raise ValueError(rejection)
     project_info = resolve_project(project)
     request_id = str(uuid.uuid4())
     now = utc_now()
