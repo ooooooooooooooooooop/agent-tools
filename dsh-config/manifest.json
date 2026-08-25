@@ -1,19 +1,18 @@
 {
   "dsh_home_src": "C:\\Users\\yexue\\.dsh",
   "digests": {
-    "AGENTS.md": "f35ead994d1645c0a4e4a3e1e074a6d1a9fc6eb99fa510312c44f48cdccdf06d",
-    "settings.yaml": "2d10d0d1c60185420c7dbe2b18d6087f6576e4be2374531019c09b8a429007b0",
+    ".agent-presets/cc/agent.cordis.yml": "5b371c814307ca1f153d66719cde272d17fd54c0f6c7d31aae925597a68b68e0",
+    ".agent-presets/cc/preset.yml": "2fab126d75e5bee0263f982fc9c3dc197c25a3d4d9e4fc09aa0af0cf0f2cea2f",
+    "AGENTS.md": "d39d1c7c7827bce53589cddea113c67b2aa33d0ef280587ae1707851e7eaf833",
+    "patches/README.md": "f6b2a9f522f6b9602fbcd9a5179efafeda0e0e722377b9448cc0425a9ef6fcfa",
     "profiles/web/cordis.patch.yml": "edaa74f680765920718b598a956d15735b8260190bb7be1cdb481db593727003",
-    "profiles/web/cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
-    "profiles/web/package.json": "6503157134c9d17e341a1a79c6511cfae2ee3e1cd4b60804616f0ac8b820b4d8",
-    "profiles/web/pnpm-workspace.yaml": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba",
-    "profiles/web/plugins/dsh-subagent-context-summary.js": "0f45aa4b8327adc0f0eba70c6ec3a7a33661e9abd793dc3d7bc3bc3bf87d39d6",
-    "profiles/web/plugins/model-persona.js": "e88be2bc3d303a9e78f2efb560583623bffec0d0f6aaea9f35f3d88fa4fb2fd1",
-    "profiles/web/plugins/subagent-prep-exec-gate.mjs": "eb2302d860a5df9b6aec1b1500e5056921cfcfe4816b3614e800488cd46b405c",
+    "profiles/web/cordis.yml": "f6b75725842b10dd559600fbcd6d69b7019c24cf0ea3ca0e24ebcd2600cbbc49",
+    "profiles/web/package.json": "73467ee30981e7e8358bbc19d203f16eeb68429f8f6f424ad152de8bdddb1f0b",
+    "profiles/web/plugins/model-persona.js": "d12886efd2fe2103a6d217c245fce4983f6e78e27b2f3754974c21099f64efbb",
+    "profiles/web/plugins/subagent-prep-exec-gate.mjs": "bc50f4bcea25d813459afd2d683809e73dc465b37b93770cec7493bba9501ac4",
     "profiles/web/plugins/subagent-splice-summarizer-v1.mjs": "782c1aa85f0697e24a04fe55f6ec707881b928472bed6694a4ce6415705ef5e4",
     "profiles/web/plugins/subagent-usage-observer-v1.mjs": "1a1ad56a715c091dc52c0f38b62ee5dd8c8f38c606b4063fa47e8cf192fb6ada",
-    ".agent-presets/cc/agent.cordis.yml": "e5a641c982f15acb0acbebed429289aeac0d939c8e42050f1f4e5cb74571054d",
-    ".agent-presets/cc/preset.yml": "84a9accf72e27e9ae7d351a403b88355841f784aaaab9b931b3e1e03598ba48a",
-    "patches/README.md": "c420d36907751424d941b3ecab0c624cb6eca0dda8cc4c0e9c0aca6549ca94f1"
+    "profiles/web/pnpm-workspace.yaml": "64f2de763c185e15432d8983e88264d5c7aa964ab82d9bd87410aa6df9667d4c",
+    "settings.yaml": "25dc36761ab4e15fbe9f06c816a52d773ad18564cf22bd7907051a1e6eb853fa"
   }
 }
