@@ -129,6 +129,67 @@ def check_review(path: str) -> tuple[bool, list[str]]:
     return not errors, errors
 
 
+# ---- repeat-tool detection (read-only session tool-call scan) ----
+# Input: JSONL of tool calls, one per line:
+#   {"tool": "read", "args": {"file_path": "src/a.py"}}
+#   {"tool": "pwsh", "args": {"command": "git status"}}
+#   {"tool": "grep",  "args": {"pattern": "foo", "path": "src/"}}
+# Detects: same read target >= READ_REPEAT_LIMIT (unchanged re-reads),
+# same command text >= CMD_REPEAT_LIMIT (suspected loops/re-runs).
+READ_REPEAT_LIMIT = 3
+CMD_REPEAT_LIMIT = 3
+
+
+def _tool_key(tool: str, args: dict) -> str | None:
+    """Canonical repeat key for a tool call, or None when not scannable."""
+    t = str(tool or "").lower()
+    if not isinstance(args, dict):
+        return None
+    if t == "read":
+        return f"read:{args.get('file_path') or args.get('path')}"
+    if t in ("pwsh", "bash", "sh"):
+        cmd = str(args.get("command") or args.get("cmd") or "").strip()
+        return f"cmd:{cmd}" if cmd else None
+    if t == "grep":
+        pat = str(args.get("pattern") or "")
+        p = str(args.get("path") or "")
+        return f"grep:{pat}@{p}" if pat else None
+    return None
+
+
+def check_session(path: str) -> tuple[bool, list[str]]:
+    """Scan a JSONL tool-call record for repeated reads / repeated commands."""
+    warnings: list[str] = []
+    counts: dict[str, int] = {}
+    lines: list[str] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = [ln for ln in fh if ln.strip()]
+    except OSError as exc:
+        return False, [f"cannot read session JSONL: {exc}"]
+    for ln in lines:
+        try:
+            row = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        key = _tool_key(row.get("tool"), row.get("args"))
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    for key, n in sorted(counts.items()):
+        kind, _, target = key.partition(":")
+        limit = READ_REPEAT_LIMIT if kind == "read" else CMD_REPEAT_LIMIT
+        if n >= limit:
+            label = "重复读取" if kind == "read" else "重复执行"
+            warnings.append(
+                f"{label}: '{target}' 调用 {n} 次（阈值 {limit}）— 改用 "
+                + ("grep/offset-limit 增量读取" if kind == "read"
+                   else "先读上次结果再换参数/换方案")
+            )
+    return not warnings, warnings
+
+
 def selftest() -> int:
     import tempfile
     ok = True
@@ -198,8 +259,43 @@ def selftest() -> int:
     finally:
         os.unlink(review_bad_path)
 
+    # session repeat-detection positive (clean) / negative (repeats)
+    session_clean = [
+        '{"tool": "read", "args": {"file_path": "a.py"}}',
+        '{"tool": "read", "args": {"file_path": "b.py"}}',
+        '{"tool": "pwsh", "args": {"command": "git status"}}',
+    ]
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write("\n".join(session_clean) + "\n")
+        session_ok_path = fh.name
+    try:
+        passed, _w = check_session(session_ok_path)
+        ok = ok and passed
+    finally:
+        os.unlink(session_ok_path)
+
+    session_bad = [
+        '{"tool": "read", "args": {"file_path": "same.py"}}',
+        '{"tool": "read", "args": {"file_path": "same.py"}}',
+        '{"tool": "read", "args": {"file_path": "same.py"}}',
+        '{"tool": "read", "args": {"file_path": "same.py"}}',
+        '{"tool": "pwsh", "args": {"command": "git status"}}',
+        '{"tool": "pwsh", "args": {"command": "git status"}}',
+        '{"tool": "pwsh", "args": {"command": "git status"}}',
+    ]
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write("\n".join(session_bad) + "\n")
+        session_bad_path = fh.name
+    try:
+        passed, w = check_session(session_bad_path)
+        ok = ok and (not passed) and len(w) >= 2
+    finally:
+        os.unlink(session_bad_path)
+
     print(f"SELFTEST: {'PASS' if ok else 'FAIL'} "
-          "(flow positive/negative, review positive/negative)")
+          "(flow ±, review ±, session ±)")
     return 0 if ok else 1
 
 
@@ -210,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate a problem-solving flow record")
     parser.add_argument("--check-review", metavar="REVIEW_MD",
                         help="validate a retrospective has all six AAR stages")
+    parser.add_argument("--check-session", metavar="SESSION_JSONL",
+                        help="scan tool-call JSONL for repeated reads/commands")
     parser.add_argument("--selftest", action="store_true",
                         help="run structural self-check only")
     args = parser.parse_args(argv)
@@ -236,6 +334,16 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"[FAIL] {e}")
         print("REVIEW GATE: 1 FAILING - retrospective is incomplete (no closure).")
+        return 1
+
+    if args.check_session:
+        passed, warns = check_session(args.check_session)
+        if passed:
+            print("SESSION GATE: PASS - no repeated reads/commands above threshold.")
+            return 0
+        for w in warns:
+            print(f"[REPEAT] {w}")
+        print("SESSION GATE: 1 WARNINGS - change strategy, do not re-run same call.")
         return 1
 
     parser.print_help()
