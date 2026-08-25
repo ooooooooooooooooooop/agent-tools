@@ -199,7 +199,7 @@ class GatewayCoreTests(unittest.TestCase):
         cfg = {
             "providers": {
                 "p-openai": {"type": "openai_compat", "base_url": "http://localhost:1", "models": ["m1", "m2"]},
-                "p-official": {"type": "official_cli", "cli": "codex", "models": ["gpt-5.5"]},
+                "p-official": {"type": "official_cli", "cli": "codex", "models": ["gpt-5.6-luna"]},
             }
         }
         with mock.patch.object(m, "load_config", return_value=cfg):
@@ -214,7 +214,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertIn("p-openai/m1", ids)
         self.assertIn("p-openai/m2", ids)
         self.assertIn("p-official", ids)
-        self.assertIn("p-official/gpt-5.5", ids)
+        self.assertIn("p-official/gpt-5.6-luna", ids)
 
     def test_resolve_provider_backend(self):
         reg = self._reg_with_providers()

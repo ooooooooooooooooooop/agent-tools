@@ -144,7 +144,7 @@ class RegistryRegistrationTests(unittest.TestCase):
         self.assertIsNotNone(reg.get("test-provider"))
 
     def test_official_cli_registered_with_backend(self):
-        cfg = {"providers": {"codex-official": {"type": "official_cli", "cli": "codex", "models": ["gpt-5.5"]}}}
+        cfg = {"providers": {"codex-official": {"type": "official_cli", "cli": "codex", "models": ["gpt-5.6-luna"]}}}
         reg = self._fresh_with_providers(cfg)
         self.assertIsNotNone(reg.get("codex-official"))
         self.assertEqual(reg.get("codex-official").description, "provider 'codex-official' via codex_cli")

@@ -46,8 +46,8 @@ class CodexCliBackend(CliBackend):
                 "supports_effort": True,
                 "supports_sandbox": True,
                 "supports_async": True,
-                "default_model": "gpt-5.5",
-                "default_effort": "xhigh",
+                "default_model": "gpt-5.6-luna",
+                "default_effort": "max",
             }
         )
         return md
