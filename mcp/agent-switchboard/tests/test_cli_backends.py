@@ -535,29 +535,47 @@ class AsyncCliRequestTests(unittest.TestCase):
         self.assertEqual(listing["count"], 1)
         self.assertEqual(listing["requests"][0]["state"], "queued")
 
-    def test_work_structure_warning_fires_on_prep_overload(self):
-        # Preparation overwhelms execution: after many prep-type dispatches with
-        # zero implementation, the next dispatch carries a visible warning so the
-        # caller cannot pretend progress by only auditing/reviewing/contracting.
+    def test_work_structure_gate_warns_then_blocks_prep_overload(self):
+        # Preparation overwhelms execution: first a visible warning rides the
+        # dispatch, then once consecutive prep with zero implementation exceeds
+        # the block threshold the dispatch is REFUSED (tool_choice="required"
+        # analog) until an implementation-class action is dispatched.
         b = self.broker
         with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
             with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
-                result = None
+                warned = None
                 for i in range(6):
-                    result = b.queue_cli_request(
+                    warned = b.queue_cli_request(
                         "echo", f"audit round {i}", project="prep-proj",
                         autorun=False, task_kind="co_audit",
                     )
-                self.assertIn("work_structure_warning", result)
-                self.assertIn("准备压倒执行", result["work_structure_warning"])
-        # An implementation dispatch clears the warning.
+                self.assertIn("work_structure_warning", warned)
+                self.assertIn("准备压倒执行", warned["work_structure_warning"])
+                # 7th and 8th prep still pass with warning; 9th is refused.
+                for i in range(6, 8):
+                    warned = b.queue_cli_request(
+                        "echo", f"audit round {i}", project="prep-proj",
+                        autorun=False, task_kind="co_audit",
+                    )
+                with self.assertRaisesRegex(ValueError, "work_structure_rejected"):
+                    b.queue_cli_request(
+                        "echo", "audit round 8", project="prep-proj",
+                        autorun=False, task_kind="co_audit",
+                    )
+        # An implementation dispatch clears the gate.
         with mock.patch.object(self.reg.get("echo"), "discover", return_value="C:/bin/echo"):
             with mock.patch.object(b, "run_process", return_value=(0, "ok", "")):
                 result = b.queue_cli_request(
                     "echo", "do the work", project="prep-proj",
                     autorun=False, task_kind="implementation",
                 )
-        self.assertNotIn("work_structure_warning", result)
+                self.assertNotIn("work_structure_warning", result)
+                # prep dispatch is allowed again after the implementation action
+                result = b.queue_cli_request(
+                    "echo", "audit after work", project="prep-proj",
+                    autorun=False, task_kind="co_audit",
+                )
+                self.assertEqual(result["status"], "queued")
 
     def test_chain_budget_blocks_review_repair_nesting(self):
         # Same chain_key may be queued up to CHAIN_BUDGET_MAX times; the next
