@@ -83,12 +83,14 @@ export function apply(ctx, config = {}) {
         if (!c.watchdogWarned) {
           c.watchdogWarned = true;
           const reminder = {
-            type: 'text',
-            text: `[subagent-prep-exec-gate] 铁律九警告：此命令是"自睡看门狗"（Start-Sleep 循环 + WATCHDOG/deadline）——`
-                + `自睡 job 不算看门狗（业界：定时器必须在持久化状态机/服务端，agent 内 sleep 不能唤醒已结束会话）。`
-                + `正确模式：① job 只负责检查并产出结果（Test-Path → READY/PENDING）；`
-                + `② 唤醒必须来自 goal round 自动轮次（下一轮 goal 回来时用 job_output(job_id) 消费结果）；`
-                + `③ 不要把唤醒依赖在 job 完成通知上（通知不启动已结束会话）。`,
+            content: [{
+              type: 'text',
+              text: `[subagent-prep-exec-gate] 铁律九警告：此命令是"自睡看门狗"（Start-Sleep 循环 + WATCHDOG/deadline）——`
+                  + `自睡 job 不算看门狗（业界：定时器必须在持久化状态机/服务端，agent 内 sleep 不能唤醒已结束会话）。`
+                  + `正确模式：① job 只负责检查并产出结果（Test-Path → READY/PENDING）；`
+                  + `② 唤醒必须来自 goal round 自动轮次（下一轮 goal 回来时用 job_output(job_id) 消费结果）；`
+                  + `③ 不要把唤醒依赖在 job 完成通知上（通知不启动已结束会话）。`,
+            }],
             source: {
               kind: 'governance',
               form: 'notice',
@@ -107,10 +109,12 @@ export function apply(ctx, config = {}) {
       c.interrupts += 1;
       if (c.interrupts >= warnInterrupts) {
         const reminder = {
-          type: 'text',
-          text: `[subagent-prep-exec-gate] 警告：本轮已对子代理执行 ${c.interrupts} 次 interrupt_agent。`
-              + `停止中断-重派循环——先收集子代理已有结果（persist→inspect），只有出现新证据或参数变化`
-              + `才允许重派，且只重派失败子步骤（Temporal 粒度语义），不要整批 stop→restart。`,
+          content: [{
+            type: 'text',
+            text: `[subagent-prep-exec-gate] 警告：本轮已对子代理执行 ${c.interrupts} 次 interrupt_agent。`
+                + `停止中断-重派循环——先收集子代理已有结果（persist→inspect），只有出现新证据或参数变化`
+                + `才允许重派，且只重派失败子步骤（Temporal 粒度语义），不要整批 stop→restart。`,
+          }],
           source: {
             kind: 'governance',
             form: 'notice',
@@ -136,10 +140,12 @@ export function apply(ctx, config = {}) {
 
     if (c.prep >= warnPrep && c.exec === 0) {
       const reminder = {
-        type: 'text',
-        text: `[subagent-prep-exec-gate] 警告：本轮已连续派发 ${c.prep} 个调查类 subagent（[PREP]）、`
-            + `尚无执行类 subagent（[EXEC]）。准备压倒执行——请先派发一个 [EXEC] 类 subagent`
-            + `（description 以 [EXEC] 或 implement/build/run/repair 等开头），否则调查类派发将被视为空转。`,
+        content: [{
+          type: 'text',
+          text: `[subagent-prep-exec-gate] 警告：本轮已连续派发 ${c.prep} 个调查类 subagent（[PREP]）、`
+              + `尚无执行类 subagent（[EXEC]）。准备压倒执行——请先派发一个 [EXEC] 类 subagent`
+              + `（description 以 [EXEC] 或 implement/build/run/repair 等开头），否则调查类派发将被视为空转。`,
+        }],
         source: {
           kind: 'governance',
           form: 'notice',
