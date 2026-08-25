@@ -153,7 +153,7 @@ export function apply(ctx, config = {}) {
 
   // A fresh user instruction starts fresh windows.
   ctx.on('agent/pre-step', ({ agent, messages }, next) => {
-    if (messages.some((message) => message.source?.kind === 'user')) {
+    if (Array.isArray(messages) && messages.some((message) => message.source?.kind === 'user')) {
       chains.delete(agent);
     }
     return next();
