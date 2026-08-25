@@ -7114,23 +7114,30 @@ PREP_TASK_KINDS = frozenset(
     }
 )
 WORK_STRUCTURE_WINDOW = 8
-WORK_STRUCTURE_MIN_PREP = 6  # >=6 of the last 8 requests are prep with zero impl -> warn
+WORK_STRUCTURE_WARN_PREP = 6    # >=6 of the last 8 requests are prep with zero impl -> warn
+WORK_STRUCTURE_BLOCK_PREP = 8   # >=8 consecutive prep with zero impl -> block (tool_choice=required analog)
 
 
-def _work_structure_warning(project: str | None) -> str | None:
-    """Detect 'preparation overwhelms execution' on dispatch: if the last
-    WORK_STRUCTURE_WINDOW async requests for this project are almost all prep-type
-    (audit/review/contract/verification/...) with zero implementation, return a
-    visible warning so the caller cannot pretend progress by only dispatching
-    prep work. Mechanical, derived from stored task_kind rows; read-only and
-    advisory — never blocks dispatch."""
+def _work_structure_gate(project: str | None) -> tuple[str | None, str | None]:
+    """Two-level 'preparation overwhelms execution' guard, evaluated on dispatch.
+
+    Returns (warning, rejection): at most one is non-None.
+    - warning: >= WORK_STRUCTURE_WARN_PREP of the last WORK_STRUCTURE_WINDOW requests
+      are prep-type with zero implementation -> caller should dispatch an
+      implementation action soon.
+    - rejection: >= WORK_STRUCTURE_BLOCK_PREP consecutive prep with zero implementation
+      -> dispatch refused; the caller MUST send an implementation-class action first.
+      This mirrors OpenAI Agents SDK tool_choice="required": analysis is not a
+      substitute for an executable action.
+    Mechanical, derived from stored task_kind rows; read-only.
+    """
     if not project:
-        return None
+        return None, None
     try:
         init_db()
         pinfo = resolve_project(project)
     except Exception:  # noqa: BLE001 - advisory only
-        return None
+        return None, None
     kinds: list[str] = []
     with db_connect() as conn:
         conn.row_factory = sqlite3.Row
@@ -7138,7 +7145,8 @@ def _work_structure_warning(project: str | None) -> str | None:
             try:
                 rows = conn.execute(
                     f"SELECT task_kind FROM {table} "
-                    "WHERE lower(project) = lower(?) ORDER BY created_at DESC LIMIT ?",
+                    "WHERE lower(project) = lower(?) "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                     (pinfo.name, WORK_STRUCTURE_WINDOW),
                 ).fetchall()
             except sqlite3.Error:
@@ -7146,16 +7154,24 @@ def _work_structure_warning(project: str | None) -> str | None:
             kinds.extend(str(row["task_kind"] or "") for row in rows)
     kinds = [k for k in kinds if k][:WORK_STRUCTURE_WINDOW]
     if len(kinds) < 4:
-        return None
+        return None, None
     prep = sum(1 for k in kinds if k in PREP_TASK_KINDS)
     impl = sum(1 for k in kinds if k == "implementation")
-    if prep >= WORK_STRUCTURE_MIN_PREP and impl == 0:
+    if prep >= WORK_STRUCTURE_BLOCK_PREP and impl == 0:
+        return None, (
+            f"work_structure_rejected: 最近 {len(kinds)} 个请求全部为准备类"
+            f"（{prep} 准备 / {impl} 执行）；准备压倒执行已超限——"
+            "拒绝本次准备类派工。必须先派发一个 implementation 类动作（会重置计数），"
+            "再继续审计/验收。"
+        )
+    if prep >= WORK_STRUCTURE_WARN_PREP and impl == 0:
         return (
             f"work_structure_warning: 最近 {len(kinds)} 个请求中 {prep} 个为准备类"
             f"（audit/review/contract/verify...）、{impl} 个为 implementation；"
-            "准备压倒执行——先派发至少一个 implementation 类动作，否则视为空转"
+            "准备压倒执行——先派发至少一个 implementation 类动作，否则将被拒绝",
+            None,
         )
-    return None
+    return None, None
 
 
 def queue_cli_request(
@@ -7190,6 +7206,10 @@ def queue_cli_request(
         raise ValueError("prompt is required")
     clean_chain = str(chain_key or "").strip()
     stored_task_kind = str(task_kind or "").strip() or None
+    if stored_task_kind in PREP_TASK_KINDS:
+        _, rejection = _work_structure_gate(project)
+        if rejection:
+            raise ValueError(rejection)
     if clean_chain:
         with db_connect() as conn:
             conn.row_factory = sqlite3.Row
@@ -7209,8 +7229,24 @@ def queue_cli_request(
     created_by = os.environ.get("AGENT_BROKER_CALLER") or "mcp-client"
     clean_prompt = prompt.strip()
     stored_mode = str(mode).strip().lower()
-    if stored_mode not in {"read-only", "workspace-write", "danger-full-access"}:
-        stored_mode = "read-only"
+    # Per-family mode validation (2026-08-25 fix): never silently degrade a
+    # caller's mode intent. Claude-family backends use permission modes
+    # (plan/default/acceptEdits/bypassPermissions); Codex-family backends use
+    # sandbox modes (read-only/workspace-write/danger-full-access). A mode from
+    # the wrong family (or an unknown value) raises instead of being silently
+    # rewritten to read-only, which previously forced Claude workers into plan
+    # mode and made "write a file" requests fail closed.
+    family = str(getattr(backend, "family", "") or "").strip().lower()
+    if family == "claude":
+        stored_mode = normalize_claude_permission_mode(stored_mode)
+        valid_modes = {"plan", "default", "acceptEdits", "bypassPermissions"}
+    else:
+        valid_modes = {"read-only", "workspace-write", "danger-full-access"}
+    if stored_mode not in valid_modes:
+        raise ValueError(
+            f"mode {mode!r} is invalid for backend {backend.name!r} (family={family or 'unknown'}); "
+            f"expected one of {sorted(valid_modes)}"
+        )
     stored_effort = normalize_effort_token(effort) or (str(effort).strip().lower() if effort else None)
     _timeout = int(timeout or CLI_ASYNC_WORKER_TIMEOUT_SECONDS)
     autorun_enabled = True if autorun is None else truthy(autorun)
@@ -7264,7 +7300,7 @@ def queue_cli_request(
     result = {
         "id": request_id, "backend": backend.name, "status": "queued", "autorun": autorun_enabled,
     }
-    warning = _work_structure_warning(project_info.name if project else None)
+    warning, _ = _work_structure_gate(project_info.name if project else None)
     if warning:
         result["work_structure_warning"] = warning
     return result
@@ -8661,13 +8697,24 @@ def prompt_budget_notice(
 def route_agent_task(args: dict[str, Any]) -> dict[str, Any]:
     """Public router entry. Runs the token-economy guard on the raw prompt, then delegates
     to the routing impl and attaches a `prompt_notice` to actual deliveries."""
+    task_kind = str(args.get("task_kind") or "").strip()
+    if task_kind in PREP_TASK_KINDS:
+        _, rejection = _work_structure_gate(args.get("project"))
+        if rejection:
+            return {
+                "status": "error",
+                "error": "work_structure_rejected",
+                "response": rejection,
+                "response_is_error": True,
+                "task_kind": task_kind,
+            }
     result = _route_agent_task_impl(args)
     try:
         if isinstance(result, dict) and result.get("status") not in (None, "needs_model_selection"):
             notice = prompt_budget_notice(args.get("project"), args.get("topic"), str(args.get("prompt") or ""))
             if notice:
                 result["prompt_notice"] = notice
-            warning = _work_structure_warning(args.get("project"))
+            warning, _ = _work_structure_gate(args.get("project"))
             if warning:
                 result["work_structure_warning"] = warning
     except Exception as exc:  # noqa: BLE001
