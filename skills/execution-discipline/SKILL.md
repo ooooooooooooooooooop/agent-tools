@@ -1,7 +1,7 @@
 ---
 name: execution-discipline
 description: 在 DSH 长程/多工具会话中强制九条执行纪律，防止高频反模式重演：禁止无 wait 轮询、禁止把门禁拒绝当交付物抛回决策、外部研究先探测通道再极窄探针、探查派子代理不肉身 Read、子代理派发带进度回报协议、回合结束零悬挂收尾、上下文预算（回合合并+结果落盘）。用于接手长任务、等待子代理/后台任务、发起外部研究、收到 INVALID/FAIL/PARTIAL 门禁结果、收到"重复工具调用"系统警告、需要读取多个源码文件或大文件，以及任何需要"执行层不空转、不惊群、不绕门禁"的执行场景。不用于单轮小修改或无需持久化的临时问答。
-version: 0.2.0
+version: 0.2.1
 triggers:
   - "接手/恢复长任务（.taskflow、goal、跨轮委派）"
   - "接手/交接项目（先跑接手一致性门禁，见下文专用节）"
@@ -31,6 +31,7 @@ depends_on:
 - 确需确认请求存在时，`list_agents` / `job_list` / `request_status` / `get_cli_requests` **只允许调用一次**；确认后转入单次长轮询：`job_output(job_id, wait=true, timeout_ms=60000)`、`request_result(request_id, wait_seconds=60~120)`、`wait_task_receipt(receipt_path, wait_seconds=60~120)`、`wait_supervisor_event(...)`。
 - **长轮询超时返回 ≠ 有事件**：`wait_supervisor_event` 180s 超时后直接再次 wait（`since_seq` 推进），**禁止**在两次 wait 之间夹 `get_managed_claude_supervisor` / `list_managed_claude_supervisors` 查询——WAIT→GET 夹用就是轮询变体（2026-08-24 曾连续 44 分钟）。
 - **收到"重复相同工具调用"系统警告 = 必须立即改变策略**：先读上次结果，换参数/换工具/换方案，绝不在同一调用上再试。
+- **等待期必须并行推进，禁止纯等（2026-08-26 沉淀）**：长轮询/等 CLI 结果期间，先列出"不依赖该结果的待办"并逐个执行（读产物、查未闭合项、推进其他 todo），再回到轮询；**同一回合内连续 ≥2 次 request_result/job_output 之间没有其他工具调用 = 空转信号**。来源实证：2026-08-26 论文会话 Turn 7 的 16 次调用中 9 次输出 <200 tokens 的纯轮询，38 分钟内 Top1000 归属等可并行项未推进。
 
 ### 铁律二：门禁结果是诊断信号，不是交付物（自主闭环）
 
@@ -183,6 +184,7 @@ depends_on:
 | 2026-08-24 约束层标注错误 | 把 SKILL.md 文字规则标注为"系统层"（实际是流程层，触发时注入非常驻） | 引用 Anthropic Agent Skills 官方文档确认加载机制后，正确标注约束层：可执行脚本=系统层，SKILL.md=流程层 |
 | 2026-08-25 单会话硬扛到底 | inbox 审计 18 个 token 热点会话（最高 input 1623 万 / 701 steps），压缩后仍累积，不做分阶段 | 铁律九：>300 steps / >500 万 input 必须结构化分阶段交接（FastContext 实证 -50% token 且质量 +0.7pp） |
 | 2026-08-25 重复工具调用堆积 | 347 条 repeat/read-repeat 异常（read 39 / pwsh 34 / grep 26），同一文件反复读、同一命令反复跑 | 铁律四重复命令检测：同目标/同命令 ≥3 次跑 `flow_check.py --check-session` 自检，先读结果再换策略 |
+| 2026-08-26 纯轮询空转 | 论文会话 Turn 7 的 16 次调用 9 次输出 <200 tokens（request_result 反复轮询 38 分钟），Top1000 归属等可并行项未推进 | 铁律一等待期并行：轮询间隙必做不依赖该结果的待办；连续 2 次轮询无其他调用即空转 |
 
 ## 业界对照验证（2026-08-22 web 研究回收，与十条铁律一致）
 
