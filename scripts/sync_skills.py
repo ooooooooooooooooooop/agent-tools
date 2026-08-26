@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Check or explicitly sync published skill packages (and optionally dsh/* plugins)
-to another device.
+to another device. Also supports checking dsh-config archive consistency and
+MCP server path validity.
 
 The command never deletes destination files. Use ``--check`` for a read-only
 comparison and ``--apply`` only when the destination is intentional.
 Pass ``--plugins-destination`` to also sync registered dsh/* plugins (the runtime
 files referenced by each package's cordis.patch.yml).
+Pass ``--dsh-config-dir`` (with ``--check``) to compare a dsh-config archive
+against the live ``~/.dsh``.
+Pass ``--mcp-cordis`` (with ``--check``) to validate MCP server paths in a
+cordis.patch.yml. ``--mcp-dir`` provides an alternative MCP source root.
 """
 
 from __future__ import annotations
@@ -149,10 +154,88 @@ def atomic_copy(source: Path, destination: Path) -> None:
             temporary_path.unlink()
 
 
+def check_dsh_config_archive(archive_dir: Path) -> Dict[str, Any] | None:
+    """Compare a dsh-config archive (manifest.json) against the live ``~/.dsh``.
+
+    Returns ``None`` if the archive has no manifest, otherwise a comparison
+    dict with the same ``missing``/``different``/``extra``/``pass`` keys.
+    """
+    manifest_path = archive_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    digests: dict = manifest.get("digests") or {}
+    templated: set = set((manifest.get("templates") or {}).get("files") or {})
+
+    dest = Path(os.environ.get("DSH_HOME") or (Path.home() / ".dsh"))
+    if not dest.is_dir():
+        return {"missing": list(digests), "different": [], "extra": [], "pass": False}
+
+    SKIP_DIRS = {"sessions", "storages", "skills", "__pycache__", "node_modules"}
+    dest_files: dict[str, Path] = {}
+    for dirpath, dirnames, filenames in os.walk(dest, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        base = Path(dirpath)
+        for name in filenames:
+            p = base / name
+            dest_files[p.relative_to(dest).as_posix()] = p
+
+    missing, different, same = [], [], []
+    for rel, digest in sorted(digests.items()):
+        dst = dest / rel
+        if not dst.is_file():
+            missing.append(rel)
+        elif rel in templated:
+            same.append(rel)  # templated: presence only
+        elif sha256(dst) != digest:
+            different.append(rel)
+        else:
+            same.append(rel)
+
+    extra = sorted(set(dest_files) - set(digests))
+    return {"missing": missing, "different": different, "same": same, "extra": extra, "pass": not missing and not different}
+
+
+def check_mcp_cordis(cordis_file: Path, mcp_dir: Path | None = None) -> Dict[str, Any]:
+    """Verify MCP server entries in a cordis.patch.yml reference valid paths.
+
+    Returns a dict with ``issue`` (list of warning strings) and ``pass``.
+    If ``mcp_dir`` is given, the referenced script path is resolved against it.
+    """
+    issues: list[str] = []
+    if not cordis_file.is_file():
+        return {"pass": False, "issues": [f"cordis patch file not found: {cordis_file}"]}
+
+    text = cordis_file.read_text(encoding="utf-8")
+    # Locate insert blocks that register an @deepseek-ai/dsh-mcp-client
+    insert_pattern = re.compile(r"- insert:\s*\n(\s+- id:.*?)(?=\n- insert:|\Z)", re.DOTALL)
+    for block_match in insert_pattern.finditer(text):
+        block = block_match.group(1)
+        if "mcp-agent-switchboard" not in block:
+            continue
+        # Grab args[0] and cwd
+        args_match = re.search(r"args:\s*\n\s+-\s+'([^']+)'", block)
+        cwd_match = re.search(r"cwd:\s*'([^']+)'", block)
+        if args_match:
+            script_path = Path(args_match.group(1))
+            if mcp_dir:
+                script_path = mcp_dir / script_path.name
+            if not script_path.is_file():
+                issues.append(f"MCP script not found: {script_path}")
+        if cwd_match:
+            cwd_path = Path(cwd_match.group(1))
+            if not cwd_path.is_dir():
+                issues.append(f"MCP cwd not found: {cwd_path}")
+    return {"pass": len(issues) == 0, "issues": issues}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--plugins-destination", type=Path, help="also sync dsh/* plugins to this directory")
+    parser.add_argument("--dsh-config-dir", type=Path, help="check a dsh-config archive against live ~/.dsh (check mode)")
+    parser.add_argument("--mcp-cordis", type=Path, help="check MCP server paths in this cordis.patch.yml (check mode)")
+    parser.add_argument("--mcp-dir", type=Path, help="alternative MCP source root for --mcp-cordis path resolution")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--skill", action="append", dest="skills", help="limit to one or more skill names")
     selection.add_argument("--profile", help="sync a manifest install profile such as core or full")
@@ -226,6 +309,36 @@ def main() -> int:
                         **comparison,
                     }
                 )
+
+        if args.check and args.dsh_config_dir:
+            comparison = check_dsh_config_archive(args.dsh_config_dir)
+            if comparison is not None:
+                results.append(
+                    {
+                        "skill": "dsh-config",
+                        "kind": "dsh-config",
+                        "source": str(args.dsh_config_dir),
+                        "destination": str(Path(os.environ.get("DSH_HOME") or (Path.home() / ".dsh"))),
+                        **comparison,
+                    }
+                )
+
+        if args.check and args.mcp_cordis:
+            mcp_result = check_mcp_cordis(args.mcp_cordis, args.mcp_dir)
+            results.append(
+                {
+                    "skill": "mcp",
+                    "kind": "mcp",
+                    "source": str(args.mcp_cordis),
+                    "destination": "",
+                    "missing": [],
+                    "different": [],
+                    "same": [],
+                    "extra": [],
+                    "pass": mcp_result["pass"],
+                    "issues": mcp_result["issues"],
+                }
+            )
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         if args.json:
             print(json.dumps({"pass": False, "error": str(exc)}, ensure_ascii=False, indent=2))
@@ -233,8 +346,9 @@ def main() -> int:
             print(f"ERROR: {exc}")
         return 1
 
-    skill_results = [item for item in results if item.get("kind") != "plugin"]
+    skill_results = [item for item in results if item.get("kind") in ("skill", None)]
     plugin_results = [item for item in results if item.get("kind") == "plugin"]
+    other_results = [item for item in results if item.get("kind") not in ("skill", "plugin", None)]
     result = {
         "pass": all(item["pass"] for item in results),
         "profile": args.profile,
@@ -247,6 +361,9 @@ def main() -> int:
     else:
         for item in results:
             state = "PASS" if item["pass"] else "DIFF"
+            if item.get("kind") == "mcp":
+                print(f"{state}: mcp issues={item.get('issues') or 'none'}")
+                continue
             print(
                 f"{state}: {item['skill']} "
                 f"missing={len(item['missing'])} "
@@ -256,6 +373,8 @@ def main() -> int:
         counts = f"{len(skill_results)} skill(s)"
         if plugin_results:
             counts += f", {len(plugin_results)} plugin(s)"
+        if other_results:
+            counts += f", {len(other_results)} check(s)"
         print(f"Summary: {'PASS' if result['pass'] else 'DIFF'} ({counts})")
     return 0 if result["pass"] else 1
 
