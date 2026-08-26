@@ -1,0 +1,6 @@
+# Research Lab DSH bundle patch. The package specifier is portable and resolves
+# from the profile's installed dependencies.
+- insert:
+    - id: research-lab-adapter
+      name: '@research-lab/dsh-adapter'
+      config: {}
