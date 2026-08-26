@@ -63,10 +63,62 @@ INTERRUPT_RESULT_TIMEOUT_SECONDS = 60.0
 #    interrupt; beyond that the dispatch prompt is the defect, not the worker.
 MAX_MANAGER_INTERRUPTS = 2
 # 2) A supervisor idle/attention_required with no pending commands for longer
-#    than this is reclaimed (stop queued; session stays recoverable). Watchdog
-#    semantics: lazy check on status reads, so forgotten supervisors cannot
-#    hang forever without anyone closing them.
-ZOMBIE_RECLAIM_SECONDS = 1800
+#    than this is reclaimed (stop queued; session stays recoverable).
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+ZOMBIE_RECLAIM_SECONDS = max(1, _env_int("AGENT_BROKER_ZOMBIE_RECLAIM_SECONDS", 1800))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_seconds(name: str, default: float, minimum: float = 0.1) -> float:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return max(minimum, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+_SUPERVISOR_WATCHDOG_LOCK = threading.Lock()
+_SUPERVISOR_WATCHDOG_THREADS: dict[str, threading.Thread] = {}
+
+# Events mirrored into broker agent_events (executor_type="supervisor") so DSH-side
+# supervision (timeline / work-memory) can see supervisor activity without touching
+# per-supervisor state files. Must stay in sync with MATERIAL_SUPERVISOR_EVENT_TYPES
+# in agent_broker_mcp.py (the same set drives wait_supervisor_event's long-poll).
+MATERIAL_SUPERVISOR_EVENT_TYPES = frozenset(
+    {
+        "turn_completed",
+        "api_retry_exhausted",
+        "stall_timeout",
+        "tool_failure_threshold",
+        "autonomous_action_limit_reached",
+        "codex_decision_failed",
+        "turn_interrupted",
+        "hook_stop_failure",
+        "hook_session_end",
+        "claude_process_exited",
+        "daemon_failed",
+        "daemon_stopped",
+    }
+)
 
 
 def utc_now() -> str:
@@ -631,6 +683,9 @@ def _maybe_reclaim_zombie(state_dir: Path, state: dict[str, Any]) -> str:
     if commands_dir.exists():
         for path in sorted(commands_dir.glob("*.json")):
             row = _read_json(path, {}) or {}
+            if row.get("type") == "stop" and row.get("status") not in {"completed", "failed"}:
+                pending = True
+                break
             if row.get("type") == "message" and row.get("status") in {
                 "queued", "submitting", "submitted", "confirmed",
                 "delivery_unconfirmed_after_restart", "outcome_unconfirmed_after_restart",
@@ -664,6 +719,106 @@ def _maybe_reclaim_zombie(state_dir: Path, state: dict[str, Any]) -> str:
     with FileLock(state_dir / "commands.lock", timeout=5):
         _write_json(commands_dir / f"{command_id}.json", payload)
     return "zombie_reclaimed"
+
+
+def _record_watchdog_event(broker_home: Path, state_dir: Path, state: dict[str, Any]) -> None:
+    """Best-effort audit row for a watchdog reclaim.
+
+    The broker imports this module, but the detached daemon cannot depend on the broker
+    module. Keep the watchdog's write path equally small and direct so a failed audit
+    insert never prevents the stop command from being consumed.
+    """
+    try:
+        import sqlite3
+
+        root = str(state.get("project_root") or "")
+        project = os.path.basename(root.rstrip("\\/")) if root else ""
+        supervisor_id = str(state.get("supervisor_id") or state_dir.name)
+        details = json.dumps(
+            {
+                "supervisor_id": supervisor_id,
+                "status": state.get("status"),
+                "reason": "zombie_reclaim_timeout",
+                "reclaim_seconds": ZOMBIE_RECLAIM_SECONDS,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        conn = sqlite3.connect(str(Path(broker_home) / "state.sqlite"), timeout=5)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(
+                "INSERT INTO agent_events "
+                "(project, root_path, topic, agent, event_type, summary, details, created_at, executor_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    project,
+                    root,
+                    supervisor_id,
+                    "supervisor-watchdog",
+                    "supervisor_zombie_reclaimed",
+                    f"Supervisor {supervisor_id} reclaimed by watchdog; stop queued",
+                    details,
+                    utc_now(),
+                    "supervisor",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        # Reclaim remains authoritative; audit is advisory and must not keep a zombie alive.
+        return
+
+
+def _run_supervisor_watchdog_once(broker_home: Path) -> list[str]:
+    """Scan every supervisor without going through public_status/list_supervisors."""
+    root = Path(broker_home) / "supervisors"
+    reclaimed: list[str] = []
+    if not root.exists():
+        return reclaimed
+    for state_path in sorted(root.glob("*/state.json")):
+        state_dir = state_path.parent
+        try:
+            state = _read_json(state_path, {}) or {}
+            if not state:
+                continue
+            result = _maybe_reclaim_zombie(state_dir, state)
+            if result == "zombie_reclaimed":
+                supervisor_id = str(state.get("supervisor_id") or state_dir.name)
+                _record_watchdog_event(Path(broker_home), state_dir, state)
+                reclaimed.append(supervisor_id)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return reclaimed
+
+
+def _supervisor_watchdog_loop(broker_home: Path, stop_event: threading.Event) -> None:
+    interval = _env_seconds("AGENT_BROKER_WATCHDOG_INTERVAL", 300.0)
+    while not stop_event.is_set():
+        _run_supervisor_watchdog_once(Path(broker_home))
+        stop_event.wait(interval)
+
+
+def start_supervisor_watchdog(broker_home: Path) -> threading.Thread | None:
+    """Start one broker-owned supervisor watchdog, unless explicitly disabled."""
+    if not _env_bool("AGENT_BROKER_WATCHDOG_ENABLED", True):
+        return None
+    home = str(Path(broker_home).expanduser().resolve())
+    with _SUPERVISOR_WATCHDOG_LOCK:
+        current = _SUPERVISOR_WATCHDOG_THREADS.get(home)
+        if current and current.is_alive():
+            return current
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=_supervisor_watchdog_loop,
+            args=(Path(home), stop_event),
+            name="agent-broker-supervisor-watchdog",
+            daemon=True,
+        )
+        _SUPERVISOR_WATCHDOG_THREADS[home] = thread
+        thread.start()
+        return thread
 
 
 def public_status(state_dir: Path, recent_events: int = 10) -> dict[str, Any]:
@@ -861,7 +1016,75 @@ class ManagedClaudeDaemon:
                     handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
                     handle.flush()
                     os.fsync(handle.fileno())
-                return payload
+        # Mirror material events into broker agent_events (advisory, outside the
+        # event lock so a busy broker DB can never delay the daemon's own stream).
+        if event_type in MATERIAL_SUPERVISOR_EVENT_TYPES:
+            self._record_agent_event(payload)
+        return payload
+
+    def _record_agent_event(self, payload: dict[str, Any]) -> None:
+        """Mirror a material supervisor event into the broker's agent_events table
+        (executor_type="supervisor"). The daemon runs as its own process and cannot
+        import agent_broker_mcp, so this is a direct, best-effort INSERT against the
+        same schema record_agent_event() writes; failures are logged, never raised."""
+        try:
+            import sqlite3
+            event_type = str(payload.get("type") or "supervisor_event")
+            root = str(self.config.get("project_root") or "")
+            name = os.path.basename(root.rstrip("\\/")) if root else ""
+            details = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            conn = sqlite3.connect(str(self.state_dir.parents[1] / "state.sqlite"), timeout=5)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute(
+                    "INSERT INTO agent_events (project, root_path, topic, agent, event_type, summary, details, created_at, executor_type)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        name,
+                        root,
+                        str(self.config.get("supervisor_id") or None),
+                        "supervisor",
+                        f"supervisor_{event_type}",
+                        compact_text(self._agent_event_summary(payload), 400),
+                        details,
+                        utc_now(),
+                        "supervisor",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 — recording is advisory
+            self._log(f"agent_events mirror failed for {payload.get('type')}: {exc}")
+
+    def _agent_event_summary(self, payload: dict[str, Any]) -> str:
+        event_type = str(payload.get("type") or "")
+        if event_type == "turn_completed":
+            tail = " (error)" if payload.get("is_error") else ""
+            return f"Turn completed{tail}: " + compact_text(payload.get("result_summary"), 160)
+        if event_type == "turn_interrupted":
+            return "Turn interrupted: " + compact_text(payload.get("result_summary"), 160)
+        if event_type == "stall_timeout":
+            return f"Stall timeout: {payload.get('silent_seconds')}s silence"
+        if event_type == "api_retry_exhausted":
+            return "API retry exhausted: " + compact_text(payload.get("error"), 160)
+        if event_type == "tool_failure_threshold":
+            return f"Tool failure threshold: {payload.get('failures')} failures"
+        if event_type == "autonomous_action_limit_reached":
+            return f"Autonomous action limit reached: {payload.get('max_actions')} actions"
+        if event_type == "codex_decision_failed":
+            return "Codex decision failed: " + compact_text(payload.get("error"), 160)
+        if event_type == "hook_stop_failure":
+            return "Hook stop failure: " + compact_text(payload.get("error"), 160)
+        if event_type == "hook_session_end":
+            return "Hook session ended"
+        if event_type == "claude_process_exited":
+            return f"Claude process exited: code {payload.get('exit_code')}"
+        if event_type == "daemon_failed":
+            return "Daemon failed: " + compact_text(payload.get("error"), 160)
+        if event_type == "daemon_stopped":
+            return "Daemon stopped"
+        return event_type
 
     def _log(self, message: str) -> None:
         with self.log_path.open("a", encoding="utf-8", newline="\n") as handle:

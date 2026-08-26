@@ -389,6 +389,75 @@ class ClaudeFrontierFallbackTests(unittest.TestCase):
         self.assertEqual(result.attempted_models, ("best",))
         self.assertEqual(run.call_count, 1)
 
+    def test_runtime_non_claude_model_is_labeled_as_fallback_not_attestation_failure(self):
+        result, _ = self._consult([(0, claude_stream("gpt-5.6-luna", "fallback answer"), "")])
+        self.assertFalse(result.model_attested)
+        self.assertIn("downgraded/fallback", result.response)
+        self.assertNotIn("Model attestation failed:", result.response)
+        self.assertEqual(result.actual_model, "gpt-5.6-luna")
+
+
+class ClaudeInboxTtlTests(unittest.TestCase):
+    def test_unpicked_extension_request_expires_to_error(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            root = Path(tmpdir)
+            broker_home = root / "broker"
+            db_path = broker_home / "state.sqlite"
+            with mock.patch.object(broker, "BROKER_DIR", broker_home), \
+                 mock.patch.object(broker, "DB_PATH", db_path), \
+                 mock.patch.object(broker, "CONFIG_PATH", broker_home / "config.json"), \
+                 mock.patch.object(broker, "CLAUDE_INBOX_TTL_SECONDS", 7200):
+                queued = broker.queue_claude_request(
+                    str(root), "extension-only", autorun=False,
+                )
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        "UPDATE claude_requests SET created_at = ?, expires_at = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", queued["id"]),
+                    )
+                result = broker.cleanup_broker_history()
+                with sqlite3.connect(db_path) as conn:
+                    row = conn.execute(
+                        "SELECT status, error FROM claude_requests WHERE id = ?", (queued["id"],)
+                    ).fetchone()
+            self.assertEqual(result["claude_inbox_expired"], 1)
+            self.assertEqual(row[0], "error")
+            self.assertIn("TTL", row[1])
+
+
+class BrokerRetentionTests(unittest.TestCase):
+    def test_old_consultations_and_cli_requests_are_deleted(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            root = Path(tmpdir)
+            broker_home = root / "broker"
+            db_path = broker_home / "state.sqlite"
+            with mock.patch.object(broker, "BROKER_DIR", broker_home), \
+                 mock.patch.object(broker, "DB_PATH", db_path), \
+                 mock.patch.object(broker, "CONFIG_PATH", broker_home / "config.json"), \
+                 mock.patch.object(broker, "DB_RETENTION_DAYS", 30):
+                broker.init_db()
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        "INSERT INTO consultations "
+                        "(project, root_path, consulted_model, mode, prompt, status, started_at, finished_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        ("p", str(root), "m", "plan", "old", "ok", "2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z"),
+                    )
+                    conn.execute(
+                        "INSERT INTO cli_requests "
+                        "(id, backend, project, prompt, status, created_by, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        ("old-cli", "test", "p", "old", "completed", "test", "2000-01-01T00:00:00Z"),
+                    )
+                result = broker.cleanup_broker_history()
+                with sqlite3.connect(db_path) as conn:
+                    counts = conn.execute(
+                        "SELECT (SELECT count(*) FROM consultations), (SELECT count(*) FROM cli_requests)"
+                    ).fetchone()
+            self.assertEqual(result["consultations"], 1)
+            self.assertEqual(result["cli_requests"], 1)
+            self.assertEqual(counts, (0, 0))
+
 
 class ClaudeQueuedModeTests(unittest.TestCase):
     def test_queue_persists_implementation_mode(self):

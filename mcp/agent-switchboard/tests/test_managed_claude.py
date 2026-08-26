@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -155,6 +157,40 @@ class ManagedClaudeTests(unittest.TestCase):
             if (managed_claude._read_json(p) or {}).get("type") == "stop"
         ]
         self.assertEqual(len(stops), 1)
+
+    def test_watchdog_reclaims_without_status_read_and_records_event(self):
+        state_path = self.state_dir / "state.json"
+        state = managed_claude._read_json(state_path)
+        state.update(
+            {
+                "status": "attention_required",
+                "last_activity_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+        managed_claude._write_json(state_path, state)
+        with mock.patch.object(broker, "BROKER_DIR", self.home), \
+             mock.patch.object(broker, "DB_PATH", self.home / "state.sqlite"), \
+             mock.patch.object(broker, "CONFIG_PATH", self.home / "config.json"):
+            broker.init_db()
+        reclaimed = managed_claude._run_supervisor_watchdog_once(self.home)
+        self.assertEqual(reclaimed, [SUPERVISOR_ID])
+        stops = [
+            p for p in (self.state_dir / "commands").glob("*.json")
+            if (managed_claude._read_json(p) or {}).get("type") == "stop"
+        ]
+        self.assertEqual(len(stops), 1)
+        conn = sqlite3.connect(self.home / "state.sqlite")
+        try:
+            row = conn.execute(
+                "SELECT event_type, executor_type FROM agent_events "
+                "WHERE topic = ? ORDER BY id DESC LIMIT 1",
+                (SUPERVISOR_ID,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("supervisor_zombie_reclaimed", "supervisor"))
+        gc.collect()
 
     def test_zombie_reclaim_skipped_with_pending_command(self):
         state_path = self.state_dir / "state.json"
@@ -645,6 +681,58 @@ class ManagedClaudeTests(unittest.TestCase):
         self.assertIn("foreground_control", legacy)
         managed_send = schemas["send_to_managed_claude_session"]["inputSchema"]["properties"]
         self.assertEqual(managed_send["interrupt_mode"]["enum"], ["native", "hard"])
+
+    def test_material_events_mirror_into_agent_events_as_supervisor(self):
+        # S1b 贯通：material 事件（turn_completed 等）必须写进 broker agent_events，
+        # executor_type="supervisor"，topic=supervisor_id，供 timeline/work-memory 观测。
+        import gc
+        import sqlite3
+        from unittest import mock
+
+        with mock.patch.object(broker, "BROKER_DIR", self.home), \
+                mock.patch.object(broker, "DB_PATH", self.home / "state.sqlite"):
+            broker.init_db()
+        daemon = self.daemon()
+        daemon._event(
+            "turn_completed",
+            command_id="cmd-1",
+            result_summary="Fixed the parser bug",
+            git={"files_changed": 2},
+            is_error=False,
+        )
+        conn = sqlite3.connect(str(self.home / "state.sqlite"))
+        try:
+            row = conn.execute(
+                "SELECT event_type, summary, topic, agent, executor_type FROM agent_events ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row, "material event must be mirrored into agent_events")
+        self.assertEqual(row[0], "supervisor_turn_completed")
+        self.assertIn("Fixed the parser bug", row[1])
+        self.assertEqual(row[2], SUPERVISOR_ID)
+        self.assertEqual(row[3], "supervisor")
+        self.assertEqual(row[4], "supervisor")
+        gc.collect()  # release init_db's context-manager connections so tmp cleanup can delete the db
+
+    def test_non_material_events_are_not_mirrored(self):
+        import gc
+        import sqlite3
+        from unittest import mock
+
+        with mock.patch.object(broker, "BROKER_DIR", self.home), \
+                mock.patch.object(broker, "DB_PATH", self.home / "state.sqlite"):
+            broker.init_db()
+        daemon = self.daemon()
+        daemon._event("command_confirmed", command_id="cmd-1", prompt_sha256="hash")
+        daemon._event("assistant_progress", summary="thinking")
+        conn = sqlite3.connect(str(self.home / "state.sqlite"))
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM agent_events").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(count, 0, "non-material events must not be mirrored")
+        gc.collect()  # release init_db's context-manager connections so tmp cleanup can delete the db
 
 
 if __name__ == "__main__":
