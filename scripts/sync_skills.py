@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Check or explicitly sync published skill packages to another device.
+"""Check or explicitly sync published skill packages (and optionally dsh/* plugins)
+to another device.
 
 The command never deletes destination files. Use ``--check`` for a read-only
 comparison and ``--apply`` only when the destination is intentional.
+Pass ``--plugins-destination`` to also sync registered dsh/* plugins (the runtime
+files referenced by each package's cordis.patch.yml).
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -97,6 +101,42 @@ def compare_package(source: Path, destination: Path) -> Dict[str, Any]:
     }
 
 
+def discover_dsh_plugins() -> List[Dict[str, Any]]:
+    """Discover DSH user plugins under ``dsh/*`` that are registered in cordis.patch.yml.
+
+    Each plugin package's ``cordis.patch.yml`` insert entries reference runtime
+    plugin files via ``name: <file>`` or ``name: ./plugins/<file>``. Only those
+    referenced files are treated as deployable plugin code, so test scripts and
+    READMEs are excluded automatically.
+    """
+    plugins: List[Dict[str, Any]] = []
+    dsh_root = ROOT / "dsh"
+    if not dsh_root.is_dir():
+        return plugins
+    name_pattern = re.compile(r"name:\s*['\"]?(?:\./plugins/)?([^'\"\n]+\.(?:js|mjs))['\"]?")
+    for package in sorted(dsh_root.iterdir()):
+        if not package.is_dir():
+            continue
+        patch = package / "cordis.patch.yml"
+        if not patch.is_file():
+            continue
+        text = patch.read_text(encoding="utf-8")
+        for match in name_pattern.finditer(text):
+            source = package / match.group(1)
+            if not source.is_file():
+                raise ValueError(f"plugin file referenced in {patch} is missing: {source}")
+            plugins.append({"name": match.group(1), "source": source})
+    return plugins
+
+
+def compare_file(source: Path, destination: Path) -> Dict[str, Any]:
+    if not destination.is_file():
+        return {"missing": [source.name], "different": [], "same": [], "extra": [], "pass": False}
+    if sha256(source) == sha256(destination):
+        return {"missing": [], "different": [], "same": [source.name], "extra": [], "pass": True}
+    return {"missing": [], "different": [source.name], "same": [], "extra": [], "pass": False}
+
+
 def atomic_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
@@ -112,6 +152,7 @@ def atomic_copy(source: Path, destination: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--plugins-destination", type=Path, help="also sync dsh/* plugins to this directory")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--skill", action="append", dest="skills", help="limit to one or more skill names")
     selection.add_argument("--profile", help="sync a manifest install profile such as core or full")
@@ -165,6 +206,26 @@ def main() -> int:
                     **comparison,
                 }
             )
+
+        if args.plugins_destination:
+            ensure_destination_is_safe(args.plugins_destination)
+            for plugin in discover_dsh_plugins():
+                source = plugin["source"]
+                destination = args.plugins_destination / plugin["name"]
+                comparison = compare_file(source, destination)
+                if args.apply:
+                    for relative in comparison["missing"] + comparison["different"]:
+                        atomic_copy(source, destination)
+                    comparison = compare_file(source, destination)
+                results.append(
+                    {
+                        "skill": f"dsh/{plugin['name']}",
+                        "kind": "plugin",
+                        "source": str(source),
+                        "destination": str(destination),
+                        **comparison,
+                    }
+                )
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         if args.json:
             print(json.dumps({"pass": False, "error": str(exc)}, ensure_ascii=False, indent=2))
@@ -172,10 +233,13 @@ def main() -> int:
             print(f"ERROR: {exc}")
         return 1
 
+    skill_results = [item for item in results if item.get("kind") != "plugin"]
+    plugin_results = [item for item in results if item.get("kind") == "plugin"]
     result = {
         "pass": all(item["pass"] for item in results),
         "profile": args.profile,
-        "skills": sorted(item["skill"] for item in results),
+        "skills": sorted(item["skill"] for item in skill_results),
+        "plugins": sorted(item["skill"] for item in plugin_results),
         "results": results,
     }
     if args.json:
@@ -189,7 +253,10 @@ def main() -> int:
                 f"different={len(item['different'])} "
                 f"extra={len(item['extra'])}"
             )
-        print(f"Summary: {'PASS' if result['pass'] else 'DIFF'} ({len(results)} skill(s))")
+        counts = f"{len(skill_results)} skill(s)"
+        if plugin_results:
+            counts += f", {len(plugin_results)} plugin(s)"
+        print(f"Summary: {'PASS' if result['pass'] else 'DIFF'} ({counts})")
     return 0 if result["pass"] else 1
 
 
