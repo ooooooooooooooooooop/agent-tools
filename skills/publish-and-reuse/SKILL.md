@@ -1,15 +1,15 @@
 ---
 name: publish-and-reuse
-description: 完整环境生命周期一体化编排：一键环境检查/体检、一键上传备份到 GitHub、一键增量更新（从 GitHub 到 DSH）、新设备环境复现与一键发布门禁。覆盖 Skills、DSH 插件、MCP 与 DSH 全局配置（AGENTS.md/settings）四层，agent 自动加载即可端到端闭环执行，无需用户逐步指导。
-version: 1.1.0
+description: 完整环境生命周期一体化编排：一键上传环境（含 Skills、插件、MCP 与 DSH 配置整体打包上传 GitHub）、一键更新环境（从 GitHub 同步到 DSH）、一键四层体检对比差异与新设备环境复现。上传与更新前强制执行四层体检对比差异，agent 自动加载即可端到端闭环执行，无需用户逐步指导。
+version: 1.2.0
 triggers:
-  - "一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境"
-  - "一键上传环境 / 备份环境 / 同步到 GitHub / 导出环境配置"
-  - "一键检查环境 / 环境体检 / 检查四层一致性"
+  - "一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"
+  - "一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"
+  - "一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"
   - "在新设备复现 / 安装我的环境"
   - "发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"
 not_for:
-  - "修改具体业务代码或单个 Skill 的逻辑实现（交给 minimal-implementation）"
+  - "修改具体业务代码或单个 Skill 的内部逻辑实现（交给 minimal-implementation）"
   - "日常代码编写与单点 Bug 修复"
 depends_on:
   - skill-repository-maintainer
@@ -22,17 +22,20 @@ depends_on:
 ## 定位
 
 本 skill 是 **DSH 四层环境生命周期的最高层一体化编排器**。
-**仓库是唯一事实源（SSOT）**，所有发布、备份、增量更新和环境复现都以此为基准。
-当用户提出"上传环境"、"更新环境"、"从GitHub同步"、"同步到DSH"或"环境体检"时，Agent **无需用户分步指导，直接根据下述四大标准操作协议（SOP）自主端到端闭环执行**。
+**仓库是唯一事实源（SSOT）**，所有上传、更新、体检和环境复现都以此为基准。
+核心原则：
+1. **一键上传**：一体化覆盖四层（Skills、DSH 插件、MCP、DSH 全局配置），自动脱敏打包并推送到 GitHub。
+2. **一键更新**：从 GitHub 拉取并全量应用到本机 DSH 运行时。
+3. **体检先行**：**上传与更新之前，强制先执行四层体检对比差异**，明确改动面并完成安全拦截。
 
 权威细节见 `docs/publishing.md`、`docs/sync-ongoing.md`、`docs/local-experience-and-cross-device-reuse.md`。
 
 ## 何时触发与适用边界
 
 ### 适用场景（何时触发）
-- 用户要求"一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境"。
-- 用户要求"一键上传环境 / 备份环境 / 同步到 GitHub / 导出环境配置"。
-- 用户要求"一键检查环境 / 环境体检 / 检查四层一致性"。
+- 用户要求"一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"。
+- 用户要求"一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"。
+- 用户要求"一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"。
 - 用户要求"在新设备复现 / 安装我的环境"。
 - 用户要求"发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"。
 
@@ -44,18 +47,18 @@ depends_on:
 
 ## 四层事实源（SSOT）架构速查
 
-| 层级 | 内容 | 仓库位置 | 运行时目标位置 | 作用与同步工具 |
+| 层级 | 包含内容 | 仓库事实源位置 | 运行时目标位置 | 作用与同步机制 |
 |---|---|---|---|---|
-| ① **Skill 包** | 16+ Skills | `skills/*` | `~/.dsh/skills/*` | `sync_skills.py --apply`（增量覆盖） |
-| ② **DSH 插件** | 运行时 JS/MJS 插件 | `dsh/*` | `~/.dsh/profiles/web/plugins/*` | `sync_skills.py --plugins-destination ... --apply` |
-| ③ **MCP 包** | `agent-switchboard` 等 | `mcp/*` | 仓库就地（git clone 路径） | git 就地运行，`cordis.patch.yml` 模板化引用 |
-| ④ **DSH 全局配置** | `AGENTS.md` / `settings.yaml` / `profiles` / `presets` | `dsh-config/*` | `~/.dsh/*` | `sync_dsh_config.py`（export ↔ apply） |
+| ① **Skill 包** | 16+ Skills 全部技能栈 | `skills/*` | `~/.dsh/skills/*` | `sync_skills.py` 增量同步与校验 |
+| ② **DSH 插件** | 5 个用户级 JS/MJS 守护插件 | `dsh/*` | `~/.dsh/profiles/web/plugins/*` | `sync_skills.py --plugins-destination ...` 自动同步 |
+| ③ **MCP 包** | `agent-switchboard` 跨模型网桥 | `mcp/*` | 仓库就地（git 路径） | git 就地运行，`cordis.patch.yml` 模板化引用与校验 |
+| ④ **DSH 全局配置** | `AGENTS.md` / `settings.yaml` / `profiles` / `presets` | `dsh-config/*` | `~/.dsh/*` | `sync_dsh_config.py` 模板化脱敏导出与渲染恢复 |
 
 ---
 
-## 协议一：一键环境体检（Check / Audit）
+## 协议一：一键环境体检（Check / Audit — 独立体检）
 
-当用户要求"检查环境"、"环境体检"、"检查配置是否一致"时执行：
+当用户要求"检查环境"、"环境体检"、"对比差异"时执行：
 
 ```powershell
 python scripts\sync_skills.py `
@@ -66,31 +69,42 @@ python scripts\sync_skills.py `
   --profile full --check
 ```
 
-**执行与判定标准：**
-1. 汇报四层检查结果：Skills、Plugins、dsh-config 归档、MCP 路径。
-2. `dsh-config` 中 `extra` 出现 `.credentials.yaml` / `.anonymous-user-id` 等属于预期安全隔离，只要 `missing=0 different=0` 即可判定为通过。
+**判定标准：**
+- Skills (18 项)：`missing=0 different=0`（PASS）
+- Plugins (5 项)：`missing=0 different=0`（PASS）
+- DSH Config：`missing=0 different=0`（`extra` 中的 `.credentials.yaml` / `.anonymous-user-id` 属预期本地隔离）
+- MCP：`issues=none`（引用的脚本与 cwd 路径均有效）
 
 ---
 
-## 协议二：一键更新环境（Update / Pull — 从 GitHub 同步到 DSH）
+## 协议二：一键更新环境（Update / Pull — 体检 ➔ 拉取 ➔ 应用 ➔ 复核）
 
-当用户要求"从 GitHub 同步"、"更新环境"、"同步到 DSH"、"拉取最新配置"时执行：
+当用户要求"从 GitHub 同步"、"更新环境"、"同步到 DSH"时，**严格按以下 4 步执行**：
 
 ```powershell
-# 1. 从远程拉取最新代码与配置归档
+# 步骤 1【更新前体检】：对比当前本地与已安装的基线差异
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+
+# 步骤 2【拉取远程最新代码与配置归档】：
 git pull
 
-# 2. 一键同步 Skills 与 DSH 插件到运行时目录
+# 步骤 3【应用更新到 DSH 运行时】：
+# 3.1 同步 Skills 与 DSH 插件
 python scripts\sync_skills.py `
   --destination "$env:USERPROFILE\.dsh\skills" `
   --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
   --profile full --apply
 
-# 3. 恢复 DSH 全局配置（自动将 {{DESKTOP}}/{{DSH_HOME}} 等模板渲染为本机真实路径）
+# 3.2 恢复 DSH 全局配置（自动将 {{DESKTOP}}/{{DSH_HOME}} 等模板渲染为本机真实路径）
 python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
   --display dsh-config --destination "$env:USERPROFILE\.dsh"
 
-# 4. 执行一次聚合体检复核
+# 步骤 4【更新后复核】：再次体检确认差异归零
 python scripts\sync_skills.py `
   --destination "$env:USERPROFILE\.dsh\skills" `
   --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
@@ -99,41 +113,47 @@ python scripts\sync_skills.py `
   --profile full --check
 ```
 
-**交付与生效提醒：**
-- 若更新了 DSH 插件或 `cordis.patch.yml`（如 MCP 配置），明确告知用户需重启 DSH 进程加载新代码。
+**生效提醒：** 若更新包含 DSH 插件或 `cordis.patch.yml`（MCP 配置），提示用户需重启 DSH 进程加载新代码。
 
 ---
 
-## 协议三：一键上传/备份环境（Upload / Backup / Push — 同步到 GitHub）
+## 协议三：一键上传环境（Upload — 导出 ➔ 门禁体检 ➔ 推送 GitHub）
 
-当用户要求"上传环境"、"备份环境"、"把当前配置/技能推送到 GitHub"时执行：
+一键将 **Skills、DSH 插件、MCP 源码与 DSH 全局配置四层** 完整打包上传到 GitHub：
 
 ```powershell
-# 1. 导出本机 DSH 全局配置到仓库 dsh-config 骨架（自动执行凭据脱敏、设备路径模板化占位符替换）
+# 步骤 1【配置脱敏导出】：将本机 ~/.dsh 导出至仓库 dsh-config 骨架（自动路径模板化占位符替换）
 python skills\dsh-config-sync\scripts\sync_dsh_config.py export `
   --source "$env:USERPROFILE\.dsh" --display dsh-config --template --with-optional
 
-# 2. 执行仓库发布与安全门禁
+# 步骤 2【上传前体检与门禁】：执行全量四层体检与发布安全门禁（拦截密钥与格式错误）
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+
 python scripts\publish_all.py
 
-# 3. 提交并推送
+# 步骤 3【提交并推送到 GitHub】：
 git add -A
 git status --short
-git commit -m "chore: backup environment (skills, plugins, mcp, dsh-config)"
+git commit -m "chore: upload environment (skills, plugins, mcp, dsh-config)"
 git push
 ```
 
 **安全拦截守则：**
-- 敏感扫描必须为 `PASS`；如果检测到 `.credentials.yaml` 或内联明文密码，严禁提交推送并立即阻断。
+- 敏感扫描与发布门禁必须全绿；若检测到 `.credentials.yaml`、明文密码或语法错误，**严禁提交并立即阻断**。
 
 ---
 
 ## 协议四：新设备首次安装（Fresh Install / Restore）
 
-在全新机器上快速复现整套 Agent 工具链：
+在全新机器上一键复现整套环境：
 
 ```powershell
-# 1. 安装 DSH，配置好 provider 与同名环境变量（BAI_API_KEY / CPA_API_KEY 等，密钥永不进仓库）
+# 1. 安装 DSH，配置 provider 与同名环境变量（BAI_API_KEY / CPA_API_KEY 等）
 # 2. 克隆仓库
 git clone <私有远程仓库URL> C:\Users\<user>\Desktop\skills
 cd C:\Users\<user>\Desktop\skills
@@ -148,11 +168,11 @@ python scripts\sync_skills.py `
   --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
   --profile full --apply
 
-# 5. 一键渲染恢复 DSH 配置
+# 5. 一键渲染恢复 DSH 全局配置
 python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
   --display dsh-config --destination "$env:USERPROFILE\.dsh"
 
-# 6. 聚合体检
+# 6. 一键全量体检验证
 python scripts\sync_skills.py `
   --destination "$env:USERPROFILE\.dsh\skills" `
   --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
@@ -160,25 +180,8 @@ python scripts\sync_skills.py `
   --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
   --profile full --check
 
-# 7. 启动/重启 DSH，开始会话验证
+# 7. 启动 DSH，验证工具与配置生效
 ```
-
----
-
-## 协议五：完整发布门禁（Publish All）
-
-```bash
-python scripts/publish_all.py
-```
-
-按顺序执行 7 道发布门禁：
-1. `validate_repo.py --strict`（结构与注册表）
-2. `quality_report.py --root . --strict`（Skill 行为质量）
-3. `publish_check.py`（敏感扫描与可发布性）
-4. `run_skill_evals.py`（结构性 evals）
-5. `unittest tests`（仓库回归）
-6. `unittest mcp tests`（MCP 回归）
-7. `git diff --check`（空白错误）
 
 ---
 
@@ -194,8 +197,8 @@ python scripts/publish_all.py
 ## 输出契约
 
 每次执行后报告：
-- **操作模式**：Check / Update (Pull) / Upload (Push) / Install / Publish
-- **逐项命令与退出码**
+- **操作模式**：Check / Update (Pull) / Upload (Push) / Install
+- **体检前后差异对比摘要**
+- **逐项执行命令与退出码**
 - **四层状态矩阵汇总（Skills / Plugins / MCP / DSH Config）**
 - **生效提示（是否需要重启 DSH）**
-- **剩余风险或注意事项**
