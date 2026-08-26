@@ -1,0 +1,4 @@
+interface:
+  display_name: "研究实验室"
+  short_description: "用独立 Research Core 设计、执行、恢复并审计可复现实验。"
+  default_prompt: "使用 $research-lab，把我的问题转化为可证伪 ResearchSpec，调用 research_ 前缀工具执行或恢复实验，并只依据可追溯 Evidence 给出结论。"

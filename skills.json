@@ -28,7 +28,8 @@
       "weekly-work-summary",
       "systematic-optimization",
       "evolution-proposal",
-      "publish-and-reuse"
+      "publish-and-reuse",
+      "research-lab"
     ]
   },
   "skills": [
@@ -311,6 +312,19 @@
         "dsh-config-sync",
         "environment-bootstrap"
       ]
+    },
+    {
+      "name": "research-lab",
+      "path": "./skills/research-lab",
+      "version": "0.1.0",
+      "description": "使用独立 Research Core 把模型比较、软件评估等可证伪问题转化为可恢复、可复现、证据可追溯的研究；用于对照实验、Baseline、盲评、模型替代评估和跨设备继续研究",
+      "lang": [
+        "zh"
+      ],
+      "category": "reasoning",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": []
     }
   ]
 }

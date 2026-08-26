@@ -1,0 +1,28 @@
+{
+  "name": "@research-lab/dsh-adapter",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/index.mjs",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test tests/index.test.mjs"
+  }
+}
