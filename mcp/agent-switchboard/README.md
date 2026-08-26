@@ -1,6 +1,6 @@
 # Agent Switchboard
 
-> **This repository distribution:** this directory is a modified source distribution based on upstream commit `821ef987bc7037bb18ce3a55e07b3dade88c8432` (version `1.0.30`). It adds windowless managed Claude supervision, exact existing-session foreground control, transcript-branch confirmation, Unicode transport repair and acknowledged incremental monitoring. See [DISTRIBUTION.md](./DISTRIBUTION.md). The package remains under the PolyForm Noncommercial License; the parent repository's MIT license does not apply to this directory.
+> **This repository distribution:** this directory is a modified source distribution based on upstream commit `9d35157bf85fec6e442c3054fec3469b456869d8` (version `1.0.32`, distribution revision `2026.08.18.1`). It adds windowless managed Claude supervision, exact existing-session foreground control, transcript-branch confirmation, Unicode transport repair and acknowledged incremental monitoring. See [DISTRIBUTION.md](./DISTRIBUTION.md). The package remains under the PolyForm Noncommercial License; the parent repository's MIT license does not apply to this directory.
 
 **Use Claude Code, Codex, Gemini, Antigravity, and VS Code together — without copy-pasting context between them.**
 

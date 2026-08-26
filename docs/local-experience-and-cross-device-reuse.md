@@ -104,7 +104,7 @@
 | 缺口 | 位置 | 修法 |
 |---|---|---|
 | 绝对路径耦合 | `profiles/web/cordis.patch.yml`、`weekly-work-summary`（`C:\Desktop\日报`/`C:\Desktop\共享`）、`agent.cordis.yml` | 参数化为 `$DSH_HOME`/`$HOME` 模板，参考 chezmoi 模板渲染 |
-| 文档数字滞后 | 仓库 `AGENTS.md` 写"9 个"实为 13 个；`mcp.json` commit（9d351…/1.0.32）与 README（821ef…/1.0.30）不一致 | 顺手修正，provenance 单独复核 |
+| 文档数字滞后 | 仓库 `AGENTS.md` 写"9 个"实为 19 个；`mcp.json` commit（9d351…/1.0.32）与 README（821ef…/1.0.30）不一致 | ✅ 已修正（2026-08-26）：AGENTS.md 改 19 个；README header 统一为 9d35157 / v1.0.32 / 2026.08.18.1 |
 | 运行态数据 | 会话审计基线（sessions/ JSONL）各设备独立 | 审计脚本设计为每设备重建基线，不做跨设备迁移 |
 
 ---

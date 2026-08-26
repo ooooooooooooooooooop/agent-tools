@@ -112,7 +112,7 @@ python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --pro
 | 缺口 | 位置 | 修法 |
 |---|---|---|
 | 绝对路径耦合 | `profiles/web/cordis.patch.yml`、`weekly-work-summary`（`C:\Desktop\日报`/`共享`）、`agent.cordis.yml` | 参数化为 `$DSH_HOME`/`$HOME` 模板（参照 chezmoi 渲染） |
-| 文档数字滞后 | 仓库 AGENTS.md 写"9 个"实为 13 个；mcp.json 与 MCP README 版本号不一致 | 顺手修正，provenance 单独复核 |
+| 文档数字滞后 | 仓库 AGENTS.md 写"9 个"实为 19 个；mcp.json 与 MCP README 版本号不一致 | ✅ 已修正（2026-08-26）：AGENTS.md 改为 19 个；README header 与 mcp.json/DISTRIBUTION.md 统一为 9d35157 / v1.0.32 / 2026.08.18.1 |
 | 运行态数据 | 会话审计基线（sessions/JSONL）各设备独立 | 不迁移；审计脚本设计为每设备重建基线 |
 
 ## 输出契约

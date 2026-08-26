@@ -10,7 +10,7 @@
 
 | 层 | 目录 | 可否改动 | 改动要点 |
 |---|---|---|---|
-| ① Skill 包 | `skills/<name>/`（9 个） | ✅ | 必须登记在 `skills.json`；布局统一 `SKILL.md + agents/openai.yaml + examples/*.md` |
+| ① Skill 包 | `skills/<name>/`（19 个） | ✅ | 必须登记在 `skills.json`；布局统一 `SKILL.md + agents/openai.yaml + examples/*.md` |
 | ② MCP 包 | `mcp/<name>/` | ✅ | 登记在 `mcp.json`；自持子目录许可证；`agent-switchboard` 是修改版，非 MIT |
 | ③ DSH 插件包 | `dsh/<name>/` | ✅ | 本地 DSH 用户级插件：源码 + 可移植 `cordis.patch.yml` 片段 + README 一起发布；不设注册表，校验器不核对 manifest，靠链接/markdown 检查兜底；发布内容禁止含本机路径 |
 | ④ 质量脚手架 | `scripts/` `tests/` `docs/` `_template/` `.github/workflows/`（`skill-quality-gate` 是 ① 中的 Skill 包，位于 `skills/skill-quality-gate/`） | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
