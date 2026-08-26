@@ -14,7 +14,7 @@ const src = readFileSync(path.join(here, 'subagent-prep-exec-gate.mjs'), 'utf-8'
 // 简单可靠：搜索 "content: [{" 出现次数 == 搜索 "type: 'text'," 出现次数，
 // 并断言不存在裸的 "reminder = {\n type: 'text'" 模式。
 const contentArrays = (src.match(/content: \[\{/g) || []).length;
-const bareTextReminders = (src.match(/type: 'text',\s*\n\s*text:/g) || []).length;
+const bareTextReminders = (src.match(/const reminder = \{\s*\n\s*type: 'text',/g) || []).length;
 
 let failures = 0;
 function check(name, cond, detail) {
