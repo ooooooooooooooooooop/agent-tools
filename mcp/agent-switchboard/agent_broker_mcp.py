@@ -353,6 +353,8 @@ CODEX_QUEUE_AUTORUN = _env_bool("AGENT_BROKER_CODEX_QUEUE_AUTORUN", True)
 # without it a queued Fable/Opus consult waits for an interactive session/bridge pickup that
 # never happens in a headless environment and sits "queued" forever.
 CLAUDE_QUEUE_AUTORUN = _env_bool("AGENT_BROKER_CLAUDE_QUEUE_AUTORUN", True)
+CLAUDE_INBOX_TTL_SECONDS = max(0, _env_int("AGENT_BROKER_CLAUDE_INBOX_TTL", 7200))
+DB_RETENTION_DAYS = max(0, _env_int("AGENT_BROKER_DB_RETENTION_DAYS", 30))
 DEFAULT_CONTEXT_BUDGET = _env_int("AGENT_BROKER_CONTEXT_BUDGET", 2400)
 SHARED_CONTEXT_THRESHOLD_CHARS = _env_int("AGENT_BROKER_CONTEXT_THRESHOLD_CHARS", 1200)
 SHARED_CONTEXT_INLINE_CHARS = _env_int("AGENT_BROKER_CONTEXT_INLINE_CHARS", 700)
@@ -976,6 +978,15 @@ def init_db() -> None:
             )
             """
         )
+        agent_event_cols = {row[1] for row in conn.execute("PRAGMA table_info(agent_events)").fetchall()}
+        if "executor_type" not in agent_event_cols:
+            try:
+                conn.execute("ALTER TABLE agent_events ADD COLUMN executor_type TEXT")
+            except sqlite3.OperationalError as exc:
+                if "readonly" in str(exc).lower():
+                    pass  # read-only sandbox/test DB: skip migration, column unused there
+                else:
+                    raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS codex_requests (
@@ -1031,6 +1042,7 @@ def init_db() -> None:
                 error TEXT,
                 created_by TEXT,
                 created_at TEXT NOT NULL,
+                expires_at TEXT,
                 notified_at TEXT,
                 completed_at TEXT,
                 responder TEXT,
@@ -1047,6 +1059,7 @@ def init_db() -> None:
             row[1] for row in conn.execute("PRAGMA table_info(claude_requests)").fetchall()
         }
         for column_name, column_sql in (
+            ("expires_at", "ALTER TABLE claude_requests ADD COLUMN expires_at TEXT"),
             ("effort", "ALTER TABLE claude_requests ADD COLUMN effort TEXT"),
             ("cli_model", "ALTER TABLE claude_requests ADD COLUMN cli_model TEXT"),
             ("worker_pid", "ALTER TABLE claude_requests ADD COLUMN worker_pid INTEGER"),
@@ -1058,7 +1071,10 @@ def init_db() -> None:
                 try:
                     conn.execute(column_sql)
                 except sqlite3.OperationalError as exc:
-                    if "duplicate column" not in str(exc).lower():
+                    message = str(exc).lower()
+                    if "readonly" in message:
+                        pass
+                    elif "duplicate column" not in message:
                         raise
         # cli_requests: generic async requests for registered CLI backends (built-in or
         # config.json cli_backends custom). Mirrors codex/claude_requests so request_result /
@@ -1105,6 +1121,14 @@ def init_db() -> None:
         if "task_kind" not in cli_columns:
             try:
                 conn.execute("ALTER TABLE cli_requests ADD COLUMN task_kind TEXT")
+            except sqlite3.OperationalError as exc:
+                if "readonly" in str(exc).lower():
+                    pass
+                else:
+                    raise
+        if "worker_timeout_seconds" not in cli_columns:
+            try:
+                conn.execute("ALTER TABLE cli_requests ADD COLUMN worker_timeout_seconds INTEGER")
             except sqlite3.OperationalError as exc:
                 if "readonly" in str(exc).lower():
                     pass
@@ -1259,6 +1283,79 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_watchers_scope "
             "ON claude_watchers(project, session_id, watcher_id)"
         )
+        try:
+            _cleanup_expired_claude_inbox_locked(conn)
+            _cleanup_retained_history_locked(conn)
+        except sqlite3.OperationalError as exc:
+            # Preserve the existing read-only/test-database behavior: cleanup is
+            # opportunistic and must not make schema inspection fail.
+            if "readonly" not in str(exc).lower():
+                raise
+
+
+def _cleanup_expired_claude_inbox_locked(conn: sqlite3.Connection) -> int:
+    """Expire only unclaimed Claude inbox rows; TTL=0 disables the mechanism."""
+    if CLAUDE_INBOX_TTL_SECONDS <= 0:
+        return 0
+    cutoff = utc_from_epoch(time.time() - CLAUDE_INBOX_TTL_SECONDS)
+    now = utc_now()
+    message = "扩展未在线/未拾取，TTL 过期"
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(claude_requests)").fetchall()}
+    expiry_clause = (
+        "((expires_at IS NOT NULL AND expires_at < ?) OR (expires_at IS NULL AND created_at < ?) )"
+        if "expires_at" in columns
+        else "created_at < ?"
+    )
+    cutoff_params = (now, cutoff) if "expires_at" in columns else (cutoff,)
+    cur = conn.execute(
+        """
+        UPDATE claude_requests
+        SET status = 'error', error = ?, response = ?, completed_at = ?
+        WHERE status = 'queued' AND response IS NULL
+          AND {expiry_clause}
+        """.format(expiry_clause=expiry_clause),
+        (message, message, now, *cutoff_params),
+    )
+    if cur.rowcount:
+        conn.execute(
+            """
+            INSERT INTO agent_events
+                (project, root_path, topic, agent, event_type, summary, details, created_at)
+            SELECT project, root_path, topic, 'broker', 'claude_inbox_ttl_expired',
+                   'Claude inbox request expired: extension not online or did not pick it up',
+                   id, ?
+            FROM claude_requests
+            WHERE status = 'error' AND error = ? AND completed_at = ?
+            """,
+            (now, message, now),
+        )
+    return int(cur.rowcount or 0)
+
+
+def _cleanup_retained_history_locked(conn: sqlite3.Connection) -> dict[str, int]:
+    """Physically delete only old consultation and generic CLI request rows."""
+    if DB_RETENTION_DAYS <= 0:
+        return {"consultations": 0, "cli_requests": 0}
+    cutoff = utc_from_epoch(time.time() - DB_RETENTION_DAYS * 86400)
+    counts: dict[str, int] = {}
+    for table, timestamp_column in (("consultations", "started_at"), ("cli_requests", "created_at")):
+        cur = conn.execute(f"DELETE FROM {table} WHERE {timestamp_column} < ?", (cutoff,))
+        counts[table] = int(cur.rowcount or 0)
+    return counts
+
+
+def cleanup_broker_history() -> dict[str, Any]:
+    """Run the configured inbox/history cleanup on demand.
+
+    ``init_db`` already performs the same cleanup at broker startup. Avoid calling it
+    again here so callers receive the counts for this explicit cleanup invocation.
+    """
+    if not DB_PATH.exists():
+        init_db()
+    with db_connect() as conn:
+        inbox = _cleanup_expired_claude_inbox_locked(conn)
+        history = _cleanup_retained_history_locked(conn)
+    return {"claude_inbox_expired": inbox, **history}
 
 
 def utc_now() -> str:
@@ -4889,10 +4986,21 @@ def consult_claude(
         if candidate:
             attested = claude_model_attested(candidate, parsed.actual_model)
             if not attested:
-                response_text = (
-                    f"Model attestation failed: requested Claude model '{candidate}' but the runtime "
-                    f"reported '{parsed.actual_model or 'unknown'}'.\n\n{response_text}"
-                )
+                actual_label = parsed.actual_model or "unknown"
+                # A provider/runtime fallback can report a non-Claude model even though
+                # the Claude CLI request completed. Keep attestation false, but classify
+                # the outcome as an explicit downgrade so the request is not misreported
+                # as a hard attestation failure (and can remain a usable completed answer).
+                if parsed.actual_model and not parsed.actual_model.lower().startswith("claude-"):
+                    fallback_reason = (
+                        f"Claude request downgraded/fallback to runtime model '{actual_label}'; "
+                        f"requested '{candidate}' and attestation is not asserted."
+                    )
+                else:
+                    response_text = (
+                        f"Model attestation failed: requested Claude model '{candidate}' but the runtime "
+                        f"reported '{actual_label}'.\n\n{response_text}"
+                    )
         else:
             attested = True
         if fallback_reason:
@@ -6362,6 +6470,7 @@ def record_agent_event(
     event_type: str,
     summary: str,
     details: str | None = None,
+    executor_type: str | None = None,
 ) -> dict[str, Any]:
     init_db()
     project_info = resolve_project(project)
@@ -6376,8 +6485,8 @@ def record_agent_event(
         cursor = conn.execute(
             """
             INSERT INTO agent_events (
-                project, root_path, topic, agent, event_type, summary, details, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                project, root_path, topic, agent, event_type, summary, details, created_at, executor_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_info.name,
@@ -6388,6 +6497,7 @@ def record_agent_event(
                 summary.strip(),
                 details,
                 now,
+                executor_type,
             ),
         )
         event_id = cursor.lastrowid
@@ -7284,8 +7394,8 @@ def queue_cli_request(
             """
             INSERT INTO cli_requests (
                 id, backend, project, root_path, topic, prompt, status, created_by, created_at,
-                target_model, effort, mode, task_kind, chain_key
-            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+                target_model, effort, mode, task_kind, chain_key, worker_timeout_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -7301,6 +7411,7 @@ def queue_cli_request(
                 stored_mode,
                 stored_task_kind,
                 clean_chain or None,
+                _timeout if timeout else None,
             ),
         )
     if autorun_enabled:
@@ -7481,13 +7592,14 @@ def run_cli_request_worker(request_id: str) -> dict[str, Any]:
         return run_process(command, cwd or str(Path.cwd()), timeout=timeout)
 
     try:
+        worker_timeout = int(data.get("worker_timeout_seconds") or CLI_ASYNC_WORKER_TIMEOUT_SECONDS)
         result = backend.execute(
             data.get("prompt") or "",
             model=data.get("target_model"),
             effort=data.get("effort"),
             mode=mode,
             project_root=data.get("root_path"),
-            timeout=CLI_ASYNC_WORKER_TIMEOUT_SECONDS,
+            timeout=worker_timeout,
             runner=runner,
         )
         response = result.response
@@ -7544,12 +7656,26 @@ def _finalize_cli_worker(
         log(f"cli worker consultation history failed for {rid}: {exc}")
     try:
         record_agent_event(
+            data.get("project") or "",
+            data.get("topic"),
+            "cli-worker",
+            "cli_request_completed" if status == "completed" else "cli_request_failed",
+            f"CLI {data.get('backend')} request {rid} {status}"
+            + (f" (model {responder_model})" if responder_model else ""),
+            str(response or "")[:400] or str(error or "")[:400] or None,
+            executor_type="cli",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"cli worker completion event failed for {rid}: {exc}")
+    try:
+        record_agent_event(
             data.get("project"),
             data.get("topic"),
             "cli-worker",
             "cli_request_completed" if status == "completed" else "cli_request_failed",
             f"CLI async worker {'failed' if error else 'completed'} request {rid}",
             response[:2000],
+            executor_type="cli",
         )
         render_request_ledger(data.get("project"), data.get("topic"))
     except Exception as exc:  # noqa: BLE001
@@ -7666,6 +7792,40 @@ def _find_request(rid: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def _pid_alive(pid: Any) -> bool:
+    """Best-effort liveness check for a detached worker process (Windows-compatible).
+
+    A still-running worker counts as a heartbeat: wall-clock timeout alone must not
+    kill a request whose process is alive and progressing (see
+    _refresh_stale_codex_request). Returns True when the process exists (or exists
+    but is owned by another user), False when it is gone or never was set.
+
+    NOTE: on Windows `os.kill(pid, 0)` does NOT check existence — it unconditionally
+    terminates the target (TerminateProcess). We therefore probe with
+    OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) instead, which never kills.
+    """
+    if not pid:
+        return False
+    pid_i = int(pid)
+    if os.name == "nt":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid_i
+        )
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid_i, 0)
+        return True
+    except PermissionError:
+        return True  # exists but owned by another user -> treat as alive
+    except OSError:
+        return False  # no such process
+
+
 def _refresh_stale_codex_request(table: str, row: dict[str, Any]) -> dict[str, Any]:
     """Turn abandoned worker requests into terminal errors when polled.
     Covers codex_requests, claude_requests, and cli_requests (generic async backends)."""
@@ -7677,9 +7837,16 @@ def _refresh_stale_codex_request(table: str, row: dict[str, Any]) -> dict[str, A
     reason = ""
     if status == "running":
         started = _iso_epoch(row.get("worker_started_at")) or _iso_epoch(row.get("created_at")) or now_epoch
-        if now_epoch - started > CODEX_ASYNC_WORKER_TIMEOUT_SECONDS + 120:
+        worker_timeout = int(row.get("worker_timeout_seconds") or CODEX_ASYNC_WORKER_TIMEOUT_SECONDS)
+        if now_epoch - started > worker_timeout + 120:
+            pid = row.get("worker_pid")
+            if _pid_alive(pid):
+                # Heartbeat: the detached worker process is still alive (e.g. a long
+                # implementation run), so wall-clock timeout alone must not kill it.
+                return row
             reason = (
-                f"{agent_label} async worker exceeded {CODEX_ASYNC_WORKER_TIMEOUT_SECONDS} seconds without recording an answer. "
+                f"{agent_label} async worker exceeded {worker_timeout} seconds without recording an answer "
+                f"and its process (pid {pid or 'unknown'}) is gone. "
                 "Requeue with a smaller prompt for a fresh attempt."
             )
     elif status in {"queued", "notified"}:
@@ -7716,6 +7883,18 @@ def _refresh_stale_codex_request(table: str, row: dict[str, Any]) -> dict[str, A
         )
         conn.row_factory = sqlite3.Row
         updated = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row.get("id"),)).fetchone()
+    try:
+        record_agent_event(
+            row.get("project") or "",
+            row.get("topic"),
+            "broker",
+            "async_request_stale",
+            f"{agent_label} request {row.get('id')} marked error after {worker_timeout}s without an answer: {reason}",
+            None,
+            executor_type="cli",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"stale failure event failed for {row.get('id')}: {exc}")
     try:
         render_request_ledger(row.get("project"), row.get("topic"))
     except Exception as exc:  # noqa: BLE001
@@ -8475,13 +8654,21 @@ def queue_claude_request(
     stored_effort = normalize_effort_token(effort) or (str(effort).strip().lower() if effort else None)
     stored_cli_model = (str(cli_model).strip() or None) if cli_model else None
     stored_mode = normalize_claude_permission_mode(mode)
+    inbox_target = claude_cli_model_for_request(
+        {"cli_model": stored_cli_model, "target_model": model_label}
+    ) is None
+    expires_at = (
+        utc_from_epoch(time.time() + CLAUDE_INBOX_TTL_SECONDS)
+        if CLAUDE_INBOX_TTL_SECONDS and inbox_target
+        else None
+    )
     with db_connect() as conn:
         conn.execute(
             """
             INSERT INTO claude_requests (
-                id, project, root_path, topic, prompt, status, created_by, created_at,
+                id, project, root_path, topic, prompt, status, created_by, created_at, expires_at,
                 target_model, strict_model, task_kind, token_budget, effort, cli_model, mode
-            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -8491,6 +8678,7 @@ def queue_claude_request(
                 clean_prompt,
                 created_by,
                 now,
+                expires_at,
                 model_label,
                 strict_flag,
                 normalize_task_kind(task_kind),
@@ -14073,13 +14261,19 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             int(args.get("max_tokens") or 0) or None, args.get("prefer_cached_age")))
     if name == "start_managed_claude_supervisor":
         return text_content(start_managed_claude_supervisor(
-            args.get("project"), str(args.get("supervisor_id") or ""),
-            str(args.get("objective") or ""), args.get("policy"),
-            str(args.get("permission_mode") or "acceptEdits"),
-            str(args.get("decision_mode") or "record_only"),
-            args.get("codex_model"), args.get("codex_effort"),
-            args.get("max_autonomous_actions"), args.get("stall_timeout_seconds"),
-            args.get("dry_run")))
+            project=args.get("project"),
+            supervisor_id=str(args.get("supervisor_id") or ""),
+            objective=str(args.get("objective") or ""),
+            policy=args.get("policy"),
+            permission_mode=str(args.get("permission_mode") or "acceptEdits"),
+            decision_mode=str(args.get("decision_mode") or "record_only"),
+            allowed_tools=args.get("allowed_tools"),
+            mcp=args.get("mcp"),
+            codex_model=args.get("codex_model"),
+            codex_effort=args.get("codex_effort"),
+            max_autonomous_actions=args.get("max_autonomous_actions"),
+            stall_timeout_seconds=args.get("stall_timeout_seconds"),
+            dry_run=args.get("dry_run")))
     if name == "send_to_managed_claude_session":
         return text_content(send_to_managed_claude_session(
             str(args.get("supervisor_id") or ""), str(args.get("prompt") or ""),
@@ -15332,6 +15526,7 @@ def main() -> int:
     sys.stdin.reconfigure(encoding="utf-8", errors="strict")
     sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     init_db()
+    managed_claude.start_supervisor_watchdog(BROKER_DIR)
     log("agent-broker MCP server started")
     for raw_line in sys.stdin:
         line = raw_line.strip()
