@@ -47,10 +47,34 @@ description: |
 
 降级通道的能力差异要如实告知用户：宿主 subagent 没有 broker 的事件流、归档和跨会话续接能力；长任务可建议用户安装 agent-switchboard（安装属高风险操作，需明确授权）。
 
+## 统一监督协议（2026-08-26 沉淀，业界对照联网验证）
+
+> 受管 supervisor 与 DSH 会话（goal 模式）是**两套执行引擎，但应共用一套监督协议**——
+> 业界共识（Langfuse/LangSmith/OTel/Temporal）：观测平台只负责记录，"每个执行器都必须
+> 适配同一组事件与状态字段"，而不是为每个执行器发明一套监督方式。
+> 来源：<https://langfuse.com/docs/observability/data-model>、
+> <https://docs.langchain.com/langsmith/annotate-code>、
+> <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md>、
+> <https://github.com/temporalio/documentation/blob/main/docs/develop/go/activities/timeouts.mdx>
+
+**三要素监督协议**（对任何执行者都检查这三项，不区分 executor_type）：
+
+| 要素 | 受管 supervisor | DSH 会话（session-supervisor 插件） |
+|---|---|---|
+| ① 事件 | `wait_supervisor_event`（turn_completed/stall/error） | 会话事件流（turn/end、tool/call）+ 摘要注入 |
+| ② 摘要 | broker `agent_events`（executor_type 区分来源） | 回合摘要注入（含思考行，deepseek 系） |
+| ③ 超时兜底 | `stall_timeout_seconds` → stall 事件 | 插件回合内超时看门狗（turnTimeoutMinutes） |
+
+**执行规则**：
+- 监督任何执行者时，按 ①②③ 三项核对，缺哪项用对应机制补（supervisor 缺摘要→查 agent_events；DSH 会话缺超时→看门狗警告）；
+- 事件统一落点：broker `agent_events` 表（`executor_type` 列：`cli`/`supervisor`/`session`/`subagent`）；
+- 任务路由（execution 引擎二选一）：交互式/需要思考可见 → DSH 会话；重后台/需要独立进程硬兜底 → 受管 supervisor；监督接口两者一致。
+
 ## 工作流程：受管执行者生命周期
 
 1. **启动**：`start_managed_claude_supervisor`，提供具体 `objective`、明确 `policy`（里程碑、安全红线、验收规则）、稳定 `supervisor_id`。默认 `decision_mode=record_only`，除非用户要求 Codex 决策。
 2. **派工**：`send_to_managed_claude_session` 发送有界任务切片（一次一个可验收的增量），不发开放式大目标。
+   - **验收口径开工前回显（2026-08-26 沉淀）**：凡任务涉及外部对照目标（如"对照某基准榜/公认值/参考实现"），派工提示词必须写明该目标**允许怎么用**（仅验收对照 vs 可作调参目标；可调参时注明约束：不要求一一对应、偏差上限、禁止照抄）并要求执行者在步骤 0 回显口径；**先开工后改口径 = 返工**。来源实证：2026-08-26 论文会话国际公认榜口径 16:14"仅验收"→16:18"可调参"翻转，中间按旧口径下发的任务需返工。
 3. **追踪**：用 `wait_supervisor_event` 长轮询等待材料事件；进度可见性来自 wait 本身。禁止自建 cron 或轮询循环做监控。
 4. **验收**：对照 objective 与 policy 独立核验证据，不接受执行者自述。
 5. **关闭归档**：`close_supervisor` 写入归档摘要（做了什么、证据、风险、下一步），供跨会话续接。
