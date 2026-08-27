@@ -19,7 +19,7 @@ import shutil
 import sys
 from pathlib import Path
 
-DEFAULT_INCLUDE = ("AGENTS.md", "settings.yaml")
+DEFAULT_INCLUDE = ("AGENTS.md",)  # settings.yaml 每机独立（provider 配置按机维护），不入同步集
 OPTIONAL_INCLUDE = ("profiles", ".agent-presets", "patches")
 HARD_EXCLUDE_DIRS = {"sessions", "storages", "skills", "__pycache__", "node_modules"}
 HARD_EXCLUDE_NAMES = {".credentials.yaml"}
@@ -100,12 +100,15 @@ def scan_sensitive(pkg_root: Path) -> list[str]:
     return issues
 
 
-def sha1_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def digest_file(path: Path) -> str:
+    """SHA-256 over newline-normalized bytes (CRLF/CR -> LF).
+
+    Git autocrlf makes checkout line endings machine-dependent; normalizing
+    keeps digests stable across devices so cross-machine verify never
+    false-diffs on line endings alone.
+    """
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def collect_files(root: Path) -> dict[str, Path]:
@@ -129,7 +132,7 @@ def compare(dest_root: Path, manifest: dict, templated: set[str] | None = None) 
             missing.append(rel)
         elif rel in templated:
             continue  # content is device-rendered; verify presence only
-        elif sha1_file(dest) != digest:
+        elif digest_file(dest) != digest:
             different.append(rel)
     for rel in dest_files:
         if rel not in manifest.get("digests", {}):
@@ -172,7 +175,7 @@ def main() -> int:
             f = src / rel
             if f.is_file():
                 shutil.copy2(f, display / rel)
-                digests[rel] = sha1_file(f)
+                digests[rel] = digest_file(f)
             elif f.is_dir():
                 for dirpath, dirnames, filenames in os.walk(f, followlinks=False):
                     dirnames[:] = [d for d in dirnames if d not in HARD_EXCLUDE_DIRS]
@@ -183,7 +186,7 @@ def main() -> int:
                         target = display / rel_sub
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(sub, target)
-                        digests[rel_sub] = sha1_file(sub)
+                        digests[rel_sub] = digest_file(sub)
         templated: dict[str, dict] = {}
         if args.template:
             for rel in list(digests):
@@ -195,7 +198,7 @@ def main() -> int:
                 if usage:
                     p.write_text(rendered, encoding="utf-8")
                     templated[rel] = usage
-                    digests[rel] = sha1_file(p)  # digest of the portable form
+                    digests[rel] = digest_file(p)  # digest of the portable form
         issues = scan_sensitive(display)
         if issues:
             for i in issues:
