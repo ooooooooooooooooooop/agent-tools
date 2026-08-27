@@ -1,58 +1,85 @@
-# 示例：完整发布一次 + 在新设备复现环境
+# 示例：完整环境一键上传与一键更新
 
 ## 目标
 
-把本仓库（skills 仓库，SSOT）完整发布一次（跑全部门禁并确认可发布性），然后在另一台设备上完成首次环境复现。
+通过 `publish-and-reuse` skill 完成两大多设备协同核心场景：
+1. **一键上传环境**（导出配置 ➔ 四层体检对比 ➔ 门禁 ➔ 提交推送 GitHub）。
+2. **一键更新环境**（更新前体检 ➔ 拉取 GitHub ➔ 应用到 DSH ➔ 更新后复核）。
 
-## 前置约定
+---
 
-- 仓库根：`C:\Users\admin\Desktop\skills`（即仓库本身）。
-- 目标设备：新机器，尚未安装本环境。
-- 强制排除：`.credentials.yaml`、`sessions/`、`storages/`、设备运行层目录。
+## 场景一：一键上传环境（Upload — Skills + Plugins + MCP + DSH 配置）
 
-## 阶段一：完整发布（A 机）
+1. **导出 DSH 全局配置骨架**（自动脱敏与模板化）：
+```powershell
+python skills\dsh-config-sync\scripts\sync_dsh_config.py export `
+  --source "$env:USERPROFILE\.dsh" --display dsh-config --template --with-optional
+```
 
-1. 确认 `git status` 仅含待发布变更。
-2. 一键跑发布门禁：
+2. **上传前四层体检与发布安全门禁**：
+```powershell
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
 
-```text
 python scripts\publish_all.py
 ```
+期望输出：四层体检 PASS，发布门禁 `ALL GATES PASSED`（7 项全绿）。
 
-3. 期望输出（节选）：
-
-```text
-[1/7] validate_repo .................... PASS
-[2/7] quality_report ................... PASS
-[3/7] publish_check .................... PASS
-[4/7] run_skill_evals .................. PASS
-[5/7] tests ............................ PASS
-[6/7] mcp_tests ........................ PASS
-[7/7] diff_check ....................... PASS
-ALL GATES PASSED
+3. **提交并推送到 GitHub**：
+```powershell
+git add -A
+git commit -m "chore: upload environment (skills, plugins, mcp, dsh-config)"
+git push
 ```
 
-4. 按可发布性矩阵确认去向：`skills/*` 可发社区/自建注册表；`mcp/agent-switchboard` 不进商用市场；`dsh/*` 走 git 分发。
-5. `git push` 到私有远程。
+---
 
-## 阶段二：新设备首次安装（B 机）
+## 场景二：一键更新环境（Update — 从 GitHub 同步到 DSH）
 
-1. 安装 DSH，配置 provider 与同名环境变量（`BAI_API_KEY`、`CPA_API_KEY` 等，密钥不落盘）。
-2. 克隆仓库：`git clone <私有远程> C:\Users\<bob>\Desktop\skills`。
-3. 源端自检：`python scripts\validate_repo.py --strict`。
-4. 技能栈同步（先 check 后 apply）：
-
-```text
-python scripts\sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profile core --check
-python scripts\sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profile core --apply
+1. **更新前体检**（对比本地与已安装基线）：
+```powershell
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
 ```
 
-5. 配置骨架：A 机 `sync_dsh_config.py export --template --with-optional` 导出归档 → 拷贝到 B 机 → `check` → `apply` → 再 `check` 核对 SHA-256。
-6. 修补绝对路径：确认 `cordis.patch.yml` / `agent.cordis.yml` 已模板化，否则按 `{{DSH_HOME}}`/`{{HOME}}` 处理。
-7. 冒烟：跑一个真实会话，确认技能可被 agent 加载、模型路由生效。
+2. **从远程拉取最新代码**：
+```powershell
+git pull
+```
+
+3. **一键应用到 DSH 运行时**：
+```powershell
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --profile full --apply
+
+python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
+  --display dsh-config --destination "$env:USERPROFILE\.dsh"
+```
+
+4. **更新后复核**：
+```powershell
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+```
+
+---
 
 ## 结果
 
-- 发布：`ALL GATES PASSED`，仅发布脱敏内容，无设备路径与凭据。
-- 复现：B 机技能栈差异归零、配置 SHA-256 校验 PASS、冒烟会话可用。
-- 剩余风险：`weekly-work-summary` 不发布（设备绑定）；MCP 仅自托管非商用。
+- **上传**：四层资产（Skills、Plugins、MCP、DSH Config）完整脱敏打包，门禁全绿，成功推送 GitHub。
+- **更新**：拉取最新变更并全量同步到 DSH 运行时，更新前后体检闭环，差异归零。
+- **提醒**：若更新包含插件或 MCP 配置修改，提示重启 DSH 进程即可加载生效。
