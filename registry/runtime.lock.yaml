@@ -1,0 +1,18 @@
+# runtime.lock — DSH 生态运行时版本锁定（canonical）
+# 用途：记录已验证可用的运行时版本。升级 = 显式修改本文件 + 验证 + 提交。
+# 禁止：让 npx/包管理器静默漂移后与本文档不一致（aic validate 会比对 inventory 实测值）。
+runtime_lock:
+  captured_at: "2026-08-28"
+  dsh:
+    version: "0.1.1-rc.2"
+    install_mode: npx-cache
+    note: "npx 缓存解析安装；无 lockfile 锁定，本文件即版本 SSOT"
+  node: "v22.17.1"
+  python: "3.11.9"
+  pnpm: "11.24.0"
+  codex_cli: "0.149.0"
+  claude_code: "2.1.239"
+  gemini_cli: "not-on-path"   # ~/.gemini 配置存在，CLI 不在 PATH
+  gateways:
+    cpa: {process: "cli-proxy-api.exe", listen: "127.0.0.1:8317"}
+    cc-switch: {process: "cc-switch.exe", listen: "127.0.0.1:15721"}

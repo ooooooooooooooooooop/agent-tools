@@ -1,0 +1,28 @@
+# routing-policy.yaml — 路由策略（canonical，当前等价描述）
+# 原则：TARGET BEHAVIOR = CURRENT BEHAVIOR。本文件是现状的无损描述，不是优化。
+# 运行时路由决策属于 Runtime/ Harness；本文件只是其配置的 canonical。
+rules:
+  main_default:
+    provider: cpa
+    model: gemini-3.7-flash-high
+    evidence: "~/.dsh/settings.yaml agent-default-model（2026-08-28 由 kimi-coding/k3-256k 变更；首次 aic diff 捕获）"
+  subagent_spawn:
+    provider: cpa
+    model: gpt-5.6-luna-max
+    evidence: ".agent-presets/cc/agent.cordis.yml row tool-subagent"
+  subagent_fork:
+    provider: cpa
+    model: gpt-5.6-luna-max
+    evidence: ".agent-presets/cc/agent.cordis.yml row tool-subagent-fork"
+  compaction_summary:
+    provider: cpa
+    model: gemini-3.7-flash-high
+    evidence: ".agent-presets/cc/agent.cordis.yml row compaction-basic"
+  broker_preferences:
+    coding: [ cpa, codex_cli ]
+    research: [ cpa, codex_cli ]
+    fast: [ cpa ]
+    general: [ cpa ]
+    evidence: "~/.agent-broker/config.json routing_preferences（描述性记录；broker 配置生成属 Migration #5）"
+fallback:
+  status: "none declared（现状：无显式 fallback 链；重试由 provider 级 retryPolicy 承担）"

@@ -1,0 +1,51 @@
+# models.yaml — Admitted Model Catalog（canonical，人工/策略准入）
+# 管线：Discovered → Reachable → Health-checked → Admitted → Routing-enabled。
+# 本文件只含 Admitted（= 当前实际在用）模型。CPA 网关 discovered 的 25 个模型
+# 属于 runtime inventory（registry/inventory/，generated），不得合并进本文件。
+# routing_enabled 由 aic validate 依据 routing-policy.yaml 引用关系校验，不手写。
+models:
+  - id: k3-256k
+    provider: kimi-coding
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: kimi-coding provider 可选模型；2026-08-28 前为 main_default"}
+    roles: []
+  - id: deepseek-v4-flash
+    provider: bai
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared with compat/reasoning config"}
+    roles: []
+  - id: claude-opus-5
+    provider: any
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared with 1M-context beta headers"}
+    roles: []
+  - id: gpt-5.6-luna-max
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: subagent spawn/fork default"}
+    roles: [subagent_default]
+  - id: gemini-3.7-flash-high
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: compaction summarization model + agent-default-model (since 2026-08-28)"}
+    roles: [compaction, main_default]
+  - id: gpt-5.6-sol-xhigh
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    roles: []
+  - id: claude-sonnet-4-6
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    roles: []
+  - id: claude-opus-4-6-thinking
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    roles: []
+  - id: gpt-image-2
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-08-28", basis: "in-use: declared on cpa (image)"}
+    roles: []

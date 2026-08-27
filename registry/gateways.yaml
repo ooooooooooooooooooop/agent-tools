@@ -1,0 +1,15 @@
+# gateways.yaml — 本地网关清单（canonical；PHASE-2 过渡位置，终态归 personal-ai-state，见 FREEZE_NOTES）
+# 内容纪律：禁止 secret、禁止设备绝对路径（设备细节进 generated inventory）。
+gateways:
+  cpa:
+    process: cli-proxy-api.exe
+    listen: "127.0.0.1:8317"
+    kind: openai-compat relay（EasyCLIProxyAPI 包装）
+    serves: "DSH provider 'cpa'、agent-switchboard cli_backends/providers"
+    alias_behavior: "无（透传模型名）"
+  cc-switch:
+    process: cc-switch.exe
+    listen: "127.0.0.1:15721"
+    kind: claude-code proxy / provider switcher
+    serves: "Claude Code（~/.claude/settings.json env 指向）"
+    alias_behavior: "存在 claude-* → 实际模型的 alias 映射；V2.1 要求显式化，属 Claude adapter（Migration #5）"
