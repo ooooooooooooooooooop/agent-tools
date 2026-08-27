@@ -7,7 +7,17 @@
 # in isContextWindowExceededError, and Claude Code baseline retry defaults), so
 # the user plugins were redundant. Plugin files deleted from plugins/ dir.
 
-# MCP: agent-switchboard (local cross-agent broker from C:\Desktop\skills\mcp).
+# INACTIVE FILES in plugins/ (verified 2026-08-28, integrity audit): the four
+# files below exist on disk but are NOT registered anywhere (no reference in
+# this patch, cordis.yml, or deployment bundle yml), therefore never loaded.
+# Decision: KEEP-inactive — they have no repo-side source and may be WIP;
+# do not register without a deliberate behavior-change review.
+#   - compaction-summarization-fallback.mjs
+#   - session-supervisor.mjs
+#   - session-surface-repair.mjs
+#   - web-search-adapter.js   (repo source exists: agent-tools dsh/web-search-adapter)
+
+# MCP: agent-switchboard (local cross-agent broker from {{DESKTOP}}\skills\mcp).
 # Host-plane row: registers tools as mcp__agent-switchboard__* for every session.
 # Reload marker: 2026-08-19 — force HMR respawn onto merged v1.0.33 code.
 - insert:
@@ -18,12 +28,12 @@
       serverName: agent-switchboard
       command: python
       args:
-        - 'C:\Desktop\skills\mcp\agent-switchboard\agent_broker_mcp.py'
-      cwd: 'C:\Desktop\skills\mcp\agent-switchboard'
+        - '{{DESKTOP}}\skills\mcp\agent-switchboard\agent_broker_mcp.py'
+      cwd: '{{DESKTOP}}\skills\mcp\agent-switchboard'
       env:
         PYTHONUTF8: '1'
         PYTHONIOENCODING: 'utf-8'
-        DSH_BROKER_RELOAD: '20260827-CPA-GEMINI-0845'
+        DSH_BROKER_RELOAD: '20260819-1058'
       toolCallTimeoutMs: 200000
       failOnStartupError: false
 
@@ -49,91 +59,16 @@
   - id: subagent-splice-summarizer
     name: './plugins/subagent-splice-summarizer-v1.mjs'
     config:
-      thresholdChars: 2000
+      thresholdChars: 8000
 
 # Subagent PREP/EXEC gate (2026-08-25): 连续 >=6 个调查类 subagent 且无执行类时，
-# 向模型注入可见警告（准备压倒执行守卫，subagent 通道版）；同窗口 >=3 次
-# interrupt_agent 时注入"停止中断-重派"警告（GitHub run→persist→inspect→retry 纪律）。
+# 向模型注入可见警告（准备压倒执行守卫，subagent 通道版）。
 - insert:
   - id: subagent-prep-exec-gate
     name: './plugins/subagent-prep-exec-gate.mjs'
     config:
       warnPrep: 6
-      warnInterrupts: 3
 - insert:
   - id: model-persona
     name: './plugins/model-persona.js'
-
-# Repair stale current-surface tool calls from already-closed interrupted turns
-# before pressure/overflow compaction sees them.
-- insert:
-  - id: session-surface-repair
-    name: './plugins/session-surface-repair.mjs'
-
-# 会话监督一体化（2026-08-26）：回合摘要（含思考行，落盘 progress.json）+
-# 空转告警（不打断执行）。合并自 progress-summarizer + idle-watchdog。
-# 重复工具检测由 DSH 内置 repeat-tool-reminder 负责。
-- insert:
-  - id: session-supervisor
-    name: './plugins/session-supervisor.mjs'
-    config:
-      minTurns: 3
-      maxSummaryChars: 300
-      idleThreshold: 4
-
-# Research Lab adapter (2026-08-26): registers research_*-prefixed CLI tools for all sessions.
-- insert:
-  - id: research-lab-adapter
-    name: '@research-lab/dsh-adapter'
-    config:
-      python: '{{HOME}}\anaconda3\python.exe'
-      workspace: 'C:\Desktop\research-lab\demo-ws2'
-      autoSync:
-        enabled: true
-        metadataUrl: 'https://github.com/ooooooooooooooooooop/research-lab-sync.git'
-        ociRegistry: 'https://ghcr.io'
-        ociRepository: 'ooooooooooooooooooop/research-lab-cas'
-        deviceId: 'laptop'
-        stateFile: '{{DSH_HOME}}\research-lab\auto-sync-queue.json'
-        pullOnStart: true
-        pullBeforeRead: true
-        pushAfterWrite: true
-        strictCompare: false
-        debounceMs: 1000
-        maxAttempts: 5
-
-# Compaction summarization route (2026-08-26): 溢出恢复/压力压缩的总结调用固定走
-# cpa 的 gemini-3.7-flash-high（短输出、无推理），避免 fallback 到会话当前推理模型
-# （如 gpt-5.6-sol-xhigh）产出长篇结构化 checkpoint，导致 "summary is not smaller
-# than the shadowed content" 死循环，溢出后压缩永远失败、本轮直接失败。
-- id: compaction-basic
-  config:
-    summarizationProvider: cpa
-    summarizationModel: gemini-3.7-flash-high
-    maxTokens: 2048
-
-# Compaction summarization fallback (2026-08-27): flash 主用失败时（cpa 故障/配额/
-# 模型不可用）兜底原会话模型重发总结请求，避免压缩失败 → 本轮运行失败。
-# 只拦 purpose='compaction' 且精确匹配主模型的流；已产出内容或用户取消时不兜底。
-- insert:
-  - id: compaction-summarization-fallback
-    name: './plugins/compaction-summarization-fallback.mjs'
-    config:
-      primaryProvider: cpa
-      primaryModel: gemini-3.7-flash-high
-
-# 持久定时调度：基于会话事件流的 after/at/every 提醒，替代轮询空转，
-#    落实全局偏好「到点才查、不到点不空转」。
-- insert:
-  - id: dsh-schedule
-    name: '@deepseek-ai/dsh-schedule'
-# 2. 免 Key 国内直连 Web Search：注册 DuckDuckGo Lite Provider，
-#    恢复原生 web_search 工具在无 Key 环境下的可用性。
-#    （2026-08-28 实测 html.duckduckgo.com/html/ 被拦到 anomaly 验证码页，改用 lite 端点）
-- insert:
-  - id: web-search-adapter
-    name: './plugins/web-search-adapter.js'
-    config:
-      endpoint: 'https://lite.duckduckgo.com/lite/'
-      timeoutMs: 15000
 
