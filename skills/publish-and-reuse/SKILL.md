@@ -9,6 +9,7 @@ triggers:
   - "在新设备复现 / 安装我的环境"
   - "发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"
 not_for:
+  - "在非 skills/agent-tools 仓库的其他业务工作区中执行环境同步、更新或上传（本 skill 仅在 agent-tools 仓库本体生效）"
   - "修改具体业务代码或单个 Skill 的内部逻辑实现（交给 minimal-implementation）"
   - "日常代码编写与单点 Bug 修复"
 depends_on:
@@ -40,6 +41,7 @@ depends_on:
 - 用户要求"发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"。
 
 ### 负向边界（不适用）
+- **非 agent-tools 仓库目录**：在其他普通业务项目或工作区中，禁止使用本 skill 随意同步、拉取或覆盖环境（本 skill 仅限在本项目/仓库本体生效）。
 - 修改具体业务代码或单个 Skill 的逻辑实现（交给 `minimal-implementation`）。
 - 日常代码编写与单点 Bug 修复。
 

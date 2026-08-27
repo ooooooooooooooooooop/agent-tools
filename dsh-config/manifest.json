@@ -1,11 +1,11 @@
 {
-  "dsh_home_src": "C:\\Users\\yexue\\.dsh",
+  "dsh_home_src": "C:\\Users\\admin\\.dsh",
   "digests": {
     "AGENTS.md": "89946c3caa6696db78cd2205b76685ab54d9b7622813b12b913bba8f5969e500",
-    "profiles/web/cordis.patch.yml": "8c180f9070447745b1ece43c3655b1142e648bdb78b054a679018c577f1a5dd0",
+    "profiles/web/cordis.patch.yml": "3756e39a381600304ce2afc6fd8cbf8b8a2ce49fc673d749c7ee1fe2e8f56157",
     "profiles/web/cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
-    "profiles/web/package.json": "20706dd9c94cab267386dbf8861cb89caad5466c23ef6d23ea35168dfdb53c3c",
-    "profiles/web/pnpm-lock.yaml": "30d5f571364d75b25cd82b59301769a109e9d9d236f51df670eb5efbe6023555",
+    "profiles/web/package.json": "b92d12de806b043428fb54d1c774515b10b5880e250a54004ddec89582d8050a",
+    "profiles/web/pnpm-lock.yaml": "64d61d6da3afba1a26c17e68a782eb7baa30a41f6a1bce7f587857829fe31f58",
     "profiles/web/pnpm-workspace.yaml": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba",
     "profiles/web/.dsh-market/state.json": "ddfaa6d183263701072d5de40be0abe00e7d9abc68e70081782cd08f4a5bb8f1",
     "profiles/web/plugins/compaction-summarization-fallback.mjs": "7d5478a079fb343466dcc00f5c55fddeda17ef63559cbde9aa76d06e9cf7e834",
@@ -24,11 +24,8 @@
   "templates": {
     "files": {
       "profiles/web/cordis.patch.yml": {
-        "{{DSH_HOME}}": {
-          "export_value": "C:\\Users\\yexue\\.dsh"
-        },
-        "{{HOME}}": {
-          "export_value": "C:\\Users\\yexue"
+        "{{DESKTOP}}": {
+          "export_value": "C:\\Users\\admin\\Desktop"
         }
       }
     }
