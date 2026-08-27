@@ -23,6 +23,7 @@ DEFAULT_INCLUDE = ("AGENTS.md",)  # settings.yaml 每机独立（provider 配置
 OPTIONAL_INCLUDE = ("profiles", ".agent-presets", "patches")
 HARD_EXCLUDE_DIRS = {"sessions", "storages", "skills", "__pycache__", "node_modules"}
 HARD_EXCLUDE_NAMES = {".credentials.yaml"}
+BACKUP_NAME_MARKER = ".bak"  # local rollback artifacts (e.g. cordis.patch.yml.bak-*) never ship
 FORBIDDEN_SNIPPETS = {".jsonl", ".log"}
 SECRET_VALUE_RE = None  # placeholder; kept simple to avoid over-engineering
 
@@ -181,6 +182,8 @@ def main() -> int:
                     dirnames[:] = [d for d in dirnames if d not in HARD_EXCLUDE_DIRS]
                     base = Path(dirpath)
                     for name in filenames:
+                        if BACKUP_NAME_MARKER in name:
+                            continue
                         sub = base / name
                         rel_sub = (Path(rel) / sub.relative_to(f)).as_posix()
                         target = display / rel_sub
