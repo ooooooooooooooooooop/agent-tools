@@ -12,4 +12,11 @@ gateways:
     listen: "127.0.0.1:15721"
     kind: claude-code proxy / provider switcher
     serves: "Claude Code（~/.claude/settings.json env 指向）"
-    alias_behavior: "存在 claude-* → 实际模型的 alias 映射；V2.1 要求显式化，属 Claude adapter（Migration #5）"
+    alias_behavior: "显式 alias 映射（2026-08-28 由 ~/.claude/settings.json env 提取显式化，Migration #3 收口）"
+    alias_map:
+      claude-haiku-4-5: gpt-5.6-luna
+      claude-opus-4-8: gpt-5.6-luna
+      claude-sonnet-4-6: gpt-5.6-luna
+      claude-fable-5: gpt-5.6-sol
+      subagent-default: gpt-5.6-luna
+    note: "alias 使 Claude Code 显示名≠实际模型；trace 必须走四段身份链核对（model-identity-trace.schema.yaml）"
