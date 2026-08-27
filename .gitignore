@@ -1,6 +1,9 @@
 __pycache__/
 .claude/
 
+# Control Plane generated runtime inventory (never canonical, never publish)
+registry/inventory/
+
 # Switchboard task milestone receipts (executor -> controller handoff)
 output/
 

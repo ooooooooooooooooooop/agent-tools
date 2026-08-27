@@ -1,0 +1,8 @@
+# dsh-overlay.yaml — DSH harness 特有、非模型路由的配置（overlay，入 git，明确标记）
+# 这些键不是 canonical 决策，但必须存在于生成结果中以保持 full-file 语义等价。
+overlay:
+  settings:
+    ui-onboarding:
+      welcomeNoticeVersion: "2026-08-13.1"
+    agent-presets:
+      default: cc

@@ -1,0 +1,27 @@
+# harnesses/dsh.yaml — DSH adapter 契约（canonical）
+# 边界：本文件只声明"哪些配置的哪些字段由 canonical 生成/校验"；其余内容属 overlay 或 harness 自有。
+harness: dsh
+render_targets:
+  - id: settings
+    path: "{{DSH_HOME}}/settings.yaml"
+    mode: full-file
+    sections:
+      "llm-pi-ai.providers": "registry/providers.yaml#providers"
+      "agent-default-model": "registry/routing-policy.yaml#rules.main_default (keys provider/model/reasoningEffort)"
+      "agent-presets": "overlay"
+      "ui-onboarding": "overlay"
+  - id: agent-preset-cc
+    path: "{{DSH_HOME}}/.agent-presets/cc/agent.cordis.yml"
+    mode: field-projection
+    note: "preset 结构与工具组合属 harness overlay；此处只校验路由相关字段（防硬编码漂移）"
+    field_checks:
+      - {row: tool-subagent, key: config.agentOptions.provider, value_from: rules.subagent_spawn.provider}
+      - {row: tool-subagent, key: config.agentOptions.model, value_from: rules.subagent_spawn.model}
+      - {row: tool-subagent-fork, key: config.agentOptions.provider, value_from: rules.subagent_fork.provider}
+      - {row: tool-subagent-fork, key: config.agentOptions.model, value_from: rules.subagent_fork.model}
+      - {row: compaction-basic, key: config.summarizationProvider, value_from: rules.compaction_summary.provider}
+      - {row: compaction-basic, key: config.summarizationModel, value_from: rules.compaction_summary.model}
+out_of_scope:
+  - "profiles/web/cordis.patch.yml 插件组合（harness 特有，属 overlay；Migration #5 再评估）"
+  - "profiles/web/package.json bundles（部署组合）"
+  - "会话/skills/hooks 等非模型路由面"
