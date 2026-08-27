@@ -1,0 +1,18 @@
+# ============================================================================
+# web-search-adapter：免 Key 国内直连 Web Search Provider —— cordis.patch.yml 可移植片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   web-search-adapter.js 复制到同 profile 的 plugins/ 目录。
+#
+# 加载器会相对该 patch 文件所在的 profile 目录解析 './plugins/...'
+#   为 file:// URL，Windows 和其他平台都不要改成绝对路径。
+#   该条目不能被别的条目覆盖；同一 profile 只注册一次。
+# ============================================================================
+
+- insert:
+  - id: web-search-adapter
+    name: './plugins/web-search-adapter.js'
+    config:
+      endpoint: 'https://lite.duckduckgo.com/lite/'
+      timeoutMs: 15000

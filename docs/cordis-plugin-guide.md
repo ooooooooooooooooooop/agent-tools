@@ -102,3 +102,27 @@ plugins:
    `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<target-preset>/plugins/<plugin-name>/`
 2. 将 `cordis.patch.yml` 片段合并至该 Preset 的 `cordis.yml`；
 3. 重启或重新挂载 DSH Preset 即可永久生效。
+
+---
+
+## 四、官方内置插件挂载红线（2026-08-28 踩坑固化）
+
+**挂载任何官方 `@deepseek-ai/*` 插件前，必须先查它是否已随 bundle 自动加载**——重复挂载同一插件 ID 会导致 Loader 组合失败、DSH 无法启动。
+
+### 已验证随 `dsh-base` / `dsh-web-app` 自动加载、禁止在 `cordis.patch.yml` 显式挂载的官方插件
+
+| 插件 ID | 功能 | 配置方式 |
+|---|---|---|
+| `compaction-tool-result-pruner` | tool_result 超长时纯算法头/中/尾裁剪（无模型调用） | 如需调 `thresholdChars` 等，用 `- id: <插件ID>` + `config:` 的**覆盖条目**，不要 `insert` |
+| `dsh-token-meter` | `ctx.tokenMeter` 实时 Token 计量 | 同上 |
+| `dsh-session-log-export` | Web UI 会话日志导出 | 同上 |
+
+### 挂载前自查顺序
+
+1. 读 profile 的 `package.json` → `dsh.profile.bundles`，确认 bundle 栈（如 `dsh-base`、`dsh-web-app`）；
+2. 在 bundle 的 `cordis.patch.yml`（如 `node_modules/@deepseek-ai/dsh-base/cordis.patch.yml`）里 grep 目标插件 ID/包名；
+3. 已存在 → 只用 `- id:` 覆盖条目调配置，或直接不动；不存在 → 才用 `- insert:` 挂载。
+
+### 插件市场"已安装"计数语义
+
+dshmarket（设置 → 插件市场）的"已安装"页**只统计 profile `package.json` 的 `dependencies`**（市场 UI / `dsh plugin add` 通道装的社区包，过滤 3 个内置 bundle）。`cordis.patch.yml` 补丁层挂载的插件（含本地文件插件 `./plugins/*.js`）**不在其账本内**，计数不变属正常。要看全部已加载插件（含 patch 层），用 **设置 → 插件 → 插件列表**（只读 Loader 清单）。

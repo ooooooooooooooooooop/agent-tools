@@ -1,25 +1,34 @@
 {
   "dsh_home_src": "C:\\Users\\yexue\\.dsh",
   "digests": {
-    ".agent-presets/cc/agent.cordis.yml": "75e161b4ee67b7ffccffa9c0e9c794db2c2223d65c4ece62904e50c445d4681e",
-    ".agent-presets/cc/preset.yml": "84a9accf72e27e9ae7d351a403b88355841f784aaaab9b931b3e1e03598ba48a",
     "AGENTS.md": "89946c3caa6696db78cd2205b76685ab54d9b7622813b12b913bba8f5969e500",
-    "patches/README.md": "c420d36907751424d941b3ecab0c624cb6eca0dda8cc4c0e9c0aca6549ca94f1",
-    "profiles/web/cordis.patch.yml": "f6281d92ff9951d54bcc96f5b66e1203ffed521a2e98875b766b8f6a35230b15",
+    "profiles/web/cordis.patch.yml": "8c180f9070447745b1ece43c3655b1142e648bdb78b054a679018c577f1a5dd0",
     "profiles/web/cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
     "profiles/web/package.json": "20706dd9c94cab267386dbf8861cb89caad5466c23ef6d23ea35168dfdb53c3c",
+    "profiles/web/pnpm-lock.yaml": "30d5f571364d75b25cd82b59301769a109e9d9d236f51df670eb5efbe6023555",
+    "profiles/web/pnpm-workspace.yaml": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba",
+    "profiles/web/.dsh-market/state.json": "ddfaa6d183263701072d5de40be0abe00e7d9abc68e70081782cd08f4a5bb8f1",
+    "profiles/web/plugins/compaction-summarization-fallback.mjs": "7d5478a079fb343466dcc00f5c55fddeda17ef63559cbde9aa76d06e9cf7e834",
     "profiles/web/plugins/dsh-subagent-context-summary.js": "0f45aa4b8327adc0f0eba70c6ec3a7a33661e9abd793dc3d7bc3bc3bf87d39d6",
     "profiles/web/plugins/model-persona.js": "e88be2bc3d303a9e78f2efb560583623bffec0d0f6aaea9f35f3d88fa4fb2fd1",
+    "profiles/web/plugins/session-supervisor.mjs": "2315e524a2ca4de14823c87c04aca27605f485515b10c09cc367344cea05e760",
+    "profiles/web/plugins/session-surface-repair.mjs": "6f138983cf2cd7e5b8ae073b814b447383fb731af822679c7caadba8d64f16c4",
     "profiles/web/plugins/subagent-prep-exec-gate.mjs": "ba343c95dcd6ffdf95afb8664adcc60f9fc789176b9dd552caa834fef8ae7635",
     "profiles/web/plugins/subagent-splice-summarizer-v1.mjs": "082d70487c9dfed603df9fee5a5aa08ea65960262dc01e674b20718e02d8e946",
     "profiles/web/plugins/subagent-usage-observer-v1.mjs": "51df6e46ed47314ea756f00525863cffd64eb762a3e5c4fdc3411f4761b64fd6",
-    "profiles/web/pnpm-workspace.yaml": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba"
+    "profiles/web/plugins/web-search-adapter.js": "701dd4266789a51128d18387c3df2b00e79352d6bff2a49ae7c32c5216e5fae0",
+    ".agent-presets/cc/agent.cordis.yml": "75e161b4ee67b7ffccffa9c0e9c794db2c2223d65c4ece62904e50c445d4681e",
+    ".agent-presets/cc/preset.yml": "84a9accf72e27e9ae7d351a403b88355841f784aaaab9b931b3e1e03598ba48a",
+    "patches/README.md": "c420d36907751424d941b3ecab0c624cb6eca0dda8cc4c0e9c0aca6549ca94f1"
   },
   "templates": {
     "files": {
       "profiles/web/cordis.patch.yml": {
-        "{{DESKTOP}}": {
-          "export_value": "C:\\Users\\admin\\Desktop"
+        "{{DSH_HOME}}": {
+          "export_value": "C:\\Users\\yexue\\.dsh"
+        },
+        "{{HOME}}": {
+          "export_value": "C:\\Users\\yexue"
         }
       }
     }
