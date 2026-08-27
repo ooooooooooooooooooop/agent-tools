@@ -57,6 +57,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_portable(path: Path) -> str:
+    """SHA-256 over newline-normalized bytes (CRLF/CR -> LF).
+
+    Used for the git-transported dsh-config archive, whose checkout line
+    endings depend on each machine's autocrlf; raw hashing false-diffs there.
+    """
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
 def load_manifest() -> Dict[str, Any]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8-sig"))
     if not isinstance(manifest, dict):
@@ -187,7 +197,7 @@ def check_dsh_config_archive(archive_dir: Path) -> Dict[str, Any] | None:
             missing.append(rel)
         elif rel in templated:
             same.append(rel)  # templated: presence only
-        elif sha256(dst) != digest:
+        elif sha256_portable(dst) != digest:
             different.append(rel)
         else:
             same.append(rel)

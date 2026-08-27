@@ -2,12 +2,18 @@
   "name": "dsh-profile-web",
   "private": true,
   "type": "module",
-  "dependencies": {},
+  "dependencies": {
+    "@research-lab/dsh-adapter": "file:C:/Desktop/research-lab/hosts/dsh",
+    "dsh-remote-web-gateway": "^0.2.1",
+    "dshmarket": "^1.29.2"
+  },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app"
+        "@deepseek-ai/dsh-web-app",
+        "dsh-remote-web-gateway",
+        "dshmarket"
       ]
     }
   }
