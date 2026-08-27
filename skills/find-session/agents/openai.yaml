@@ -1,0 +1,4 @@
+interface:
+  display_name: "快速定位 DSH 会话"
+  short_description: "按对话标题/正文关键词定位 DSH 历史会话并读取内容与 token 统计。"
+  default_prompt: "使用 $find-session 按对话名查找历史会话并查看其内容或 token 消耗。"
