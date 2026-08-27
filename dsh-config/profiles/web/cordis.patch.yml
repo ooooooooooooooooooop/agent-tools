@@ -7,7 +7,7 @@
 # in isContextWindowExceededError, and Claude Code baseline retry defaults), so
 # the user plugins were redundant. Plugin files deleted from plugins/ dir.
 
-# MCP: agent-switchboard (local cross-agent broker from C:\Desktop\skills\mcp).
+# MCP: agent-switchboard (local cross-agent broker from {{DESKTOP}}\skills\mcp).
 # Host-plane row: registers tools as mcp__agent-switchboard__* for every session.
 # Reload marker: 2026-08-19 — force HMR respawn onto merged v1.0.33 code.
 - insert:
@@ -18,8 +18,8 @@
       serverName: agent-switchboard
       command: python
       args:
-        - 'C:\Desktop\skills\mcp\agent-switchboard\agent_broker_mcp.py'
-      cwd: 'C:\Desktop\skills\mcp\agent-switchboard'
+        - '{{DESKTOP}}\skills\mcp\agent-switchboard\agent_broker_mcp.py'
+      cwd: '{{DESKTOP}}\skills\mcp\agent-switchboard'
       env:
         PYTHONUTF8: '1'
         PYTHONIOENCODING: 'utf-8'

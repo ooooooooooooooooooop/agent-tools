@@ -1,18 +1,28 @@
 {
-  "dsh_home_src": "C:\\Users\\yexue\\.dsh",
+  "dsh_home_src": "C:\\Users\\admin\\.dsh",
   "digests": {
+    "AGENTS.md": "d39d1c7c7827bce53589cddea113c67b2aa33d0ef280587ae1707851e7eaf833",
+    "settings.yaml": "1b523953fa1e97a87fc5435103bd1d158ad7ad0e62cbfe37904732197421414f",
+    "profiles/web/cordis.patch.yml": "9da71a46d352958473243cf0e4d5e8952c4af2656872b0cec5b0a0e922ec5a95",
+    "profiles/web/cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+    "profiles/web/package.json": "73467ee30981e7e8358bbc19d203f16eeb68429f8f6f424ad152de8bdddb1f0b",
+    "profiles/web/pnpm-workspace.yaml": "64f2de763c185e15432d8983e88264d5c7aa964ab82d9bd87410aa6df9667d4c",
+    "profiles/web/plugins/dsh-subagent-context-summary.js": "11fe61cc66d13fa1462260e4b7be5f9693e2b2f9c766d92d757976163a4de88d",
+    "profiles/web/plugins/model-persona.js": "d12886efd2fe2103a6d217c245fce4983f6e78e27b2f3754974c21099f64efbb",
+    "profiles/web/plugins/subagent-prep-exec-gate.mjs": "bcb53421881b9fe4c43d61f984ddb4e4c615f09c92a22ce3678a30e26b40a579",
+    "profiles/web/plugins/subagent-splice-summarizer-v1.mjs": "082d70487c9dfed603df9fee5a5aa08ea65960262dc01e674b20718e02d8e946",
+    "profiles/web/plugins/subagent-usage-observer-v1.mjs": "51df6e46ed47314ea756f00525863cffd64eb762a3e5c4fdc3411f4761b64fd6",
     ".agent-presets/cc/agent.cordis.yml": "5b371c814307ca1f153d66719cde272d17fd54c0f6c7d31aae925597a68b68e0",
     ".agent-presets/cc/preset.yml": "2fab126d75e5bee0263f982fc9c3dc197c25a3d4d9e4fc09aa0af0cf0f2cea2f",
-    "AGENTS.md": "d39d1c7c7827bce53589cddea113c67b2aa33d0ef280587ae1707851e7eaf833",
-    "patches/README.md": "f6b2a9f522f6b9602fbcd9a5179efafeda0e0e722377b9448cc0425a9ef6fcfa",
-    "profiles/web/cordis.patch.yml": "edaa74f680765920718b598a956d15735b8260190bb7be1cdb481db593727003",
-    "profiles/web/cordis.yml": "f6b75725842b10dd559600fbcd6d69b7019c24cf0ea3ca0e24ebcd2600cbbc49",
-    "profiles/web/package.json": "73467ee30981e7e8358bbc19d203f16eeb68429f8f6f424ad152de8bdddb1f0b",
-    "profiles/web/plugins/model-persona.js": "d12886efd2fe2103a6d217c245fce4983f6e78e27b2f3754974c21099f64efbb",
-    "profiles/web/plugins/subagent-prep-exec-gate.mjs": "bc50f4bcea25d813459afd2d683809e73dc465b37b93770cec7493bba9501ac4",
-    "profiles/web/plugins/subagent-splice-summarizer-v1.mjs": "782c1aa85f0697e24a04fe55f6ec707881b928472bed6694a4ce6415705ef5e4",
-    "profiles/web/plugins/subagent-usage-observer-v1.mjs": "1a1ad56a715c091dc52c0f38b62ee5dd8c8f38c606b4063fa47e8cf192fb6ada",
-    "profiles/web/pnpm-workspace.yaml": "64f2de763c185e15432d8983e88264d5c7aa964ab82d9bd87410aa6df9667d4c",
-    "settings.yaml": "25dc36761ab4e15fbe9f06c816a52d773ad18564cf22bd7907051a1e6eb853fa"
+    "patches/README.md": "f6b2a9f522f6b9602fbcd9a5179efafeda0e0e722377b9448cc0425a9ef6fcfa"
+  },
+  "templates": {
+    "files": {
+      "profiles/web/cordis.patch.yml": {
+        "{{DESKTOP}}": {
+          "export_value": "C:\\Users\\admin\\Desktop"
+        }
+      }
+    }
   }
 }

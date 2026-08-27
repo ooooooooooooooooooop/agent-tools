@@ -1,124 +1,204 @@
 ---
 name: publish-and-reuse
-description: 完整发布与跨设备复现的一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP。用于发布 Skill/脚本/插件/整个仓库、在新设备复现环境、跨设备增量更新，agent 自动加载即可执行，无需用户逐步教学。
-version: 1.0.0
+description: 完整环境生命周期一体化编排：一键上传环境（含 Skills、插件、MCP 与 DSH 配置整体打包上传 GitHub）、一键更新环境（从 GitHub 同步到 DSH）、一键四层体检对比差异与新设备环境复现。上传与更新前强制执行四层体检对比差异，agent 自动加载即可端到端闭环执行，无需用户逐步指导。
+version: 1.2.0
 triggers:
-  - "发布 Skill / 脚本 / 插件 / 整个仓库"
-  - "跑发布门禁 / 检查可发布性"
+  - "一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"
+  - "一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"
+  - "一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"
   - "在新设备复现 / 安装我的环境"
-  - "跨设备更新已安装的技能与配置"
+  - "发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"
 not_for:
-  - "同步 DSH 配置本体（~/.dsh 打包与恢复交给 dsh-config-sync）"
-  - "把技能栈同步到 ~/.dsh/skills（交给 environment-bootstrap / sync_skills.py）"
-  - "修改仓库内的具体包内容（本 skill 只做流程与门禁编排）"
+  - "修改具体业务代码或单个 Skill 的内部逻辑实现（交给 minimal-implementation）"
+  - "日常代码编写与单点 Bug 修复"
 depends_on:
   - skill-repository-maintainer
   - dsh-config-sync
   - environment-bootstrap
 ---
 
-# 发布与跨设备复现（publish-and-reuse）
+# 发布与跨设备环境复现（publish-and-reuse）
 
 ## 定位
 
-本 skill 把"发布 + 跨设备复现"固化为 agent 可自动加载的流程：**仓库是唯一事实源（SSOT）**，所有发布与同步都以仓库为源。用户只需要说"发布"或"在新设备装一下"，agent 按本 skill 直接执行，不需要逐步教学。权威细节见 `docs/publishing.md`、`docs/sync-ongoing.md`、`docs/local-experience-and-cross-device-reuse.md`。
+本 skill 是 **DSH 四层环境生命周期的最高层一体化编排器**。
+**仓库是唯一事实源（SSOT）**，所有上传、更新、体检和环境复现都以此为基准。
+核心原则：
+1. **一键上传**：一体化覆盖四层（Skills、DSH 插件、MCP、DSH 全局配置），自动脱敏打包并推送到 GitHub。
+2. **一键更新**：从 GitHub 拉取并全量应用到本机 DSH 运行时。
+3. **体检先行**：**上传与更新之前，强制先执行四层体检对比差异**，明确改动面并完成安全拦截。
 
-## 何时触发
+权威细节见 `docs/publishing.md`、`docs/sync-ongoing.md`、`docs/local-experience-and-cross-device-reuse.md`。
 
-- 用户要求"发布"仓库内容（Skill / 脚本 / DSH 插件 / 整个仓库）或"跑发布门禁"。
-- 用户要求"在新设备安装 / 复现环境"、"跨设备更新"。
-- 用户要求检查"什么能对外发布 / 发布到哪"。
+## 何时触发与适用边界
 
-## 一、完整发布（含门禁）
+### 适用场景（何时触发）
+- 用户要求"一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"。
+- 用户要求"一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"。
+- 用户要求"一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"。
+- 用户要求"在新设备复现 / 安装我的环境"。
+- 用户要求"发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"。
 
-**一键执行（推荐）**：
+### 负向边界（不适用）
+- 修改具体业务代码或单个 Skill 的逻辑实现（交给 `minimal-implementation`）。
+- 日常代码编写与单点 Bug 修复。
 
-```bash
-python scripts/publish_all.py
-```
+---
 
-它会按顺序聚合执行仓库发布门禁并汇总 PASS/FAIL，全部通过退出码为 0：
+## 四层事实源（SSOT）架构速查
 
-| 顺序 | 门禁 | 命令 |
-|---|---|---|
-| 1 | 结构 + 注册表一致 | `python scripts/validate_repo.py --strict` |
-| 2 | Skill 行为质量 | `python skills/skill-quality-gate/scripts/quality_report.py --root . --strict` |
-| 3 | 市场面（设备路径/许可证/文件齐全） | `python scripts/publish_check.py` |
-| 4 | 结构性 evals（SKILL.md/openai.yaml/examples） | `python scripts/run_skill_evals.py` |
-| 5 | 仓库回归 | `python -m unittest discover -s tests -v` |
-| 6 | MCP 回归 | `python -m unittest discover -s mcp/agent-switchboard/tests -v` |
-| 7 | 空白错误 | `git diff --check` |
+| 层级 | 包含内容 | 仓库事实源位置 | 运行时目标位置 | 作用与同步机制 |
+|---|---|---|---|---|
+| ① **Skill 包** | 16+ Skills 全部技能栈 | `skills/*` | `~/.dsh/skills/*` | `sync_skills.py` 增量同步与校验 |
+| ② **DSH 插件** | 5 个用户级 JS/MJS 守护插件 | `dsh/*` | `~/.dsh/profiles/web/plugins/*` | `sync_skills.py --plugins-destination ...` 自动同步 |
+| ③ **MCP 包** | `agent-switchboard` 跨模型网桥 | `mcp/*` | 仓库就地（git 路径） | git 就地运行，`cordis.patch.yml` 模板化引用与校验 |
+| ④ **DSH 全局配置** | `AGENTS.md` / `settings.yaml` / `profiles` / `presets` | `dsh-config/*` | `~/.dsh/*` | `sync_dsh_config.py` 模板化脱敏导出与渲染恢复 |
 
-任何一项 FAIL 时 `publish_all.py` 以退出码 1 结束并打印失败项与尾部日志，agent 应修复根因后重跑，**不要**把门禁失败当作交付物抛回用户。发布前确认 `git status` 仅含待发布变更（脚本对此输出提示，不判 FAIL）。
+---
 
-### 可发布性速查（决定"发到哪"）
+## 协议一：一键环境体检（Check / Audit — 独立体检）
 
-| 包 | 能否对外发布 | 渠道 | 前置动作 |
-|---|---|---|---|
-| `skills/*` | ✅ | Anthropic Skills 社区、自建注册表、GitHub | ① 去设备路径 ② 补英文文档 ③ skills.json 元数据齐全；`weekly-work-summary` 已裁定不发布（个人办公、设备绑定，`publish_check.py` 已豁免） |
-| `mcp/agent-switchboard` | ⛔ 禁止商用市场 | 仅自托管/非商用分发 | PolyForm Noncommercial 许可证 + windows-only + 依赖本机 codex/claude CLI 与本地 SQLite |
-| `dsh/*` | 🟡 无注册表 | git / 文档分发 | 用 `sync_dsh_config.py --template --with-optional` 生成可移植片段 |
-
-## 二、新设备首次安装（7 步）
+当用户要求"检查环境"、"环境体检"、"对比差异"时执行：
 
 ```powershell
-# 1. 装 DSH，配置 provider 与同名环境变量（BAI_API_KEY / CPA_API_KEY 等，密钥永不进包）
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+```
+
+**判定标准：**
+- Skills (18 项)：`missing=0 different=0`（PASS）
+- Plugins (5 项)：`missing=0 different=0`（PASS）
+- DSH Config：`missing=0 different=0`（`extra` 中的 `.credentials.yaml` / `.anonymous-user-id` 属预期本地隔离）
+- MCP：`issues=none`（引用的脚本与 cwd 路径均有效）
+
+---
+
+## 协议二：一键更新环境（Update / Pull — 体检 ➔ 拉取 ➔ 应用 ➔ 复核）
+
+当用户要求"从 GitHub 同步"、"更新环境"、"同步到 DSH"时，**严格按以下 4 步执行**：
+
+```powershell
+# 步骤 1【更新前体检】：对比当前本地与已安装的基线差异
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+
+# 步骤 2【拉取远程最新代码与配置归档】：
+git pull
+
+# 步骤 3【应用更新到 DSH 运行时】：
+# 3.1 同步 Skills 与 DSH 插件
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --profile full --apply
+
+# 3.2 恢复 DSH 全局配置（自动将 {{DESKTOP}}/{{DSH_HOME}} 等模板渲染为本机真实路径）
+python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
+  --display dsh-config --destination "$env:USERPROFILE\.dsh"
+
+# 步骤 4【更新后复核】：再次体检确认差异归零
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+```
+
+**生效提醒：** 若更新包含 DSH 插件或 `cordis.patch.yml`（MCP 配置），提示用户需重启 DSH 进程加载新代码。
+
+---
+
+## 协议三：一键上传环境（Upload — 导出 ➔ 门禁体检 ➔ 推送 GitHub）
+
+一键将 **Skills、DSH 插件、MCP 源码与 DSH 全局配置四层** 完整打包上传到 GitHub：
+
+```powershell
+# 步骤 1【配置脱敏导出】：将本机 ~/.dsh 导出至仓库 dsh-config 骨架（自动路径模板化占位符替换）
+python skills\dsh-config-sync\scripts\sync_dsh_config.py export `
+  --source "$env:USERPROFILE\.dsh" --display dsh-config --template --with-optional
+
+# 步骤 2【上传前体检与门禁】：执行全量四层体检与发布安全门禁（拦截密钥与格式错误）
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+
+python scripts\publish_all.py
+
+# 步骤 3【提交并推送到 GitHub】：
+git add -A
+git status --short
+git commit -m "chore: upload environment (skills, plugins, mcp, dsh-config)"
+git push
+```
+
+**安全拦截守则：**
+- 敏感扫描与发布门禁必须全绿；若检测到 `.credentials.yaml`、明文密码或语法错误，**严禁提交并立即阻断**。
+
+---
+
+## 协议四：新设备首次安装（Fresh Install / Restore）
+
+在全新机器上一键复现整套环境：
+
+```powershell
+# 1. 安装 DSH，配置 provider 与同名环境变量（BAI_API_KEY / CPA_API_KEY 等）
 # 2. 克隆仓库
-git clone <私有远程> C:\Users\<bob>\Desktop\skills
+git clone <私有远程仓库URL> C:\Users\<user>\Desktop\skills
+cd C:\Users\<user>\Desktop\skills
 
 # 3. 源端自检
 python scripts\validate_repo.py --strict
 python scripts\run_skill_evals.py
 
-# 4. 技能栈同步（先只读差异，再显式应用）
-python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --profile core --check
-python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --profile core --apply
+# 4. 一键安装 Skills + DSH 插件
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --profile full --apply
 
-# 5. 配置骨架：A 机 export（含 SHA-256 manifest + 敏感扫描）→ 拷贝归档到 B 机 → check → apply
-#    A 机：python skills\dsh-config-sync\scripts\sync_dsh_config.py export --source ~/.dsh --display dsh-archive --template --with-optional
-#    B 机：python skills\dsh-config-sync\scripts\sync_dsh_config.py check --display dsh-archive --destination ~/.dsh
-#         python skills\dsh-config-sync\scripts\sync_dsh_config.py apply --display dsh-archive --destination ~/.dsh
+# 5. 一键渲染恢复 DSH 全局配置
+python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
+  --display dsh-config --destination "$env:USERPROFILE\.dsh"
 
-# 6. 修补绝对路径耦合（见"已知缺口"）
-# 7. 冒烟验证：跑一个真实会话；python scripts\publish_check.py
+# 6. 一键全量体检验证
+python scripts\sync_skills.py `
+  --destination "$env:USERPROFILE\.dsh\skills" `
+  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
+  --dsh-config-dir dsh-config `
+  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
+  --profile full --check
+
+# 7. 启动 DSH，验证工具与配置生效
 ```
 
-> `sync_skills.py` 与 `sync_dsh_config.py` 都遵守 check → apply 两阶段：apply 会写目标端用户级目录，必须由用户显式授权后执行。
+---
 
-## 三、跨设备增量更新（日常优化后）
+## 安全纪律（铁律）
 
-```powershell
-# A 机：提交并推送
-git add . && git commit -m "feat: ..."
-git push
+1. **凭据绝对不出包**：`.credentials.yaml`、`sessions/`、`storages/` 永远排除在归档和仓库之外。
+2. **环境变量引用**：`settings.yaml` 只保留环境变量名引用（如 `apiKeyEnv: BAI_API_KEY`），换机配置同名系统环境变量即可。
+3. **设备路径模板化**：`{{DSH_HOME}}`、`{{DESKTOP}}`、`{{HOME}}` 必须在 export 时正确替换，apply 时自动渲染。
+4. **不破坏目标端无关文件**：所有 apply 仅做增量覆盖或更新，不清理未登记的目标端文件。
 
-# B 机：拉取 + 同步
-git pull
-python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --profile full --check
-python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --profile full --apply
-# 配置变更：重新 export → copy → check → apply（sync_dsh_config.py）
-```
-
-## 四、安全纪律（每次发布/同步必查）
-
-1. **凭据不出包**：`.credentials.yaml`、`sessions/`、`storages/` 强制排除，绝不进入发布集。
-2. **环境变量引用**：`settings.yaml` 只带 `apiKeyEnv` 名（如 `BAI_API_KEY`），目标设备设同名 env。
-3. **设备路径模板化**：`sync_dsh_config.py --template` 把设备路径渲染为 `{{DSH_HOME}}`/`{{DESKTOP}}`/`{{HOME}}` 占位符，恢复时渲染回目标设备值。
-4. **不删目标额外文件**：`sync_skills.py` 与 `sync_dsh_config.py` 只做增量，不删除目标端未登记文件。
-5. **SHA-256 校验**：export 记录 manifest，apply 后复核（模板化文件只验存在性）。
-
-## 五、已知缺口（复现前需修补）
-
-| 缺口 | 位置 | 修法 |
-|---|---|---|
-| 绝对路径耦合 | `profiles/web/cordis.patch.yml`、`weekly-work-summary`（`C:\Desktop\日报`/`共享`）、`agent.cordis.yml` | 参数化为 `$DSH_HOME`/`$HOME` 模板（参照 chezmoi 渲染） |
-| 文档数字滞后 | 仓库 AGENTS.md 写"9 个"实为 19 个；mcp.json 与 MCP README 版本号不一致 | ✅ 已修正（2026-08-26）：AGENTS.md 改为 19 个；README header 与 mcp.json/DISTRIBUTION.md 统一为 9d35157 / v1.0.32 / 2026.08.18.1 |
-| 运行态数据 | 会话审计基线（sessions/JSONL）各设备独立 | 不迁移；审计脚本设计为每设备重建基线 |
+---
 
 ## 输出契约
 
-每次执行后报告：模式（publish / install / update）、逐项执行命令与退出码、PASS/FAIL 汇总、失败项与修复指引、剩余风险（如绝对路径、未发布项）。只有门禁全部 PASS 才报"发布/同步完成"。
-
-## 验证
-
-发布流程以 `python scripts/publish_all.py` 退出码 0 + 全项 PASS 为完成标准；设备复现以目标端 `sync_skills.py --check` / `sync_dsh_config.py check` 差异归零 + 冒烟会话可用为完成标准。
+每次执行后报告：
+- **操作模式**：Check / Update (Pull) / Upload (Push) / Install
+- **体检前后差异对比摘要**
+- **逐项执行命令与退出码**
+- **四层状态矩阵汇总（Skills / Plugins / MCP / DSH Config）**
+- **生效提示（是否需要重启 DSH）**
