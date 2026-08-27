@@ -29,7 +29,8 @@
       "systematic-optimization",
       "evolution-proposal",
       "publish-and-reuse",
-      "research-lab"
+      "research-lab",
+      "find-session"
     ]
   },
   "skills": [
@@ -106,6 +107,19 @@
       "category": "workflow",
       "priority": "P0",
       "tier": "core",
+      "depends_on": []
+    },
+    {
+      "name": "find-session",
+      "path": "./skills/find-session",
+      "version": "1.0.0",
+      "description": "按对话标题或正文关键词快速定位 DSH 历史会话并读取内容/token 统计（基于 scripts/find_session.py）",
+      "lang": [
+        "zh"
+      ],
+      "category": "maintenance",
+      "priority": "P1",
+      "tier": "optional",
       "depends_on": []
     },
     {

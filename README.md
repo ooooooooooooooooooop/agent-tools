@@ -41,6 +41,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [environment-bootstrap](./skills/environment-bootstrap) | 恢复 Codex Skill 环境并校验文件哈希 | 核心 |
 | [skill-quality-gate](./skills/skill-quality-gate) | 评估 Skill 的触发边界、输出契约与回归质量 | 核心 |
 | [execution-discipline](./skills/execution-discipline) | 在长程会话中强制五条执行纪律：零轮询、门禁自修、窄探针、委派探查与进度回报 | 核心 |
+| [find-session](./skills/find-session) | 按对话标题或正文关键词快速定位 DSH 历史会话并读取内容/token 统计 | 可选 |
 | [subagent-execution-governance](./skills/subagent-execution-governance) | 子代理契约型治理：探查/实现分离、契约快照含负空间、三级有界读取、行动门槛与结构化 BLOCKED，附会话纪律体检脚本 | 条件 |
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
 | [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
