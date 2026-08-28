@@ -1,4 +1,4 @@
-# BOOTSTRAP — Personal AI 自主配置种子
+﻿# BOOTSTRAP — Personal AI 自主配置种子
 
 本文件是这台电脑 Personal AI 生命周期的**唯一入口**。
 用户只需要对这台电脑上的 Agent 说一句：
@@ -88,6 +88,17 @@ secrets              <状态>
 Result: PASS
 ```
 
+
+## 4.1 Harness compatibility overlay（自动恢复）
+
+本机 DSH 若命中受影响版本（DSH 0.1.1-rc.2 / @deepseek-ai/dsh-compaction-basic 0.1.1-rc.2），在 §4 收尾前自主运行：
+
+    powershell -File <REPO>/dsh/compaction-convergence/test/guard-convergence.ps1
+
+- 输出 VERIFY / APPLY / NOT_REQUIRED 即 PASS；APPLY 后重跑一次确认 VERIFY。
+- 输出 REVIEW 时停止并进入 §5（无法证明兼容，不盲目应用旧 overlay，等待人工/上游判定）。
+- 运行后若已安装或恢复，重启 DSH GUI 进程再收尾。
+- 该 overlay 幂等、可回滚，详见 <REPO>/dsh/compaction-convergence/README.md。
 ## 5. 只有这些情况才报告用户
 
 其余一切问题（含拉取、合并、安装、refresh、重跑）必须自主解决，禁止抛回用户、禁止把门禁输出当交付物。

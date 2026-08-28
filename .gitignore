@@ -45,3 +45,8 @@ docs/cli-adapter-*.md
 
 # 本地运行态（flow 测试产物）
 .workspace_local/
+
+# DSH compaction-convergence overlay — device-local artifacts (rebuilt locally)
+dsh/compaction-convergence/.dsh-convergence-backup/
+dsh/compaction-convergence/test/.replay/
+dsh/compaction-convergence/test/.last-deploy-marker.json
