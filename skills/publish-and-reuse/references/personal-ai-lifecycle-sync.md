@@ -133,7 +133,7 @@ Active discovery（§14）：goals.md `## active` + sync/this-device.yaml repos 
 - Generated Harness config 不是跨设备 canonical：`canonical changed → aic discover → device inventory → render → diff → (apply) → diff`；禁止 Device A settings 直接覆盖 Device B
 - 永不同步：executable absolute path / USERPROFILE / HOME / Desktop / GPU / WSL / Docker / 本地推理 runtime / 端口 / gateway 进程路径 / device inventory / 本地已装 Harness / 本地备份盘——每设备 `aic discover` 重新生成
 - 不同步派生态：Memory FTS/index、vector cache、projcache、node_modules、npx cache、generated config cache——本地 rebuild
-- 当前 aic 未实现 `apply`：drift 只报告为 REVIEW，不静默改 live 配置
+- `aic apply <target>`（Runtime Closure 已实现）：前置 validate→discover→render→diff→ownership classify；只写 adapter 声明的 GENERATED 字段（DSH settings 限 `llm-pi-ai`/`agent-default-model` 段；cordis 走外科手术式单值改写，`!!js` opaque 不碰）；snapshot + atomic write + post-diff（post 仍有 generated drift → 自动恢复 before snapshot，`FAIL_ROLLED_BACK`）；OVERLAY/UNKNOWN/SECRET/未登记 opaque → `REVIEW_REQUIRED` 不写；secret/managed-block 缺失只警告不阻塞无关 generated；未安装 Harness = `OPTIONAL_NOT_INSTALLED`
 
 ## 9. Raw History 与 Secrets（§18/§19）
 
@@ -146,10 +146,12 @@ Active discovery（§14）：goals.md `## active` + sync/this-device.yaml repos 
 ```text
 Preflight → Detect repositories/Harnesses → aic discover → Fetch canonical remotes
 → Classify each source → Determine safe direction → safe PULL → safe Memory merge
-→ safe PUSH →  unsafe conflicts 停下报告 → Rebuild affected derived
-→ Refresh only affected installed Harness runtime → Validate → Post-sync diff
-→ Write machine-local sync checkpoint → Human-facing summary
+→ safe PUSH →  unsafe conflicts 停下报告 → Determine affected targets（依赖映射）
+→ Render affected → Apply safe generated drift（aic apply）→ Post-apply diff
+→ Runtime smoke → Rebuild affected derived → Sync checkpoint → Human-facing summary
 ```
+
+只有真正受 canonical change 影响的 Harness 才 apply；memory-only 变化绝不触发 Harness apply；skills/* 变化只触发 Skill sync。
 
 顺序纪律（§21）：先 fetch all → classify all → build action plan → execute safe actions；禁止先 push 再发现 remote 有变化。
 

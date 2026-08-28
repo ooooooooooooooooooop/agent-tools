@@ -323,8 +323,61 @@ def check_secrets() -> dict:
 
 
 # ------------------------------------------------------------------ runtime
-def runtime_status(apply_refresh: bool = False) -> dict:
-    """aic validate + 已安装 harness diff。aic 无 apply（未实现），drift → REVIEW。"""
+# §24 依赖映射：canonical 变化 → 受影响 Harness target（简单代码映射，非 graph db）
+TARGET_DEPENDENCIES = {
+    "dsh": ["registry/providers.yaml", "registry/routing-policy.yaml",
+            "registry/harnesses/dsh"],
+    "codex": ["registry/capabilities.yaml", "registry/harnesses/codex.yaml",
+              "registry/models.yaml"],
+    "claude": ["registry/harnesses/claude.yaml"],
+    "gemini": ["registry/capabilities.yaml", "registry/harnesses/gemini.yaml"],
+    "switchboard": ["registry/routing-policy.yaml", "registry/capabilities.yaml",
+                    "registry/harnesses/switchboard.yaml"],
+}
+# personal-ai-state 私有 gateways 是 claude/switchboard 的 generated 源
+PRIVATE_GATEWAYS_PATH = "registry/gateways.yaml"
+
+
+def affected_targets(agent_tools_changed: list[str],
+                     state_changed: list[str]) -> list[str]:
+    """只返回真正受 canonical change 影响的 Harness（§7/§8）。"""
+    targets = set()
+    for t, deps in TARGET_DEPENDENCIES.items():
+        if any(any(f.startswith(d) for d in deps) for f in agent_tools_changed):
+            targets.add(t)
+    if any(f == PRIVATE_GATEWAYS_PATH for f in state_changed):
+        targets |= {"claude", "switchboard"}
+    return sorted(targets)
+
+
+def runtime_refresh(affected: list[str], mode: str) -> dict:
+    """受影响 target：diff →（sync/restore 模式且 drift）→ apply → post-diff。
+
+    aic apply 自带 ownership 分类 + snapshot + rollback；REVIEW_REQUIRED 不阻塞
+    其他 target（§3/§5/§12）。
+    """
+    out = {"affected": affected, "applied": [], "review": [], "status": "NO DRIFT"}
+    for t in affected:
+        rc, _ = run([sys.executable, str(AIC), "diff", t])
+        if rc == 0:
+            continue
+        if mode not in ("sync", "restore"):
+            out["review"].append({t: "drift（check/pull/push 模式不自动 apply）"})
+            out["status"] = "DRIFT"
+            continue
+        arc, aout = run([sys.executable, str(AIC), "apply", t])
+        if arc == 0:
+            out["applied"].append(t)
+        else:
+            out["review"].append({t: (aout.splitlines() or ["apply failed"])[0]})
+            out["status"] = "DRIFT"
+    if out["applied"]:
+        out["status"] = "refreshed" if out["status"] == "NO DRIFT" else out["status"]
+    return out
+
+
+def runtime_status() -> dict:
+    """aic validate + 已安装 harness diff（只读）。"""
     rc, _ = run([sys.executable, str(AIC), "validate"])
     drifts = []
     for t in ("dsh", "codex", "claude", "gemini", "switchboard"):
@@ -568,9 +621,51 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     execute_plan(plan, classifications, state_repo, mode, results)
     results["actions"] = plan
 
-    # runtime refresh：只读 diff；drift → REVIEW（aic apply 未实现）
-    pulled = any(i.get("state") == "PULLED" for i in plan)
-    results["runtime"] = runtime_status() if (pulled or mode == "check") else {"status": "SKIPPED"}
+    # 受影响面判定（§7/§8/§23）：只对真正变化的 canonical 做增量 refresh
+    changed_at: list[str] = []
+    changed_state: list[str] = []
+    for item in plan:
+        if item.get("state") not in ("PULLED", "MERGED"):
+            continue
+        repo = Path(classifications[item["plane"]]["path"])
+        rc, head = git(repo, "rev-parse", "HEAD")
+        # pull/merge 前的 HEAD：reflog 取上一个值
+        rc2, prev = git(repo, "rev-parse", "HEAD@{1}")
+        if rc2 == 0:
+            files = changed_paths(repo, f"{prev.strip()}..{head.strip()}")
+        else:
+            files = []
+        if item["plane"] == "agent-tools":
+            changed_at = files
+        elif item["plane"] == "personal-ai-state":
+            changed_state = files
+    results["changed"] = {"agent-tools": changed_at, "personal-ai-state": changed_state}
+
+    pulled = bool(changed_at or changed_state)
+    memory_changed = any(f.startswith(MEMORY_PREFIX) for f in changed_state)
+    skills_changed = any(f.startswith("skills/") for f in changed_at)
+    plugins_changed = any(f.startswith("dsh/") for f in changed_at)
+
+    # skills/plugins 增量同步（§24：skills/*→skill sync；dsh/*→plugin refresh）
+    if mode in ("sync", "restore") and (skills_changed or plugins_changed):
+        cmd = [sys.executable, str(SYNC_SKILLS), "--destination",
+               str(Path.home() / ".dsh" / "skills")]
+        if plugins_changed:
+            cmd += ["--plugins-destination",
+                    str(Path.home() / ".dsh" / "profiles" / "web" / "plugins")]
+        rc, out = run([*cmd, "--apply"])
+        results["skill_sync"] = "PASS" if rc == 0 else f"FAIL: {out[-200:]}"
+    # memory-only change → 只做 derived 校验，绝不触发 Harness apply（§8）
+    if memory_changed:
+        results["memory_refresh"] = memory_merge_verify(state_repo) if state_repo else {}
+
+    affected = affected_targets(changed_at, changed_state)
+    if affected:
+        results["runtime"] = runtime_refresh(affected, mode)
+    elif pulled or mode == "check":
+        results["runtime"] = runtime_status()
+    else:
+        results["runtime"] = {"status": "SKIPPED"}
     results["secrets"] = check_secrets()
 
     # checkpoint（machine-local，可删，删除后可重新 discover）
@@ -603,6 +698,9 @@ def _overall(plan: list[dict], results: dict) -> str:
         return "REVIEW"
     if "REVIEW" in actions or "UNTOUCHED" in actions:
         # REVIEW = 需人工裁决；UNTOUCHED = 有 dirty tree 等未发布状态，如实报告
+        return "REVIEW"
+    if results.get("runtime", {}).get("status") == "DRIFT" \
+            or results.get("runtime", {}).get("review"):
         return "REVIEW"
     return "PASS"
 
@@ -675,7 +773,8 @@ def print_human(results: dict, detail: bool = False) -> None:
         print(f"  {name:22s} {st}" + (f" — {note}" if note and st != IN_SYNC else ""))
     rt = results.get("runtime", {})
     if rt.get("status"):
-        print(f"  {'runtime':22s} {rt['status']}")
+        extra = f"（applied: {','.join(rt['applied'])}）" if rt.get("applied") else ""
+        print(f"  {'runtime':22s} {rt['status']}{extra}")
     sec = results.get("secrets", {})
     if sec:
         print(f"  {'secrets':22s} {sec['status']}" +

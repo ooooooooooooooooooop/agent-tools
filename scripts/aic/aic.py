@@ -627,6 +627,400 @@ def cmd_propose_admissions(_args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- apply
+# Runtime Closure: apply <target> 把 canonical+adapter+device reality+overlay
+# 渲染出的 generated state 安全应用到实际 Harness。
+# 权限边界：只能写 adapter 契约声明为 GENERATED 的字段/文件段；
+# OVERLAY / MACHINE_LOCAL / RUNTIME_STATE / SECRET / 用户手写文件一律不碰。
+
+APPLY_BACKUPS = INV / "apply-backups"          # machine-local，gitignored
+DSH_GENERATED_SECTIONS = ("llm-pi-ai", "agent-default-model")  # settings.yaml 可写段
+
+
+def _apply_backup(target: str, path: Path) -> Path | None:
+    if not path.is_file():
+        return None
+    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = APPLY_BACKUPS / f"{target}-{ts}" / path.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, dest)
+    return dest
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".aic-tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _set_dotted(data: dict, dotted: str, value) -> None:
+    parts = dotted.split(".")
+    node = data
+    for part in parts[:-1]:
+        if not isinstance(node.get(part), dict):
+            node[part] = {}
+        node = node[part]
+    node[parts[-1]] = value
+
+
+def _toml_format_value(v) -> str:
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_format_value(x) for x in v) + "]"
+    raise ValueError(f"toml unsupported value: {v!r}")
+
+
+def _toml_set_top_scalar(text: str, key: str, value) -> str:
+    """外科手术式替换顶层标量行（保留注释/格式/其余字节）。"""
+    pat = re.compile(rf"^{re.escape(key)}\s*=.*$", re.M)
+    line = f"{key} = {_toml_format_value(value)}"
+    if pat.search(text):
+        return pat.sub(line, text, count=1)
+    return text.rstrip("\n") + "\n" + line + "\n"
+
+
+def _toml_append_table(text: str, table: str, spec: dict) -> str:
+    lines = [f"[{table}]"]
+    for k, v in spec.items():
+        lines.append(f"{k} = {_toml_format_value(v)}")
+    return text.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
+
+
+def _cordis_set_scalar(text: str, row_id: str, dotted: str, value) -> str | None:
+    """在 cordis yml 原文中外科手术式设置 row 内嵌套标量，保留 !!js 等全部其他字节。
+
+    返回新文本；定位失败/歧义返回 None（调用方转 REVIEW，不写部分状态）。
+    """
+    lines = text.splitlines(keepends=True)
+    row_idx = row_indent = None
+    for i, ln in enumerate(lines):
+        m = re.match(rf"^(\s*)-?\s*id:\s*{re.escape(row_id)}\s*$", ln)
+        if m:
+            if row_idx is not None:
+                return None                       # 歧义
+            row_idx, row_indent = i, len(m.group(1))
+    if row_idx is None:
+        return None
+    parts = dotted.split(".")
+    stack: list[tuple[int, str]] = []             # (indent, key) 路径栈
+    for i in range(row_idx + 1, len(lines)):
+        m = re.match(r"^(\s*)([^\s:#][^:]*):\s*(.*?)\s*$", ln := lines[i])
+        if not m:
+            if ln.strip() and not ln.strip().startswith("#") and \
+                    len(ln) - len(ln.lstrip()) <= (row_indent or 0):
+                break                             # 离开 row 块
+            continue
+        indent, key, val = len(m.group(1)), m.group(2).strip(), m.group(3)
+        if indent <= (row_indent or 0):
+            break
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        path = [k for _, k in stack] + [key]
+        if path == parts:
+            if val.startswith("!!"):
+                return None                       # opaque 字段绝不改写
+            newline = "\r\n" if ln.endswith("\r\n") else "\n"
+            lines[i] = f"{' ' * indent}{key}: {value}{newline}"
+            return "".join(lines)
+        stack.append((indent, key))
+    return None
+
+
+def _applyable_superset_values(fspec: dict):
+    """superset_keys apply 需要完整值：目前仅 capabilities.mcp_standard 可机械推导。"""
+    if fspec["source"] == "capabilities.mcp_standard":
+        return load_yaml(REG / "capabilities.yaml")["capabilities"]["mcp_standard"]
+    return None
+
+
+def _classify_drift(name: str, harness: dict, drift: list) -> tuple[dict, set, list, list]:
+    """把 diff rows 分类：writable（generated_fields）/ creatable（缺文件可新建）/
+    hard（非 generated → REVIEW）/ soft（check-mode：exists/marker/secret → 警告不阻塞）。
+
+    返回 (writable, creatable, hard, soft)。§5/§12：secret/instruction 缺失不阻塞
+    无关 generated config 的安全 apply。
+    """
+    writable: dict[str, dict] = {}
+    creatable: set[str] = set()
+    check_files: set[str] = set()
+    for target in harness.get("render_targets", []):
+        if target.get("check"):
+            check_files.add(target["file"])
+            continue
+        creatable.add(target["file"])
+        for f in target.get("generated_fields", []):
+            writable[f"{target['file']}::{f['path']}"] = {**f, "file": target["file"],
+                                                          "format": target.get("format")}
+    hard, soft = [], []
+    for r in drift:
+        key = f"{r['file']}::{r['field']}"
+        if key in writable or (r["field"] == "<file>" and r["file"] in creatable):
+            continue
+        if r["file"] in check_files or r["field"] == "<sync-group>":
+            soft.append(r)
+        else:
+            hard.append(r)
+    return writable, creatable, hard, soft
+
+
+def _apply_generic(name: str) -> tuple[int, list[str]]:
+    """通用 harness apply。返回 (exit_code, messages)。
+
+    exit: 0 OK/NO DRIFT, 1 REVIEW_REQUIRED, 3 FAIL_ROLLED_BACK, 4 OPTIONAL_NOT_INSTALLED
+    """
+    canonical = load_canonical()
+    harness = harness_contract(name)
+    pgw = load_private_gateways()
+    home = Path.home() / harness["home"]
+    if not home.is_dir():
+        print(f"APPLY {name}: OPTIONAL_NOT_INSTALLED（{harness['home']} 不存在，跳过）")
+        return 4, []
+    rows = diff_harness(name)
+    drift = [r for r in rows if not r["ok"]]
+    if not drift:
+        print(f"APPLY {name}: NO DRIFT")
+        return 0, []
+
+    writable, creatable, hard, soft = _classify_drift(name, harness, drift)
+    msgs: list[str] = []
+    for r in soft:
+        print(f"APPLY {name}: NOTE — 非 aic 所有权 drift 保留给 owner: "
+              f"{r['file']}::{r['field']}（不阻塞 generated apply）")
+    if hard:
+        for r in hard:
+            print(f"APPLY {name}: REVIEW_REQUIRED — 非 generated drift "
+                  f"file={r['file']} field={r['field']}（OVERLAY/UNKNOWN 不写）")
+        return 1, msgs
+    # 只处理 writable drift（soft 已报告、hard 已拦截）
+    by_file: dict[str, list] = {}
+    for r in drift:
+        if f"{r['file']}::{r['field']}" in writable or \
+                (r["field"] == "<file>" and r["file"] in creatable):
+            by_file.setdefault(r["file"], []).append(r)
+    if not by_file:
+        print(f"APPLY {name}: 无可写 generated drift（仅 owner-owned 余项）")
+        return 0, msgs
+    changed_files = []
+    for fname, fdrift in by_file.items():
+        path = home / fname
+        file_missing = any(r["field"] == "<file>" for r in fdrift)
+        # 文件缺失时补全该文件全部 generated 字段；否则只写 drift 字段
+        want = {f["path"]: f for f in harness["render_targets"]
+                if f.get("file") == fname for f in f.get("generated_fields", [])}
+        if not file_missing:
+            want = {r["field"]: writable[f"{fname}::{r['field']}"] for r in fdrift}
+        fmt = next(iter(want.values()), {}).get("format", "json") if want else "json"
+        text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+        new_text = text
+        if fmt == "json":
+            data = json.loads(text) if text.strip() else {}
+            for fpath, fspec in want.items():
+                expected = resolve_expected(fspec, canonical, harness, pgw)
+                mode = fspec.get("mode", "exact")
+                if mode in ("exact", "exact_subset_map"):
+                    if mode == "exact_subset_map" and fname.endswith("config.json"):
+                        cur = _dig(data, fpath)
+                        if not isinstance(cur, dict):
+                            cur = {}
+                        cur.update(expected)
+                        _set_dotted(data, fpath, cur)
+                    else:
+                        _set_dotted(data, fpath, expected)
+                elif mode == "superset_keys":
+                    vals = _applyable_superset_values(fspec)
+                    if vals is None:
+                        print(f"APPLY {name}: REVIEW_REQUIRED — superset 无机械推导值 "
+                              f"{fpath}")
+                        return 1, msgs
+                    cur = _dig(data, fpath)
+                    if not isinstance(cur, dict):
+                        cur = {}
+                    for k in expected:
+                        if k not in cur:
+                            cur[k] = vals[k]
+                    _set_dotted(data, fpath, cur)
+                else:
+                    print(f"APPLY {name}: REVIEW_REQUIRED — mode={mode} 不自动写")
+                    return 1, msgs
+            new_text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        elif fmt == "toml":
+            for fpath, fspec in want.items():
+                expected = resolve_expected(fspec, canonical, harness, pgw)
+                mode = fspec.get("mode", "exact")
+                if mode == "exact" and "." not in fpath:
+                    new_text = _toml_set_top_scalar(new_text, fpath, expected)
+                elif mode == "superset_keys":
+                    vals = _applyable_superset_values(fspec)
+                    if vals is None:
+                        print(f"APPLY {name}: REVIEW_REQUIRED — superset 无机械推导值")
+                        return 1, msgs
+                    import tomllib
+                    cur = (tomllib.loads(new_text).get(fpath, {})
+                           if new_text.strip() else {})
+                    for k in expected:
+                        if k not in cur:
+                            new_text = _toml_append_table(
+                                new_text, f"{fpath}.{k}", vals[k])
+                else:
+                    print(f"APPLY {name}: REVIEW_REQUIRED — toml 嵌套/mode={mode} 不自动写")
+                    return 1, msgs
+        backup = _apply_backup(name, path)
+        _atomic_write_text(path, new_text)
+        changed_files.append((fname, backup))
+        msgs.append(f"applied {fname}: {sorted(want)}")
+    # post-apply diff：writable 字段必须全修好（soft 余项允许存在）；否则回滚
+    bad = [r for r in diff_harness(name) if not r["ok"]]
+    _, _, hard_post, _soft_post = _classify_drift(name, harness, bad)
+    writable_left = [r for r in bad
+                     if f"{r['file']}::{r['field']}" in writable]
+    if writable_left or hard_post:
+        for fname, backup in changed_files:
+            if backup:
+                shutil.copy2(backup, home / fname)
+            else:
+                (home / fname).unlink(missing_ok=True)   # apply 新建的文件回滚即删除
+        print(f"APPLY {name}: FAIL_ROLLED_BACK — post-diff 仍有 drift "
+              f"{[r['field'] for r in writable_left + hard_post]}，before snapshot 已恢复")
+        return 3, msgs
+    print(f"APPLY {name}: OK ({sum(len(v) for v in by_file.values())} field(s), "
+          f"post-diff NO DRIFT)")
+    return 0, msgs
+
+
+def _dsh_structured_drift() -> dict:
+    """结构化 dsh drift：full-file / cordis field / opaque / missing 分类。"""
+    canonical = load_canonical()
+    overlay = adapter_overlay()
+    contract = adapter_contract()
+    out = {"full_file": [], "cordis": [], "cordis_missing": False,
+           "opaque_undeclared": [], "settings_missing": False}
+    for target in contract["render_targets"]:
+        actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
+        if not actual_path.is_file():
+            if target["mode"] == "full-file":
+                out["settings_missing"] = True
+            else:
+                out["cordis_missing"] = True
+            continue
+        if target["mode"] == "full-file":
+            actual = load_yaml(actual_path)
+            deep_diff(render_settings(canonical, overlay), actual, "", out["full_file"])
+        elif target["mode"] == "field-projection":
+            actual = load_cordis_yaml(actual_path)
+            for check in target.get("field_checks", []):
+                row = find_row(actual, check["row"])
+                act = get_nested(row, check["key"]) if row is not None else _MISSING
+                exp = resolve_value_from(canonical["policy"], check["value_from"])
+                if act != exp:
+                    out["cordis"].append((check, exp, act))
+            declared = {o["path"] for o in contract.get("opaque_paths", [])}
+            out["opaque_undeclared"] = sorted(set(collect_opaque_paths(actual)) - declared)
+    return out
+
+
+def _apply_dsh() -> tuple[int, list[str]]:
+    canonical = load_canonical()
+    overlay = adapter_overlay()
+    contract = adapter_contract()
+    d = _dsh_structured_drift()
+    if not any([d["full_file"], d["cordis"], d["cordis_missing"],
+                d["opaque_undeclared"], d["settings_missing"]]):
+        print("APPLY dsh: NO DRIFT")
+        return 0, []
+    msgs: list[str] = []
+    if d["opaque_undeclared"]:
+        # AIC_OPAQUE_PATH_VISIBILITY：silent growth 必须人工登记，绝不自动写
+        print(f"APPLY dsh: REVIEW_REQUIRED — 未登记 opaque path: {d['opaque_undeclared']}")
+        return 1, msgs
+    if d["cordis_missing"]:
+        print("APPLY dsh: NOTE — agent-preset-cc 缺失（preset 结构属 harness overlay，"
+              "不自动重建；不阻塞 settings 修复）")
+    written: list[tuple[Path, Path | None]] = []
+    for target in contract["render_targets"]:
+        actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
+        if target["mode"] == "full-file" and (d["full_file"] or d["settings_missing"]):
+            if d["settings_missing"] and not dsh_home().is_dir():
+                print("APPLY dsh: OPTIONAL_NOT_INSTALLED")
+                return 4, msgs
+            bad = [f for f, _, _ in d["full_file"]
+                   if f.split(".")[0].split("[")[0] not in DSH_GENERATED_SECTIONS]
+            if bad:
+                print(f"APPLY dsh: REVIEW_REQUIRED — 非 generated 段 drift: {bad}")
+                return 1, msgs
+            backup = _apply_backup("dsh", actual_path)
+            _atomic_write_text(actual_path, yaml.safe_dump(
+                render_settings(canonical, overlay), allow_unicode=True, sort_keys=False))
+            written.append((actual_path, backup))
+            msgs.append(f"applied settings: {[f for f, _, _ in d['full_file']] or ['<file>']}")
+        elif target["mode"] == "field-projection" and d["cordis"]:
+            text = actual_path.read_text(encoding="utf-8-sig")
+            new_text = text
+            applied = []
+            for check, exp, _act in d["cordis"]:
+                new2 = _cordis_set_scalar(new_text, check["row"], check["key"], exp)
+                if new2 is None:
+                    print(f"APPLY dsh: REVIEW_REQUIRED — cordis 定位失败/歧义/opaque "
+                          f"{check['row']}.{check['key']}（不写部分状态）")
+                    return 1, msgs
+                new_text = new2
+                applied.append(f"{check['row']}.{check['key']}")
+            backup = _apply_backup("dsh", actual_path)
+            _atomic_write_text(actual_path, new_text)
+            written.append((actual_path, backup))
+            msgs.append(f"applied cordis: {applied}")
+    if not written:
+        print("APPLY dsh: 无可写 generated drift")
+        return 0, msgs
+    # post-apply：full_file/cordis 必须清零；cordis_missing 属 soft 余项允许存在
+    post = _dsh_structured_drift()
+    if post["full_file"] or post["cordis"] or post["opaque_undeclared"]:
+        for live, backup in written:
+            if backup:
+                shutil.copy2(backup, live)
+            else:
+                live.unlink(missing_ok=True)
+        print("APPLY dsh: FAIL_ROLLED_BACK — post-diff 仍有 drift，before snapshot 已恢复")
+        return 3, msgs
+    print("APPLY dsh: OK (post-diff generated NO DRIFT)")
+    return 0, msgs
+
+
+def cmd_apply(args) -> int:
+    """apply <target>：validate → discover（缺 inventory 时）→ render → diff →
+    ownership classify → 全部 generated 才写；snapshot + atomic + post-diff + rollback。"""
+    target = getattr(args, "target", None)
+    if not target:
+        print("usage: aic apply <dsh|codex|claude|gemini|switchboard>")
+        return 2
+    # Precondition 1: canonical valid
+    import io
+    buf = io.StringIO()
+    _stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        vrc = cmd_validate(args)
+    finally:
+        sys.stdout = _stdout
+    if vrc != 0:
+        print("APPLY: BLOCKED — canonical INVALID（先修复 registry）")
+        print(buf.getvalue())
+        return 2
+    # Precondition 2: device inventory（缺失才 discover，避免每次网络探测）
+    dev = INV / "devices" / f"{platform.node() or getpass.getuser()}.yaml"
+    if not dev.is_file():
+        cmd_discover(args)
+    if target == "dsh":
+        rc, _ = _apply_dsh()
+    else:
+        rc, _ = _apply_generic(target)
+    return rc if rc != 4 else 0     # OPTIONAL_NOT_INSTALLED 不算失败
+
+
 # ---------------------------------------------------------------- stubs (contract only)
 
 def cmd_not_implemented(args) -> int:
@@ -646,9 +1040,11 @@ def main() -> int:
     p_diff = sub.add_parser("diff")
     p_diff.add_argument("target", choices=["dsh", "codex", "claude", "gemini", "switchboard"])
     sub.add_parser("validate")
+    p_apply = sub.add_parser("apply")
+    p_apply.add_argument("target",
+                         choices=["dsh", "codex", "claude", "gemini", "switchboard"])
 
-    for name in ("apply", "bootstrap"):
-        sub.add_parser(name)
+    sub.add_parser("bootstrap")
     args = parser.parse_args()
 
     if args.command == "discover":
@@ -662,6 +1058,8 @@ def main() -> int:
         return cmd_diff(args)
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "apply":
+        return cmd_apply(args)
     return cmd_not_implemented(args)
 
 

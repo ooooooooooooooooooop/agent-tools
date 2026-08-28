@@ -63,7 +63,7 @@ python scripts\personal_ai_sync.py sync --detail   # 下钻
 python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 ```
 
-内部顺序（防数据丢失）：fetch all → classify all（git ancestry，禁止 mtime/last-write-wins）→ action plan → 只执行确定安全动作 → 受影响 derived/runtime 增量 refresh → validate → 写 machine-local checkpoint（`~/.dsh/.personal-ai-sync/status.json`）→ 短输出。
+内部顺序（防数据丢失）：fetch all → classify all（git ancestry，禁止 mtime/last-write-wins）→ action plan → 只执行确定安全动作 → 受影响面判定 → 受影响 Harness `aic apply`（generated-only，snapshot+post-diff+rollback）→ 受影响 derived 增量 refresh → validate → 写 machine-local checkpoint（`~/.dsh/.personal-ai-sync/status.json`）→ 短输出。
 
 确定安全的自动动作（其余一律 REVIEW）：clean FF pull、验证通过且 privacy scan PASS 的 FF push、不同设备新增 record/revision 的 Memory 确定性合并（复用 MemoryProvider.import_bundle 契约）、派生索引 rebuild、runtime diff/refresh。
 
