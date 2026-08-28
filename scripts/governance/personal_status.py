@@ -8,12 +8,36 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 INBOX = Path.home() / ".dsh" / ".evolution-inbox" / "proposals"
+PERSONALIZATION_SCRIPT = (REPO / "skills" / "personal-ai-operations-review" /
+                          "scripts" / "personalization_status.py")
+KNOWN_EXTERNAL_BLOCKERS = [
+    "BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT",
+    "NOVEL_REPO_DURABILITY=BLOCKED_PRIVACY",
+]
+
+
+def classify_action(domains: dict[str, tuple[str, str]],
+                    known_blockers: list[str]) -> str:
+    """Overall action 分类。已知外部 blocker 单独存在时绝不报 ACTION REQUIRED。"""
+    pers = domains.get("Personalization", ("UNKNOWN", ""))[0]
+    if pers == "ACTION REQUIRED":
+        return "ACTION REQUIRED"          # 如 memory scope 泄漏等真实边界故障
+    hard = [s for k, (s, _) in domains.items()
+            if k in ("Infrastructure", "Durability", "Governance")]
+    if any(s in ("DEGRADED", "BLOCKED") for s in hard):
+        return "ACTION REQUIRED"
+    if pers == "DEGRADED" or domains.get("Proposals", ("HEALTHY",))[0] == "REVIEW":
+        return "REVIEW"
+    if known_blockers:
+        return "EXTERNAL BLOCKER"
+    return "NO ACTION"
 
 
 def run(cmd: list[str]) -> tuple[int, str]:
@@ -30,6 +54,10 @@ def py(script: str, *args: str) -> tuple[int, str]:
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
     # Infrastructure: control plane valid + all harness diffs clean
     rc, _ = py("aic/aic.py", "validate")
     drifts = []
@@ -69,17 +97,42 @@ def main() -> int:
     prop_reason = (f"{len(open_props)} open (none high-severity)" if not high
                    else f"HIGH severity open: {high}")
 
+    # Personalization: 行为纠正监控（复用 calibration 产物；只读）
+    if PERSONALIZATION_SCRIPT.is_file():
+        rc3, out3 = run([sys.executable, str(PERSONALIZATION_SCRIPT)])
+        first = out3.splitlines()[0] if out3 else ""
+        m = re.match(r"Personalization:\s*(\w+(?:\s\w+)?)\s*—\s*(.*)", first)
+        if m:
+            pers, pers_reason = m.group(1), m.group(2)
+        else:
+            pers, pers_reason = ("HEALTHY" if rc3 == 0 else "UNKNOWN"), first
+    else:
+        pers, pers_reason = "UNKNOWN", "personalization_status.py 不存在"
+
     print("Personal AI Status")
     print(f"  [{infra:8s}] Infrastructure : {infra_reason}")
+    print(f"  [{pers:8s}] Personalization: {pers_reason}")
     print(f"  [{dur:8s}] Durability    : {dur_reason}")
     print(f"  [{gov:8s}] Governance    : {gov_reason}")
     print(f"  [{prop:8s}] Proposals     : {prop_reason}")
-    print("  [BLOCKED ] External      : BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT; "
-          "NOVEL_REPO_DURABILITY=BLOCKED_PRIVACY")
-    order = {"HEALTHY": 0, "UNKNOWN": 1, "DEGRADED": 2, "BLOCKED": 3}
-    worst = max([infra, dur, gov, prop, "BLOCKED"], key=lambda s: order[s])
-    print(f"\nOVERALL = {worst}")
-    return 0 if worst == "HEALTHY" else 1
+    print("  [BLOCKED ] External      : KNOWN EXTERNAL BLOCKER "
+          + "; ".join(KNOWN_EXTERNAL_BLOCKERS))
+
+    domains = {"Infrastructure": (infra, infra_reason),
+               "Personalization": (pers, pers_reason),
+               "Durability": (dur, dur_reason),
+               "Governance": (gov, gov_reason),
+               "Proposals": (prop, prop_reason)}
+    action = classify_action(domains, KNOWN_EXTERNAL_BLOCKERS)
+    order = {"HEALTHY": 0, "UNKNOWN": 1, "REVIEW": 1, "DEGRADED": 2,
+             "BLOCKED": 3, "ACTION REQUIRED": 3}
+    worst = max([s for s, _ in domains.values()], key=lambda s: order[s])
+    print(f"\nOVERALL = {worst} | ACTION = {action}")
+    if action == "EXTERNAL BLOCKER":
+        print("（仅已知外部 blocker，无新增异常；不重复建议解决，继续正常使用）")
+    elif action == "NO ACTION":
+        print("（无需修改，继续正常使用）")
+    return 0 if action in ("NO ACTION", "EXTERNAL BLOCKER") else 1
 
 
 if __name__ == "__main__":
