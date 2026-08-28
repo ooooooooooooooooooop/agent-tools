@@ -1,22 +1,13 @@
-# gateways.yaml — 本地网关清单（canonical；PHASE-2 过渡位置，终态归 personal-ai-state，见 FREEZE_NOTES）
-# 内容纪律：禁止 secret、禁止设备绝对路径（设备细节进 generated inventory）。
+# gateways.yaml — 本地网关 TEMPLATE/EXAMPLE（公开 schema 面 · 非 SSOT）
+# SSOT 说明：真实私人 gateway alias/mapping 的唯一 canonical 在 personal-ai-state
+# 私有仓库 registry/gateways.yaml（本机路径由运行时按 ~/personal-ai-state 解析）。
+# 本文件仅提供 schema + 示例值；任何 generated copy 不得被误认为 canonical。
 gateways:
-  cpa:
-    process: cli-proxy-api.exe
-    listen: "127.0.0.1:8317"
-    kind: openai-compat relay（EasyCLIProxyAPI 包装）
-    serves: "DSH provider 'cpa'、agent-switchboard cli_backends/providers"
-    alias_behavior: "无（透传模型名）"
-  cc-switch:
-    process: cc-switch.exe
-    listen: "127.0.0.1:15721"
-    kind: claude-code proxy / provider switcher
-    serves: "Claude Code（~/.claude/settings.json env 指向）"
-    alias_behavior: "显式 alias 映射（2026-08-28 由 ~/.claude/settings.json env 提取显式化，Migration #3 收口）"
-    alias_map:
-      claude-haiku-4-5: gpt-5.6-luna
-      claude-opus-4-8: gpt-5.6-luna
-      claude-sonnet-4-6: gpt-5.6-luna
-      claude-fable-5: gpt-5.6-sol
-      subagent-default: gpt-5.6-luna
-    note: "alias 使 Claude Code 显示名≠实际模型；trace 必须走四段身份链核对（model-identity-trace.schema.yaml）"
+  example-gateway:
+    process: example.exe
+    listen: "127.0.0.1:PORT"
+    kind: openai-compat relay | claude-code proxy | ...
+    serves: "哪些 harness/provider 经此网关"
+    alias_behavior: "无（透传） | 显式 alias 映射"
+    alias_map: {}   # 示例：{"<显示模型名>": "<实际模型名>"}
+    note: "alias 场景必须走 model-identity-trace.schema.yaml 四段身份链核对"

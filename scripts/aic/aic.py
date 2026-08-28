@@ -423,28 +423,30 @@ def cmd_not_implemented(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="aic", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("discover")
+    p_disc = sub.add_parser("discover")
+    p_disc.add_argument("--propose-admissions", action="store_true")
     p_render = sub.add_parser("render")
     p_render.add_argument("target", choices=["dsh"])
     p_render.add_argument("--out")
     p_diff = sub.add_parser("diff")
     p_diff.add_argument("target", choices=["dsh"])
     sub.add_parser("validate")
-    sub.add_parser("propose-admissions")
+
     for name in ("apply", "bootstrap"):
         sub.add_parser(name)
     args = parser.parse_args()
 
     if args.command == "discover":
-        return cmd_discover(args)
+        rc = cmd_discover(args)
+        if rc == 0 and getattr(args, "propose_admissions", False):
+            return cmd_propose_admissions(args)
+        return rc
     if args.command == "render":
         return cmd_render(args)
     if args.command == "diff":
         return cmd_diff(args)
     if args.command == "validate":
         return cmd_validate(args)
-    if args.command == "propose-admissions":
-        return cmd_propose_admissions(args)
     return cmd_not_implemented(args)
 
 

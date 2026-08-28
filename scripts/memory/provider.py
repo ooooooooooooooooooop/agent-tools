@@ -20,7 +20,23 @@ from pathlib import Path
 
 import yaml
 
-RETENTION_PRIOR = {"keep": 1.0, "review": 0.6, "disposable": 0.2}
+def load_policy(policy_path=None):
+    """Load retrieval policy config (registry/retrieval-policy.yaml); falls back to built-in defaults."""
+    default = {"retention_prior": {"keep": 1.0, "review": 0.6, "disposable": 0.2},
+               "weights": {"retention_prior": 0.4, "recency": 0.2, "relevance": 0.4}}
+    candidates = [Path(policy_path)] if policy_path else [
+        Path(__file__).resolve().parents[2] / "registry" / "retrieval-policy.yaml"]
+    for c in candidates:
+        if c.is_file():
+            data = yaml.safe_load(c.read_text(encoding="utf-8-sig")) or {}
+            r = data.get("retrieval", {}).get("derived_score", {})
+            if r.get("retention_prior"):
+                default["retention_prior"] = r["retention_prior"]
+            if r.get("weights"):
+                default["weights"] = r["weights"]
+            return default
+    return default
+
 CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 FORGETTABLE_HARD = "sensitive"
 
@@ -38,28 +54,31 @@ def _load(path: Path) -> dict:
 
 
 class FileMemoryProvider:
-    def __init__(self, root: str | Path, device_id: str = "unknown"):
+    def __init__(self, root: str | Path, device_id: str = "unknown",
+                 policy_path: str | Path | None = None):
         self.root = Path(root)
         self.records = self.root / "memory" / "records"
         self.records.mkdir(parents=True, exist_ok=True)
         self.device_id = device_id
+        self._policy = load_policy(policy_path)
 
     # ------------------------------------------------------------ write path
     def write(self, *, scope: str, type: str, content: str, provenance: dict,
               confidence: str = "medium", retention: str = "review",
               access_policy: dict | None = None, supersedes: list | None = None,
-              by_agent: str = "unknown", by_model: str = "unknown") -> dict:
+              by_agent: str = "unknown", requested_model: str = "unknown") -> dict:
         fp = hashlib.sha256(content.encode("utf-8")).hexdigest()
         for meta in self._iter_meta():
             if meta.get("scope") == scope and self._fingerprint(meta["id"]) == fp:
-                self.update(meta["id"], content, by_agent=by_agent, by_model=by_model)
+                self.update(meta["id"], content, by_agent=by_agent)
                 return {"id": meta["id"], "deduped": True}
         mid = uuid.uuid4().hex[:12]
         rdir = self.records / mid
         (rdir / "revisions").mkdir(parents=True)
         record = {
             "id": mid, "scope": scope, "type": type,
-            "created": {"at": _now(), "by_agent": by_agent, "by_model": by_model,
+            "created": {"at": _now(), "by_agent": by_agent,
+                        "requested_model": requested_model,
                         "device_id": self.device_id},
             "provenance": provenance, "confidence": confidence, "retention": retention,
             "access_policy": access_policy or {"inject": "main-agent", "sensitivity": "normal"},
@@ -126,7 +145,7 @@ class FileMemoryProvider:
 
     def _derived_score(self, meta: dict, content: str, terms: set) -> float:
         """Query-time score: retention prior x recency decay x term overlap. Never persisted."""
-        prior = RETENTION_PRIOR.get(meta.get("retention"), 0.5)
+        prior = self._policy["retention_prior"].get(meta.get("retention"), 0.5)
         try:
             age_days = max((time.time() - time.mktime(time.strptime(
                 meta["created"]["at"][:19], "%Y-%m-%dT%H:%M:%S"))) / 86400, 0)
@@ -139,11 +158,11 @@ class FileMemoryProvider:
             relevance = hits / len(terms)
         else:
             relevance = 1.0
-        return prior * 0.4 + recency * 0.2 + relevance * 0.4
+        w = self._policy["weights"]
+        return prior * w["retention_prior"] + recency * w["recency"] + relevance * w["relevance"]
 
     # ------------------------------------------------------------ lifecycle
-    def update(self, mid: str, content: str, *, by_agent: str = "unknown",
-               by_model: str = "unknown") -> dict:
+    def update(self, mid: str, content: str, *, by_agent: str = "unknown") -> dict:
         rdir = self.records / mid
         if not rdir.is_dir():
             raise KeyError(mid)
@@ -219,6 +238,8 @@ class FileMemoryProvider:
                 added += 1
                 continue
             have = {r["rev"] for r in self._revisions(mid)}
+            incoming = {r["rev"] for r in item["revisions"]}
+            divergent = bool(have - incoming) and bool(incoming - have)
             for rev in item["revisions"]:
                 if rev["rev"] not in have:
                     (rdir / "revisions" / f"{rev['rev']}.yaml").write_text(
@@ -231,9 +252,16 @@ class FileMemoryProvider:
                 winner = max([local_state, remote_state], key=key)
                 winner = dict(winner)
                 if local_state.get("lifecycle") != remote_state.get("lifecycle"):
-                    winner["conflict"] = True
+                    winner["conflict"] = "lifecycle-divergence"
                     conflicts += 1
                 (rdir / "state.yaml").write_text(_dump(winner), encoding="utf-8")
+            elif divergent:
+                # concurrent immutable revisions from different devices: keep ALL
+                # revisions (never silently overwrite); flag conflict; resolution
+                # requires an explicit later supersede, not auto text merge.
+                st = dict(local_state); st["conflict"] = "concurrent-revisions"
+                (rdir / "state.yaml").write_text(_dump(st), encoding="utf-8")
+                conflicts += 1
         return {"added": added, "merged_revisions": merged, "conflicts": conflicts}
 
     # ------------------------------------------------------------ internals

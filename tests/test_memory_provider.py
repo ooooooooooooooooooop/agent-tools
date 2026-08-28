@@ -104,5 +104,32 @@ class TestContextBuilder(unittest.TestCase):
             self.assertIn("source", m["provenance"])
 
 
-if __name__ == "__main__":
+
+class TestConcurrentDevices(unittest.TestCase):
+    """Device A / Device B produce independent immutable revisions of the same record."""
+
+    def test_concurrent_revisions_conflict_then_supersede(self):
+        dirA = Path(tempfile.mkdtemp())
+        dirB = Path(tempfile.mkdtemp())
+        a = FileMemoryProvider(dirA, device_id="dev-a")
+        b = FileMemoryProvider(dirB, device_id="dev-b")
+        r = a.write(scope="project:x", type="semantic", content="base fact", provenance=PROV)
+        b.import_bundle(a.export())
+        # concurrent independent updates, no sync between them
+        a.update(r["id"], "base fact + A detail", by_agent="agent-a")
+        b.update(r["id"], "base fact + B detail", by_agent="agent-b")
+        res = b.import_bundle(a.export())
+        revs = list((dirB / "memory" / "records" / r["id"] / "revisions").glob("*.yaml"))
+        self.assertEqual(len(revs), 3)  # base + A + B all preserved, no silent overwrite
+        self.assertEqual(res["conflicts"], 1)
+        self.assertEqual(b._state(r["id"]).get("conflict"), "concurrent-revisions")
+        # conflict is NOT auto-resolved; only explicit supersede clears it
+        res2 = b.import_bundle(a.export())
+        self.assertEqual(b._state(r["id"]).get("conflict"), "concurrent-revisions")
+        b.write(scope="project:x", type="semantic", content="merged fact (human resolved)",
+                provenance=PROV, supersedes=[r["id"]])
+        self.assertEqual(b._state(r["id"])["lifecycle"], "superseded")
+        self.assertNotIn("conflict", b._state(r["id"]))
+
+if __name__ == '__main__':
     unittest.main()
