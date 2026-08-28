@@ -19,6 +19,13 @@ sys.modules.pop("common", None)  # scripts/{governance,durability}/common.py nam
 sys.path.insert(0, str(REPO / "scripts" / "governance"))
 sys.path.insert(0, str(REPO / "scripts" / "aic"))
 
+def setUpModule():
+    sys.modules.pop("common", None)
+    gov_path = str(REPO / "scripts" / "governance")
+    while gov_path in sys.path:
+        sys.path.remove(gov_path)
+    sys.path.insert(0, gov_path)
+
 import aic  # noqa: E402
 import memory_gov  # noqa: E402
 import routing_gov  # noqa: E402
@@ -69,6 +76,7 @@ class TestProviderUnreachable(unittest.TestCase):
     """5. unreachable provider classified (no exception escape)."""
 
     def test_probe_unreachable(self):
+        sys.modules.pop("common", None)
         sys.path.insert(0, str(REPO / "scripts" / "governance"))
         import model_health
         r = model_health.probe("fake", "127.0.0.1:1", timeout=1.0)
@@ -127,6 +135,8 @@ class TestDuplicateRules(unittest.TestCase):
     """9. duplicate rule detection fires on identical shingles."""
 
     def test_identical_blocks_detected(self):
+        sys.modules.pop("common", None)
+        sys.path.insert(0, str(REPO / "scripts" / "governance"))
         import dup_rules
         sets = {"a": dup_rules.shingles("rule one long enough\nrule two long enough\nrule three long enough"),
                 "b": dup_rules.shingles("rule one long enough\nrule two long enough\nrule three long enough")}
@@ -158,13 +168,19 @@ class TestRpoBreach(unittest.TestCase):
     """13. RPO breach classification."""
 
     def test_breach(self):
+        dur_path = str(REPO / "scripts" / "durability")
         sys.modules.pop("common", None)  # durability has its own common.py
-        sys.path.insert(0, str(REPO / "scripts" / "durability"))
-        import rpo_check
-        r = rpo_check.evaluate("sessions", [], 26, simulate_hours=100)
-        self.assertEqual(r["status"], "BREACHED")
-        sys.modules.pop("rpo_check", None)
-        sys.modules.pop("common", None)
+        sys.path.insert(0, dur_path)
+        try:
+            import rpo_check
+            r = rpo_check.evaluate("sessions", [], 26, simulate_hours=100)
+            self.assertEqual(r["status"], "BREACHED")
+        finally:
+            if dur_path in sys.path:
+                sys.path.remove(dur_path)
+            sys.modules.pop("rpo_check", None)
+            sys.modules.pop("common", None)
+            sys.path.insert(0, str(REPO / "scripts" / "governance"))
 
 
 class TestSecretFixture(unittest.TestCase):

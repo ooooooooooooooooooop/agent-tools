@@ -9,7 +9,8 @@
   --selection-events PATH  注入选择事件 JSONL：{"task_scope","injected_scopes","preference_count"}
                          （当前无真实 hook 数据源；缺省时相关指标标 UNKNOWN，不伪造精度）
   --baseline-report PATH 校准报告（Correction Rate 等基线的 SSOT，重新读取，不硬编码）
-输出：一行 `Personalization: <STATUS> — <一句原因>`；--detail 打印指标明细。
+  --json                 输出完整 JSON 结构
+输出：一行 `Personalization: <STATUS> [<EVIDENCE_STATE>] — <一句原因>`；--detail 打印指标明细。
 """
 from __future__ import annotations
 
@@ -78,7 +79,7 @@ def load_selection_events(path: str | None) -> list[dict] | None:
     if not p.is_file():
         return None
     with open(p, encoding="utf-8") as fh:
-        return [json.loads(l) for l in fh]
+        return [json.loads(line) for line in fh]
 
 
 def check_selection(events: list[dict] | None) -> dict:
@@ -127,10 +128,43 @@ def evaluate(messages_path: str | None, selection_events_path: str | None,
     sel = check_selection(load_selection_events(selection_events_path))
     baseline = read_baseline(baseline_report)
     mp = Path(messages_path) if messages_path else DEFAULT_MESSAGES
+
+    # 当无实时消息文件时，使用 fallback 机制（LAST_KNOWN 或 UNAVAILABLE）
     if not mp.is_file():
-        return {"status": "UNKNOWN",
-                "reason": f"缺少会话消息数据（先运行 extract_user_msgs.py 生成 {mp.name}）",
-                "selection": sel, "baseline": baseline}
+        if baseline.get("correction_rate") is not None:
+            cr_pct = baseline["correction_rate"] * 100
+            return {
+                "status": "UNKNOWN",
+                "evidence_state": "LAST_KNOWN",
+                "cause": "CHECK_DATA_UNAVAILABLE",
+                "last_known_correction_rate": baseline["correction_rate"],
+                "reason": f"current check unavailable; last verified Correction Rate {cr_pct:.1f}%",
+                "selection": sel,
+                "baseline": baseline,
+                "metrics": {
+                    "correction_rate": None,
+                    "last_known_correction_rate": baseline["correction_rate"],
+                    "scope_leakage": "UNKNOWN",
+                    "over_personalization": "UNKNOWN",
+                },
+            }
+        return {
+            "status": "UNKNOWN",
+            "evidence_state": "UNAVAILABLE",
+            "cause": "NO_EVIDENCE",
+            "last_known_correction_rate": None,
+            "reason": f"缺少会话消息数据（先运行 extract_user_msgs.py 生成 {mp.name}）且无历史校准报告",
+            "selection": sel,
+            "baseline": baseline,
+            "metrics": {
+                "correction_rate": None,
+                "last_known_correction_rate": None,
+                "scope_leakage": "UNKNOWN",
+                "over_personalization": "UNKNOWN",
+            },
+        }
+
+    # 存在当前实时消息文件，进入 CURRENT 评估
     r = behavior_metrics.compute(behavior_metrics.load_messages(mp))
     groups = correction_groups(r["corrections"])
     repeat_groups = {g for g, sess in groups.items() if len(sess) >= 2}
@@ -155,8 +189,9 @@ def evaluate(messages_path: str | None, selection_events_path: str | None,
     }
 
     # 状态判定：scope leakage 最优先；其次趋势恶化；再次 over-personalization。
+    cause = None
     if sel["scope_leakage"]:
-        status, reason = "ACTION REQUIRED", \
+        status, cause, reason = "ACTION REQUIRED", "SCOPE_LEAKAGE", \
             f"检测到 memory scope 泄漏 {len(sel['scope_leakage'])} 起（project 跨注入）"
     else:
         worsened = []
@@ -169,21 +204,31 @@ def evaluate(messages_path: str | None, selection_events_path: str | None,
             worsened.append(f"重复纠正会话 {r['sessions_with_repeat_correction']} > 基线 "
                             f"{baseline['repeat_sessions']}")
         if worsened:
-            status, reason = "DEGRADED", "；".join(worsened)
+            status, cause, reason = "DEGRADED", "CORRECTION_RATE_REGRESSION", "；".join(worsened)
         elif sel["over_personalization"]:
-            status, reason = "DEGRADED", \
+            status, cause, reason = "DEGRADED", "OVER_PERSONALIZATION", \
                 f"简单/普通任务被注入超额 preference {len(sel['over_personalization'])} 起"
         else:
             approx = [] if sel["status"] != "UNKNOWN" else ["Over-Personalization/Scope Leakage=UNKNOWN(无注入事件源)"]
             base_txt = (f"{baseline['correction_rate']:.1%}"
                         if baseline["correction_rate"] is not None else "UNKNOWN")
             status = "HEALTHY"
+            cause = None
             reason = (f"Correction Rate {r['correction_rate']:.1%}（基线 {base_txt}），"
                       f"重复纠正组 {len(repeat_groups)}；"
                       + ("；".join(approx) if approx else "无恶化趋势"))
-    return {"status": status, "reason": reason, "metrics": metrics,
-            "selection": sel, "baseline": baseline,
-            "classified": dict(Counter(classified))}
+
+    return {
+        "status": status,
+        "evidence_state": "CURRENT",
+        "cause": cause,
+        "reason": reason,
+        "last_known_correction_rate": None,
+        "metrics": metrics,
+        "selection": sel,
+        "baseline": baseline,
+        "classified": dict(Counter(classified)),
+    }
 
 
 def main() -> int:
@@ -196,12 +241,16 @@ def main() -> int:
     ap.add_argument("--selection-events")
     ap.add_argument("--baseline-report")
     ap.add_argument("--detail", action="store_true")
+    ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     r = evaluate(a.messages, a.selection_events, a.baseline_report)
-    print(f"Personalization: {r['status']} — {r['reason']}")
-    if a.detail:
-        print(json.dumps({k: v for k, v in r.items() if k != "selection" or True},
-                         ensure_ascii=False, indent=1, default=str))
+    if a.json:
+        print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
+    else:
+        print(f"Personalization: {r['status']} [{r['evidence_state']}] — {r['reason']}")
+        if a.detail:
+            print(json.dumps({k: v for k, v in r.items() if k != "selection" or True},
+                             ensure_ascii=False, indent=1, default=str))
     return {"HEALTHY": 0, "UNKNOWN": 0}.get(r["status"], 1)
 
 

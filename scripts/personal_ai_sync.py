@@ -399,9 +399,13 @@ def load_checkpoint() -> dict:
 
 
 def save_checkpoint(data: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    CHECKPOINT.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                          encoding="utf-8")
+    try:
+        CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+        CHECKPOINT.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                              encoding="utf-8")
+    except (PermissionError, OSError):
+        # Sandbox or environment limitation: checkpoint write is best-effort machine local state
+        pass
 
 
 # -------------------------------------------------------------------- planes

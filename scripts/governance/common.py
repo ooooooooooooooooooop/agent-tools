@@ -54,17 +54,23 @@ def now_iso() -> str:
 
 def gov_log(module: str, status: str, findings: list[dict] | int, extra: dict | None = None):
     """Structured governance run log (append-only jsonl, secret-scanned)."""
-    root = Path(load_yaml(STATE / "sync" / "this-device.yaml")["backup_root"])
-    led = root / "ledger"
-    led.mkdir(parents=True, exist_ok=True)
     row = {"ts": now_iso(), "module": module, "status": status,
            "findings": findings if isinstance(findings, int) else len(findings),
            **(extra or {})}
     blob = json.dumps(row, ensure_ascii=False)
     if SECRET_RE.search(blob):
         raise SystemExit("refuse to log secret-shaped material")
-    with (led / "governance.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write(blob + "\n")
+    try:
+        root = Path(load_yaml(STATE / "sync" / "this-device.yaml")["backup_root"])
+        led = root / "ledger"
+        led.mkdir(parents=True, exist_ok=True)
+        with (led / "governance.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(blob + "\n")
+    except (PermissionError, OSError) as exc:
+        # Ledger logging limitation (e.g. sandbox read-only outside workspace)
+        # Observability limitation, not a governance check failure
+        row["_logging_limitation"] = "OBSERVABILITY_EVIDENCE_LIMITATION"
+        row["_logging_error"] = str(exc)
     return row
 
 

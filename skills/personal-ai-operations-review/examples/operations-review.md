@@ -6,36 +6,37 @@
 
 期望行为：
 
-1. 先运行现有 human-facing status、governance、durability、aic validate/diff 与 proposal 检查，不修改任何 canonical。
-2. 如果总状态是 BLOCKED，但原因只是已知的 `BACKUP_KEY_CUSTODY`，不要把它误判成基础设施故障。
-3. 如果发现新的 RPO breach、配置 drift、scope pollution 或 secret/privacy 风险，标记 `ACTION REQUIRED` 并给出 Change Proposal；不要自动修复。
-4. open model admission proposal 只有在已经积累出足够新证据、需要人工裁决时才标 `REVIEW`。
+1. 先运行现有 human-facing status (`personal_status.py`)、durability (`rpo_check.py`)、aic validate/diff 与 proposal 检查，不修改任何 canonical。
+2. 明确输出各域的 `status` 与 `evidence_state` (CURRENT / LAST_KNOWN / UNAVAILABLE)。
+3. 如果总状态是 BLOCKED / DEGRADED，但原因只是已知的 `BACKUP_KEY_CUSTODY` 或 `NOVEL_REPO_DURABILITY = BLOCKED_PRIVACY`，不要把它误判成基础设施故障或 ACTION REQUIRED。
+4. 区分 backup age 超期 (`BACKUP_RPO_AGE_BREACH`) 与 repo privacy blocker (`KNOWN_PRIVACY_BLOCKER`)。
+5. 只有发现新的实际 RPO 超期、Harness 配置 drift、scope leakage、secret 风险或真实治理规则违规时，才标 `ACTION REQUIRED`。
 
 示例输出：
 
 ```text
-PERSONAL_AI_OPERATIONS_REVIEW
+Personal AI Status
 
-Overall: BLOCKED
-Action: NO ACTION
+Infrastructure     HEALTHY
+  CURRENT — aic VALID, 5 targets NO DRIFT
 
-Infrastructure: HEALTHY — Architecture V2.1 运行面无新异常。
-Control Plane: HEALTHY — aic validate=VALID。
-Harnesses: HEALTHY — 已登记 targets 全部 NO DRIFT。
-Models/Routing: HEALTHY — 无新增 suspicious identity 或 routing 异常；4 个 admission proposals 仍为已知待评审项。
-Memory/Projects: HEALTHY — 无 scope pollution / schema / provenance 新异常。
-Durability: DEGRADED — 已知 novel repo privacy blocker；当前 verified backups 在 RPO 内。
-Governance: HEALTHY — 定时治理最近运行成功，无新增高严重度 finding。
-External Blockers: BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT。
+Personalization    HEALTHY
+  CURRENT — Correction Rate 6.2%（基线 6.2%），重复纠正组 5；Over-Personalization/Scope Leakage=UNKNOWN(无注入事件源)
 
-New findings:
-- none
+Durability         DEGRADED
+  CURRENT — novel-main remains known BLOCKED_PRIVACY; backup-age datasets healthy
 
-Recommended next action:
-- 无需修改，继续正常使用。
+Governance         HEALTHY
+  CURRENT — capability_drift=0; static boundary clean
+
+Proposals          HEALTHY
+  CURRENT — 4 open, no new high severity
+
+External Blockers  BLOCKED
+  CURRENT — known, unchanged
+
+Overall: EXTERNAL BLOCKER
 ```
-
-这里 `Overall: BLOCKED` 与 `Action: NO ACTION` 可以同时成立：前者描述系统真实状态，后者描述本次是否需要采取新的人工动作。
 
 ## Personalization 域示例
 
@@ -45,25 +46,10 @@ Recommended next action:
 
 期望行为：
 
-1. 运行 `personalization_status.py`；无会话消息数据时标 `UNKNOWN` 并提示生成方式，不伪造指标。
+1. 运行 `personalization_status.py`；无会话消息数据时，若存在基线校准报告，标记 `status: UNKNOWN`, `evidence_state: LAST_KNOWN` 并说明 `current check unavailable; last verified Correction Rate 6.2%`；不伪造指标，严禁说“与基线持平”。
 2. 纠正分类：只有命中偏好模式且跨会话重复才算 `REPEAT_PERSONALIZATION_FAILURE`；单发纠正不直接判 personalization 失败。
 3. 简单问答被注入大量无关 workflow preference（over-personalization）→ `DEGRADED`，只产 Change Proposal。
 4. project:A 任务注入了 project:B 的 overlay（scope leakage）→ `ACTION REQUIRED`。
-5. Correction Rate 与基线（校准报告 SSOT）持平且无新增重复纠正 → `HEALTHY`，不要求降到 0。
+5. 当有当前测量数据时，Correction Rate 与基线持平且无新增重复纠正 → `HEALTHY`。
 
-默认短输出示例：
-
-```text
-Personal AI Status
-
-Infrastructure     HEALTHY
-Personalization    HEALTHY — Correction Rate 与基线持平，无新增重复纠正
-Durability         HEALTHY
-Governance         HEALTHY
-Proposals          HEALTHY — 4 open, no new high-severity
-External Blockers  BLOCKED — KNOWN EXTERNAL BLOCKER（BACKUP_KEY_CUSTODY，无变化）
-
-Overall: EXTERNAL BLOCKER（仅已知外部 blocker，无新增异常，继续正常使用）
-```
-
-用户说“展开 personalization”时才追加 `--detail` 的指标明细与纠正模式清单。
+用户说“展开 / 为什么 / 具体哪个”时才下钻展示底层指标明细、aic diff 或 proposal 详情。
