@@ -1,8 +1,10 @@
 ---
 name: publish-and-reuse
-description: 完整环境生命周期一体化编排：一键上传环境（含 Skills、插件、MCP 与 DSH 配置整体打包上传 GitHub）、一键更新环境（从 GitHub 同步到 DSH）、一键四层体检对比差异与新设备环境复现。上传与更新前强制执行四层体检对比差异，agent 自动加载即可端到端闭环执行，无需用户逐步指导。
-version: 1.2.0
+description: Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下我的 Personal AI”自动判断 PULL/PUSH/MERGE/NO ACTION/REVIEW/BLOCKED（AUTO_SYNC），覆盖 agent-tools、personal-ai-state（curated + Dynamic Memory 合并）、项目仓库、runtime refresh 与新设备 Fresh Restore；同时保留 DSH 四层环境上传/更新/体检/复现作为子步骤。只自动处理确定安全的变更，冲突与 dirty 一律留给人工。
+version: 2.0.0
 triggers:
+  - "同步一下我的 Personal AI / 同步一下 / 更新一下这台电脑 / 让这台电脑跟另一台一致 / 把最新状态同步过来 / 把这台机器的变化同步出去"
+  - "只检查同步状态 / 只拉远端 / 只上传 / 在新电脑恢复我的 Personal AI"
   - "一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"
   - "一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"
   - "一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"
@@ -18,189 +20,104 @@ depends_on:
   - environment-bootstrap
 ---
 
-# 发布与跨设备环境复现（publish-and-reuse）
+# Personal AI 生命周期同步（publish-and-reuse）
 
 ## 定位
 
-本 skill 是 **DSH 四层环境生命周期的最高层一体化编排器**。
-**仓库是唯一事实源（SSOT）**，所有上传、更新、体检和环境复现都以此为基准。
-核心原则：
-1. **一键上传**：一体化覆盖四层（Skills、DSH 插件、MCP、DSH 全局配置），自动脱敏打包并推送到 GitHub。
-2. **一键更新**：从 GitHub 拉取并全量应用到本机 DSH 运行时。
-3. **体检先行**：**上传与更新之前，强制先执行四层体检对比差异**，明确改动面并完成安全拦截。
+本 skill 是 **Personal AI Infrastructure 长期、多设备、增量生命周期同步的最高层入口**。
+用户平时只需要说“同步一下我的 Personal AI”，系统自动判断本次应该
+PULL / PUSH / MERGE / NO ACTION / REVIEW / BLOCKED——用户不负责判断方向。
+Fresh Restore 只是 `local canonical missing` 时的特殊 SYNC。
 
-权威细节见 `docs/publishing.md`、`docs/sync-ongoing.md`、`docs/local-experience-and-cross-device-reuse.md`。
+旧的 DSH 四层能力（Skills / 插件 / MCP / DSH 配置的上传、更新、体检、新设备复现）保留，但作为整体同步中的子步骤。
 
-## 何时触发与适用边界
+复杂协议、SYNC_OWNERSHIP_MATRIX、方向规则、Memory 合并契约、RESTORE 全流程：
+`references/personal-ai-lifecycle-sync.md`（先读它再执行非常规场景）。
 
-### 适用场景（何时触发）
-- 用户要求"一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"。
-- 用户要求"一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"。
-- 用户要求"一键检查环境 / 环境体检 / 检查四层一致性 / 对比环境差异"。
-- 用户要求"在新设备复现 / 安装我的环境"。
-- 用户要求"发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"。
+## 不适用（负向边界）
 
-### 负向边界（不适用）
-- **非 agent-tools 仓库目录**：在其他普通业务项目或工作区中，禁止使用本 skill 随意同步、拉取或覆盖环境（本 skill 仅限在本项目/仓库本体生效）。
-- 修改具体业务代码或单个 Skill 的逻辑实现（交给 `minimal-implementation`）。
+- 在非 agent-tools 仓库的其他业务工作区执行环境同步/上传/覆盖。
+- 修改具体业务代码或单个 Skill 的内部实现（交给 `minimal-implementation`）。
 - 日常代码编写与单点 Bug 修复。
+- 用本入口同步 secrets、sessions、broker sqlite、device-local 路径或派生索引——这些永不进入 git 生命周期同步。
 
----
+## 模式路由
 
-## 四层事实源（SSOT）架构速查
+| 用户说 | 进入模式 |
+|---|---|
+| 同步一下 / 同步我的 Personal AI / 更新一下这台电脑 / 让两台电脑一致 / 把变化同步出去 | `SYNC`（AUTO_SYNC，自动判方向） |
+| 只检查 | `CHECK`（只读） |
+| 只拉远端 | `PULL`（禁止 push/merge） |
+| 只上传 | `PUSH`（禁止 pull/merge） |
+| 在新电脑恢复 | `RESTORE` |
+| 上传环境 / 更新环境 / 环境体检 / 新设备复现（旧表达） | 继续工作，映射到 PUSH / PULL / CHECK / RESTORE 子流程 |
 
-| 层级 | 包含内容 | 仓库事实源位置 | 运行时目标位置 | 作用与同步机制 |
-|---|---|---|---|---|
-| ① **Skill 包** | 16+ Skills 全部技能栈 | `skills/*` | `~/.dsh/skills/*` | `sync_skills.py` 增量同步与校验 |
-| ② **DSH 插件** | 5 个用户级 JS/MJS 守护插件 | `dsh/*` | `~/.dsh/profiles/web/plugins/*` | `sync_skills.py --plugins-destination ...` 自动同步 |
-| ③ **MCP 包** | `agent-switchboard` 跨模型网桥 | `mcp/*` | 仓库就地（git 路径） | git 就地运行，`cordis.patch.yml` 模板化引用与校验 |
-| ④ **DSH 全局配置** | `AGENTS.md` / `settings.yaml` / `profiles` / `presets` | `dsh-config/*` | `~/.dsh/*` | `sync_dsh_config.py` 模板化脱敏导出与渲染恢复 |
+## 高层工作流
 
----
-
-## 协议一：一键环境体检（Check / Audit — 独立体检）
-
-当用户要求"检查环境"、"环境体检"、"对比差异"时执行：
-
-```powershell
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --dsh-config-dir dsh-config `
-  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
-  --profile full --check
-```
-
-**判定标准：**
-- Skills (18 项)：`missing=0 different=0`（PASS）
-- Plugins (5 项)：`missing=0 different=0`（PASS）
-- DSH Config：`missing=0 different=0`（`extra` 中的 `.credentials.yaml` / `.anonymous-user-id` 属预期本地隔离）
-- MCP：`issues=none`（引用的脚本与 cwd 路径均有效）
-
----
-
-## 协议二：一键更新环境（Update / Pull — 体检 ➔ 拉取 ➔ 应用 ➔ 复核）
-
-当用户要求"从 GitHub 同步"、"更新环境"、"同步到 DSH"时，**严格按以下 4 步执行**：
+编排器（薄，只 inspect/classify/调用既有工具/排序/报告）：
 
 ```powershell
-# 步骤 1【更新前体检】：对比当前本地与已安装的基线差异
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --dsh-config-dir dsh-config `
-  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
-  --profile full --check
-
-# 步骤 2【拉取远程最新代码与配置归档】：
-git pull
-
-# 步骤 3【应用更新到 DSH 运行时】：
-# 3.1 同步 Skills 与 DSH 插件
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --profile full --apply
-
-# 3.2 恢复 DSH 全局配置（自动将 {{DESKTOP}}/{{DSH_HOME}} 等模板渲染为本机真实路径）
-python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
-  --display dsh-config --destination "$env:USERPROFILE\.dsh"
-
-# 步骤 4【更新后复核】：再次体检确认差异归零
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --dsh-config-dir dsh-config `
-  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
-  --profile full --check
+python scripts\personal_ai_sync.py check      # 只读分类，连 checkpoint 都只读更新
+python scripts\personal_ai_sync.py sync       # AUTO_SYNC 默认日常入口
+python scripts\personal_ai_sync.py sync --detail   # 下钻
+python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 ```
 
-**生效提醒：** 若更新包含 DSH 插件或 `cordis.patch.yml`（MCP 配置），提示用户需重启 DSH 进程加载新代码。
+内部顺序（防数据丢失）：fetch all → classify all（git ancestry，禁止 mtime/last-write-wins）→ action plan → 只执行确定安全动作 → 受影响 derived/runtime 增量 refresh → validate → 写 machine-local checkpoint（`~/.dsh/.personal-ai-sync/status.json`）→ 短输出。
 
----
+确定安全的自动动作（其余一律 REVIEW）：clean FF pull、验证通过且 privacy scan PASS 的 FF push、不同设备新增 record/revision 的 Memory 确定性合并（复用 MemoryProvider.import_bundle 契约）、派生索引 rebuild、runtime diff/refresh。
 
-## 协议三：一键上传环境（Upload — 导出 ➔ 门禁体检 ➔ 推送 GitHub）
+## 安全规则（铁律）
 
-一键将 **Skills、DSH 插件、MCP 源码与 DSH 全局配置四层** 完整打包上传到 GitHub：
-
-```powershell
-# 步骤 1【配置脱敏导出】：将本机 ~/.dsh 导出至仓库 dsh-config 骨架（自动路径模板化占位符替换）
-python skills\dsh-config-sync\scripts\sync_dsh_config.py export `
-  --source "$env:USERPROFILE\.dsh" --display dsh-config --template --with-optional
-
-# 步骤 2【上传前体检与门禁】：执行全量四层体检与发布安全门禁（拦截密钥与格式错误）
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --dsh-config-dir dsh-config `
-  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
-  --profile full --check
-
-python scripts\publish_all.py
-
-# 步骤 3【提交并推送到 GitHub】：
-git add -A
-git status --short
-git commit -m "chore: upload environment (skills, plugins, mcp, dsh-config)"
-git push
-```
-
-**安全拦截守则：**
-- 敏感扫描与发布门禁必须全绿；若检测到 `.credentials.yaml`、明文密码或语法错误，**严禁提交并立即阻断**。
-
----
-
-## 协议四：新设备首次安装（Fresh Install / Restore）
-
-在全新机器上一键复现整套环境：
-
-```powershell
-# 1. 安装 DSH，配置 provider 与同名环境变量（BAI_API_KEY / CPA_API_KEY 等）
-# 2. 克隆仓库
-git clone <私有远程仓库URL> C:\Users\<user>\Desktop\skills
-cd C:\Users\<user>\Desktop\skills
-
-# 3. 源端自检
-python scripts\validate_repo.py --strict
-python scripts\run_skill_evals.py
-
-# 4. 一键安装 Skills + DSH 插件
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --profile full --apply
-
-# 5. 一键渲染恢复 DSH 全局配置
-python skills\dsh-config-sync\scripts\sync_dsh_config.py apply `
-  --display dsh-config --destination "$env:USERPROFILE\.dsh"
-
-# 6. 一键全量体检验证
-python scripts\sync_skills.py `
-  --destination "$env:USERPROFILE\.dsh\skills" `
-  --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" `
-  --dsh-config-dir dsh-config `
-  --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" `
-  --profile full --check
-
-# 7. 启动 DSH，验证工具与配置生效
-```
-
----
-
-## 安全纪律（铁律）
-
-1. **凭据绝对不出包**：`.credentials.yaml`、`sessions/`、`storages/` 永远排除在归档和仓库之外。
-2. **环境变量引用**：`settings.yaml` 只保留环境变量名引用（如 `apiKeyEnv: BAI_API_KEY`），换机配置同名系统环境变量即可。
-3. **设备路径模板化**：`{{DSH_HOME}}`、`{{DESKTOP}}`、`{{HOME}}` 必须在 export 时正确替换，apply 时自动渲染。
-4. **不破坏目标端无关文件**：所有 apply 仅做增量覆盖或更新，不清理未登记的目标端文件。
-
----
+1. **方向判定只用 git ancestry**，禁止 mtime / last-write-wins / timestamp 覆盖。
+2. **LOCAL_DIRTY 一律 UNTOUCHED**：禁止自动 add/commit/stash/reset/checkout/overwrite。
+3. **DIVERGED 默认 REVIEW**：禁止自动 merge/rebase/force push 基础设施 canonical；唯一例外是 memory-only 且路径不相交的确定性合并，且 curated state（identity/preferences/goals）双端修改永远 CONFLICT_REVIEW。
+4. **secrets 绝不进 git sync**：只检测引用 AVAILABLE/MISSING/NOT_REQUIRED；optional 缺失不阻塞整体。
+5. **device-local / derived 永不同步**：路径、GPU、端口、索引、projcache、node_modules——每设备 `aic discover` / 本地 rebuild。
+6. **raw history 不走 git sync**：sessions/traces/broker sqlite 继续走 Durability。
+7. **凭据绝对不出包**：`.credentials.yaml`、`sessions/`、`storages/` 永远排除。
+8. **不破坏目标端无关文件**：所有 apply 仅增量覆盖，不清理未登记文件。
+9. 已知外部 blocker（BACKUP_KEY_CUSTODY / NOVEL_REPO_DURABILITY）状态未变只报 `known external blocker, unchanged`，不重复建议解决。
+10. public 项目 push 前必须 privacy scan，命中即 BLOCKED_PRIVACY（NOVEL_REPO_DURABILITY 继续保持）。
 
 ## 输出契约
 
-每次执行后报告：
-- **操作模式**：Check / Update (Pull) / Upload (Push) / Install
-- **体检前后差异对比摘要**
-- **逐项执行命令与退出码**
-- **四层状态矩阵汇总（Skills / Plugins / MCP / DSH Config）**
-- **生效提示（是否需要重启 DSH）**
+默认短输出（用户说“展开”才下钻 git 日志/diff/governance 细节）：
+
+```text
+Personal AI Sync
+
+agent-tools          IN_SYNC / PULLED / PUSHED
+personal-ai-state    IN_SYNC / PULLED / PUSHED / MERGED
+projects             <简要汇总>
+memory               <新增/合并/冲突数量>
+runtime              NO DRIFT / refreshed
+secrets              READY / PARTIAL
+external blockers    known external blocker, unchanged
+
+Result: PASS / REVIEW / BLOCKED
+```
+
+冲突时先把确定安全的部分同步完，只把真正冲突留给人工（不问“要不要同步其他没冲突的”）。
+
+## 旧能力：DSH 四层子流程（保留）
+
+- **体检**：`python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" --dsh-config-dir dsh-config --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" --profile full --check`
+- **上传（Push）**：门禁 `git diff --check` + `validate_repo --strict` + `quality_report --strict` + 仓库回归 + `publish_check.py` → `git push` → 四层体检确认。
+- **更新（Pull）**：`git pull --ff-only` → 门禁 → 同体检命令 `--apply` → 逐层 `sync_dsh_config.py apply` → 重启 DSH 生效。
+- **新设备复现（Install）**：RESTORE 流程（见 reference §14），幂等、可重复执行。
+
+权威细节：`references/personal-ai-lifecycle-sync.md`、`docs/publishing.md`、`docs/sync-ongoing.md`。
+
+## 验证
+
+本 skill 变更后必须全绿：
+
+```text
+python scripts/validate_repo.py --strict
+python skills/skill-quality-gate/scripts/quality_report.py --root . --strict
+python -m unittest discover -s tests -v
+python scripts/publish_check.py
+```
+
+同步执行后验收：`aic validate = VALID` + 已安装 Harness `aic diff = NO DRIFT` + personal_status 无新增异常。

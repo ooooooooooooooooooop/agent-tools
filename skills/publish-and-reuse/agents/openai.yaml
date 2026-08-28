@@ -1,4 +1,4 @@
 interface:
-  display_name: "发布与跨设备复现"
-  short_description: "完整发布与跨设备复现一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP，agent 自动加载即可执行。"
-  default_prompt: "使用 $publish-and-reuse，完整发布本仓库（跑一键门禁）或在新设备复现/更新环境。"
+  display_name: "Personal AI 生命周期同步"
+  short_description: "Personal AI Infrastructure 多设备生命周期同步入口：一句“同步一下”自动判断 PULL/PUSH/MERGE/NO ACTION，兼容旧的环境上传/更新/体检/新设备复现。"
+  default_prompt: "使用 $publish-and-reuse 同步我的 Personal AI（自动判断方向）；或按明确指令执行只检查/只拉取/只上传/新设备恢复/发布门禁。"
