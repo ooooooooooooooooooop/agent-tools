@@ -11,6 +11,7 @@ import time
 import unittest
 from pathlib import Path
 
+sys.modules.pop("common", None)  # scripts/{governance,durability}/common.py name collision
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "durability"))
 import rpo_check  # noqa: E402
 
