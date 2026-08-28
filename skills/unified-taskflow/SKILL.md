@@ -19,6 +19,10 @@ description: |
 
 > **规则优先级**（冲突时按此顺序裁决）：
 > **Safety > Correctness > Efficiency > Completeness**
+>
+> **执行语义优先级**（与执行类 Skill 冲突时按此裁决，详见 execution-discipline「自主执行契约」）：
+> **Safety/不可逆授权 > 用户显式目标与约束 > 合法停止策略 > 自主续接 > 流程便利**。
+> 本 skill 的任何流程规则不得覆盖 `clarify-before-change` 的更窄询问边界，也不得覆盖 `execution-discipline` 的停止/恢复语义。
 
 ## 触发判断
 
@@ -58,8 +62,8 @@ description: |
 3. Agent 输出**理解快照**：
    - 用户意图（一句话）
    - 识别到的歧义点
-   - Agent 的假设（显式列出，用户逐条确认）
-4. 用户确认或修正
+   - Agent 的假设（显式列出并**标注可逆性**：可逆假设记录即推进；仅目标级/不可逆假设需用户确认）
+4. 默认直接进入完备性门禁并写入 anchor.md；**仅当存在目标级/不可逆假设或意图级歧义时**才请求用户确认（询问边界以 `clarify-before-change` 意图解析策略为准，一次问完）
 5. **完备性门禁**（详见 phase0-clarification.md）
 6. 写入 `anchor.md`（北极星文件，含版本号）
 
@@ -76,7 +80,8 @@ description: |
 
 执行期间遵守：
 - **统一 Checkpoint 协议**：事件驱动的 checkpoint 更新 + 内置 re-grounding 核对（见下方）
-- **3-Strike Protocol**：同一问题 3 次失败后升级给用户
+- **3-Strike Protocol**：同一问题 3 次失败后触发 DEADBAND 策略重置（见下方，**不自动升级用户**）
+- **续接语义**：用户说"继续 / 做完 / 接着做 / 自主推进"时，读 anchor.md + checkpoint.md 恢复 current state 与未闭合 Done-when，直接推进；**禁止**重新走 Phase 0 或重新确认已登记信息（详见 clarify-before-change「续接语义」）
 
 ### 完成（Completion）
 
@@ -120,19 +125,21 @@ description: |
 - `task-lifecycle.py --help` 和 `session-catchup.py --help` 必须显示帮助并以 0 退出；帮助参数不能被当作项目路径或任务名。
 - `index.json` 写入经过 schema/lifecycle 校验并采用原子替换；历史 `archived` 状态继续只读兼容。
 
-### 3-Strike Protocol
+### 3-Strike Protocol → DEADBAND（策略重置，不是停止）
 
 同一问题连续失败 3 次：
 1. Strike 1 — 记录问题和尝试方案
 2. Strike 2 — 换一个方向，记录
-3. Strike 3 — **停止尝试**，升级给用户，提供已排除方案列表
+3. Strike 3 — **DEADBAND_TRIPPED**：作废当前路径假设 → re-grounding → 选择**实质性不同**的恢复路线（Recovery Ladder，见 execution-discipline），继续推进
+
+**3-Strike 不得自动等于升级用户。** 只有 Recovery Ladder 全程走完且满足 execution-discipline「合法停止策略」五类之一时，才可停止并向用户报告（附已排除方案清单）。
 
 ### RIPER-Core 思维规则
 
 1. 根因解优先 — 禁止用配置/降级掩盖问题
 2. 显式因果链 — Why → Condition → Limitation
 3. 无魔法数字 — 常数必须来自输入/约束
-4. 明确变量 — 信息不足立即暂停询问
+4. 明确变量 — 信息不足先按 clarify-before-change「自主解析顺序」自行获取；仅目标级/不可逆信息缺失才询问
 
 ## 反模式清单（Anti-Patterns）
 
@@ -143,10 +150,12 @@ description: |
 | 自由文本对齐 | 用"我觉得还在正轨"代替逐项核对 | 必须对 Critical Constraints 和 Done-when 逐条输出状态 |
 | Anchor 静默修改 | 未告知用户就修改 anchor.md | 任何 anchor 修改必须用户确认，并更新 Version 和 Change Log |
 | Checkpoint 堆积 | 无限追加 checkpoint 不压缩 | 超过 3 条完整记录时，压缩旧记录为摘要 |
-| 跳过 Phase 0 | 直接开始执行不做理解快照 | 复杂任务必须先输出理解快照，用户确认后写入 anchor.md |
+| 跳过 Phase 0 | 直接开始执行不做理解快照 | 复杂任务必须先输出理解快照（默认据此推进；仅目标级/不可逆假设需确认）后写入 anchor.md |
 | 硬约束降级 | 把 Critical Constraint 当 Soft Preference 处理 | Critical Constraint 违反 = 立即暂停请示 |
-| 假设隐含 | 不列出假设就开始执行 | 所有假设写入 anchor.md 的 Assumptions 表，用户逐条确认 |
+| 假设隐含 | 不列出假设就开始执行 | 所有假设写入 anchor.md 的 Assumptions 表并标注可逆性；可逆假设记录即推进，仅目标级/不可逆假设需用户确认 |
 | 忽略意图漂移 | 用户隐式改变方向时不确认就跟着走 | 检测到用户指令与 anchor.md Intent 不一致时，主动确认是否修改 Intent |
+| 续接重启 | 用户说"继续"后重新走 Phase 0 / 重新确认计划 | 续接 = 恢复 current state + 未闭合 Done-when + next best action，直接推进 |
+| 3-Strike 即停 | 连续失败 3 次就停下问用户 | Strike 3 = DEADBAND 策略重置换路线；仅合法停止策略满足时才可停止 |
 
 ## 工作目录
 

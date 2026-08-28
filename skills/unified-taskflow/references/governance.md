@@ -47,10 +47,10 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 
 | 场景 | 动作 |
 |------|------|
-| Phase 0 完成时 | 首次创建（v1），由用户确认内容，通过完备性门禁 |
+| Phase 0 完成时 | 首次创建（v1），通过完备性门禁；仅目标级/不可逆假设需用户确认 |
 | 用户修改需求时 | 更新对应字段，Version +1，记录到 Change Log |
-| Agent 发现歧义时 | 暂停执行，提议修改，用户确认后更新 Version 和 Change Log |
-| 禁止 | Agent 单方面修改 anchor.md 而不告知用户 |
+| Agent 发现歧义时 | 可逆歧义：按最合理解释继续执行并登记到 Assumptions（可逆）；目标级/不可逆歧义：暂停执行，提议修改，用户确认后更新 Version 和 Change Log |
+| 禁止 | Agent 单方面修改 anchor.md 的 Intent/Critical Constraints 而不告知用户 |
 
 ### anchor.md 版本规则
 
@@ -67,8 +67,8 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 | 关键文件操作批次 | 更新 checkpoint + 内置 re-grounding 逐项核对 |
 | 子任务完成 | 同上 |
 | 用户新指令 | 先更新 anchor.md（如需要），再更新 checkpoint |
-| 不确定性 | 同上，若偏移则暂停请示用户 |
-| 意图漂移 | 主动确认用户意图，必要时更新 anchor.md |
+| 不确定性 | 先按 clarify-before-change 意图解析策略自决（可逆假设记录即推进）；仅 ❌ 明显偏移（Critical Constraint / Scope.Exclude 违反）才暂停请示 |
+| 意图漂移 | 见 regrounding-protocol.md：显式新指令直接更新 anchor；模糊冲突才确认 |
 
 ### 滚动压缩规则
 
@@ -103,6 +103,8 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 
 **Safety > Correctness > Efficiency > Completeness**
 
+执行语义冲突（是否询问 / 是否停止 / 是否继续）时，另按 execution-discipline「自主执行契约」的 EXECUTION_RULE_PRECEDENCE 裁决：**Safety/不可逆授权 > 用户显式目标与约束 > 合法停止策略 > 自主续接 > 流程便利**。本 skill 流程规则不得覆盖 clarify-before-change 的询问边界与 execution-discipline 的停止/恢复语义。
+
 | 优先级 | 含义 | 示例 |
 |--------|------|------|
 | Safety | 不引入安全漏洞、不破坏现有功能 | Critical Constraint 违反 = 立即暂停 |
@@ -117,7 +119,7 @@ anchor.md 是任务的唯一真相来源（含版本号），修改需遵守：
 | 单活跃限制 | 硬性 | active/ 下最多一个 active + 一个 suspended |
 | anchor.md 修改需用户确认 | 硬性 | Agent 不得单方面修改 |
 | Re-grounding 逐项核对 | 硬性 | 不可用自由文本替代 |
-| 3-Strike 升级 | 硬性 | 3 次失败必须停止 |
+| 3-Strike 策略重置 | 硬性 | 3 次失败必须 DEADBAND 策略重置换路线；不得自动停止并升级用户（合法停止策略见 execution-discipline） |
 | 滚动压缩阈值（N=3） | 软性 | 可根据任务复杂度调整为 5 |
 | 归档命名格式 | 软性 | 建议遵守但不阻断流程 |
 | 交互设计原则 | 软性 | 可选参考 |

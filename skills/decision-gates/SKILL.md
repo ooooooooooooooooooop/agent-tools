@@ -1,7 +1,7 @@
 ---
 name: decision-gates
 description: 在 DSH 长程任务中为决策层加装五道防偏闸门：原始证据锚、对抗式对齐审计、跨包一致性校验、成本比对、防御自检，防止目标漂移、验收失真与摘要偏差。用于跨会话长任务、多 worker 并行、审计类任务、成本敏感任务的 checkpoint 记录与恢复，以及任何需要"决策层不跑偏"保障的执行场景。
-version: 0.1.0
+version: 0.2.0
 triggers:
   - "长程任务 checkpoint / 断点恢复"
   - "多 worker 并行结果验收"
@@ -23,14 +23,25 @@ depends_on:
 决策层跑偏的根因不是提示词不够强，而是**状态没有物化**：目标只存在于对话里、验收只依赖自述、恢复只信任摘要。决策闸门把防偏从"意志"变成"硬门禁"：
 
 1. **闸门 0 原始证据锚**：checkpoint 必须同时落盘摘要与原始证据锚 JSON；恢复时先读锚、后读摘要，锚里有 SKIP/WARN/PENDING 则"PASS"自动降级为"PARTIAL"。
-2. **闸门 1 对抗式对齐审计**：每 3 个 checkpoint 启动一个**不读摘要**的独立审计 subagent，只给 objective + 原始证据锚 + 产出物，防"自检即跑偏"。
+2. **闸门 1 对抗式对齐审计**：**事件驱动**触发一个**不读摘要**的独立审计 subagent，只给 objective + 原始证据锚 + 产出物，防"自检即跑偏"。触发事件：objective 变更 / 关键假设被证伪 / 不可逆或高风险边界 / 多 worker 结果集成 / 证据相互冲突 / 连续无 Progress Delta / 重大架构决策 / **最终验收（必跑）**。若连续 ≥5 个 checkpoint 无任何触发事件，补一次低成本自检兜底。固定周期计数不再是主要触发方式（防止无行动价值的重复审计）。
 3. **闸门 2 跨包一致性校验**：≥2 个 worker 并行时，验收前先跑算法脚本核对文件覆盖重叠/空白/哈希冲突，0 token。
 4. **闸门 3 成本比对**：每个派工单记录授权档位与预算，worker 返回时核对实际档位与消耗，0 token。
 5. **闸门 4 防御自检**：每 5 个 checkpoint 扫描历史锚，统计摘要比证据乐观的次数（summary_bias），≥2 次判定 DEFENSE_DRIFT 并回退，0 token。
 6. **闸门 5 物理范围锁（Scope Lock）**：验收或交付前用 `gate_scope_lock.py` 严格校验变更文件集，任何触碰 Non-Goals 或越界文件直接判 `SCOPE_VIOLATION`，0 token。
 7. **闸门 6 轨迹死循环熔断（Deadband Loop Interceptor）**：连续 2 次相同报错/失败模式时通过 `gate_deadband.py` 自动触发 `DEADBAND_TRIPPED`，强制推翻假设并回退，0 token。
 
-**零 token 原则**：闸门 2/3/4/5/6 是纯数据算法逻辑，必须用 `scripts/` 下的 Python 脚本执行，禁止用 LLM 调用替代。唯一消耗 token 的闸门 1 用最便宜档位的独立 subagent，且频次可配置。
+**零 token 原则**：闸门 2/3/4/5/6 是纯数据算法逻辑，必须用 `scripts/` 下的 Python 脚本执行，禁止用 LLM 调用替代；这些机械 scope/cost/integrity 检查保持低成本执行，不因事件化而删除。唯一消耗 token 的闸门 1 用最便宜档位的独立 subagent，按上方事件驱动触发。
+
+**验证预算（VERIFICATION_PURPOSE）**：任何验证/审计动作执行前必须能回答：
+
+```text
+hypothesis:            要验证什么假设
+uncertainty_removed:   通过后消除了什么不确定性
+pass_action:           验证通过后的下一动作
+fail_action:           验证失败后的下一动作
+```
+
+若 `pass_action == fail_action` 且没有新的风险证据，通常**跳过**该验证。验证必须产出 Progress Delta（改变 next action 或 done state），否则视为无进展动作（见 execution-discipline「Progress Delta」）。
 
 ## 适用范围与触发边界
 
@@ -63,7 +74,9 @@ depends_on:
 3. **如果本阶段有多 worker 并行**：先跑闸门 2，结果写入锚，❌ 冲突不得进入验收。
 4. **写摘要到 work_memory**：一句话结论 + 指向锚的路径。摘要必须与锚一致，禁止比锚乐观。
 
-### 阶段 3：对抗式对齐审计（每 3 个 checkpoint）
+### 阶段 3：对抗式对齐审计（事件驱动）
+
+触发事件（满足任一即启动）：objective 变更 / 关键假设被证伪 / 不可逆或高风险边界 / 多 worker 结果集成 / 证据相互冲突 / 连续无 Progress Delta / 重大架构决策 / 最终验收（必跑）。连续 ≥5 个 checkpoint 无事件时补一次低成本自检兜底。
 
 1. 用 `templates/adversarial-audit-brief.md` 生成派工单。
 2. 启动独立 subagent（`run_in_background: true`），**只传** objective + 原始证据锚路径 + 产出物列表；**禁止**传任何摘要或 work_memory。
