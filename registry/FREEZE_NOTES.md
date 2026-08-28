@@ -33,4 +33,4 @@ requested_model → gateway_resolved_model → provider_reported_model → ident
 
 ## 过渡说明
 
-- `registry/gateways.yaml` 按 V2.1 SSOT 矩阵终态属于 personal-ai-state（私有仓库，Migration #4 建立）。当前为 Phase-2 过渡位置：内容**不含任何 secret 与设备绝对路径**，Migration #4 时迁移。
+- `registry/gateways.yaml` 按 V2.1 SSOT 矩阵终态属于 personal-ai-state。**已于 Phase 3+4 Integration（2026-08-28）完成迁移**：真实 mapping 的唯一 canonical = personal-ai-state 私有仓库 `registry/gateways.yaml`；本仓库同名文件降级为 template/example（非 SSOT）。运行时查找顺序见 `scripts/trace_identity.py`（private canonical 优先）。

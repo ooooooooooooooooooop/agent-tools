@@ -45,6 +45,16 @@ def iter_events(path: Path):
                     continue
 
 
+
+def _attribute_policy_rule(requested: dict | None, rules: dict | None) -> str:
+    """Attribute policy rule by comparing requested model against routing-policy (honest: unknown if no match)."""
+    if not requested or not rules:
+        return "unknown (no routing-policy reference available)"
+    want = f"{requested.get('provider')}/{requested.get('model')}"
+    for name, target in rules.items():
+        if target == want:
+            return name
+    return "unknown (requested model not referenced by canonical routing-policy)"
 def project(path: Path, gateways: dict) -> dict:
     requested = None
     reported: dict = {}
@@ -98,7 +108,7 @@ def project(path: Path, gateways: dict) -> dict:
                                  "signals": ["session-log-projection"]},
         "fallback": {"observed_events": len(fallback_events),
                       "note": "none-observed" if not fallback_events else "see session log"},
-        "policy_rule": "main_default (session header config)",
+        "policy_rule": _attribute_policy_rule(requested, gateways.get("_policy_rules")),
     }
 
 
@@ -107,9 +117,20 @@ def main() -> int:
         print(__doc__)
         return 2
     gateways = {}
-    gw_path = ROOT / "registry" / "gateways.yaml"
-    if gw_path.is_file():
-        gateways = yaml.safe_load(gw_path.read_text(encoding="utf-8-sig"))
+    candidates = [Path.home() / "personal-ai-state" / "registry" / "gateways.yaml",
+                  ROOT / "registry" / "gateways.yaml"]
+    for gw_path in candidates:
+        if gw_path.is_file():
+            gateways = yaml.safe_load(gw_path.read_text(encoding="utf-8-sig"))
+            break
+    rp = ROOT / "registry" / "routing-policy.yaml"
+    if rp.is_file():
+        pol = yaml.safe_load(rp.read_text(encoding="utf-8-sig")) or {}
+        gateways["_policy_rules"] = {
+            name: f"{r.get('provider')}/{r.get('model')}"
+            for name, r in (pol.get("rules") or {}).items()
+            if isinstance(r, dict) and r.get("provider")
+        }
     result = project(Path(sys.argv[1]), gateways)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
