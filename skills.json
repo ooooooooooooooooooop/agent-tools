@@ -30,7 +30,8 @@
       "evolution-proposal",
       "publish-and-reuse",
       "research-lab",
-      "find-session"
+      "find-session",
+      "personal-ai-operations-review"
     ]
   },
   "skills": [
@@ -39,25 +40,18 @@
       "path": "./skills/systematic-optimization",
       "version": "1.0.0",
       "description": "系统化问题解决与优化流程（领域无关）：量化基线→全量列问题→根因分类→结构性方案→借鉴同类解法→归纳取舍（约束分层）→实施→验证生效→度量闭环；约束存在≠被执行，能落系统层就不写建议",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P1",
       "tier": "optional",
-      "depends_on": [
-        "minimal-implementation"
-      ]
+      "depends_on": ["minimal-implementation"]
     },
     {
       "name": "simulate-elite-experts",
       "path": "./skills/simulate-elite-experts",
       "version": "1.1.0",
       "description": "模拟顶级专家视角，交叉质询并综合复杂决策，记录不确定性",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "reasoning",
       "priority": "P1",
       "tier": "optional",
@@ -68,42 +62,29 @@
       "path": "./skills/unified-taskflow",
       "version": "4.3.0",
       "description": "管理真正复杂的多阶段任务，追踪锚点、检查点与验收",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P0",
       "tier": "conditional",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
       "name": "clarify-before-change",
       "path": "./skills/clarify-before-change",
       "version": "1.1.0",
       "description": "在修改前澄清范围、风险、假设与验收标准，避免误改",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "task-mode-router"
-      ]
+      "depends_on": ["task-mode-router"]
     },
     {
       "name": "task-mode-router",
       "path": "./skills/task-mode-router",
       "version": "1.1.0",
       "description": "按任务规模与风险选择执行深度，避免流程过度或风险失控",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
       "tier": "core",
@@ -114,9 +95,7 @@
       "path": "./skills/find-session",
       "version": "1.0.0",
       "description": "按对话标题或正文关键词快速定位 DSH 历史会话并读取内容/token 统计（基于 scripts/find_session.py）",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "maintenance",
       "priority": "P1",
       "tier": "optional",
@@ -127,10 +106,7 @@
       "path": "./skills/natural-rewrite",
       "version": "1.1.0",
       "description": "把中文或英文文本改得自然流畅，同时保持事实、语气和含义",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "writing",
       "priority": "P1",
       "tier": "optional",
@@ -141,10 +117,7 @@
       "path": "./skills/minimal-implementation",
       "version": "1.1.0",
       "description": "以最小正确改动完成任务，并提供可复核的验证证据",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "workflow",
       "priority": "P0",
       "tier": "core",
@@ -155,89 +128,62 @@
       "path": "./skills/skill-repository-maintainer",
       "version": "1.0.0",
       "description": "审计、验证并安全同步 Skill 仓库，隔离私有运行时文件",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "maintenance",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
       "name": "environment-bootstrap",
       "path": "./skills/environment-bootstrap",
       "version": "1.0.0",
       "description": "安全恢复 Codex Skill 环境并校验哈希，不删除目标端额外文件",
-      "lang": [
-        "en",
-        "zh"
-      ],
+      "lang": ["en", "zh"],
       "category": "maintenance",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "skill-repository-maintainer"
-      ]
+      "depends_on": ["skill-repository-maintainer"]
     },
     {
       "name": "skill-quality-gate",
       "path": "./skills/skill-quality-gate",
       "version": "1.0.0",
       "description": "评估 Skill 的触发边界、输出契约、验证方式和回归质量",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "maintenance",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "skill-repository-maintainer"
-      ]
+      "depends_on": ["skill-repository-maintainer"]
     },
     {
       "name": "agent-switchboard-ops",
       "path": "./skills/agent-switchboard-ops",
       "version": "1.3.1",
       "description": "以管理者—执行者模式运维 agent-switchboard MCP：受管执行者生命周期、跨模型委派授权、验收纪律与已知陷阱对策",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P1",
       "tier": "optional",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation",
-        "clarify-before-change"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation", "clarify-before-change"]
     },
     {
       "name": "dsh-config-sync",
       "path": "./skills/dsh-config-sync",
       "version": "1.0.0",
       "description": "把 DSH 用户配置（~/.dsh 的偏好与模型路由骨架）打包并在设备间安全同步恢复，含只读审计、显式应用与 SHA-256 校验，绝不携带凭据与运行态",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "maintenance",
       "priority": "P1",
       "tier": "optional",
-      "depends_on": [
-        "skill-repository-maintainer"
-      ]
+      "depends_on": ["skill-repository-maintainer"]
     },
     {
       "name": "weekly-work-summary",
       "path": "./skills/weekly-work-summary",
       "version": "1.0.0",
       "description": "按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "reporting",
       "priority": "P1",
       "tier": "optional",
@@ -248,94 +194,74 @@
       "path": "./skills/decision-gates",
       "version": "0.1.0",
       "description": "为决策层加装五道防偏闸门（原始证据锚、对抗审计、一致性校验、成本比对、防御自检），防止长程任务目标漂移与验收失真",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P1",
       "tier": "optional",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
       "name": "execution-discipline",
       "path": "./skills/execution-discipline",
       "version": "0.1.0",
       "description": "在 DSH 长程/多工具会话中强制五条执行纪律，防止高频反模式重演：禁止无 wait 轮询、禁止把门禁拒绝当交付物抛回决策、外部研究先探测通道再极窄探针、探查派子代理不肉身 Read、子代理派发带进度回报协议。用于接手长任务、等待子代理/后台任务、发起外部研究、收到 INVALID/FAIL/PARTIAL 门禁结果、收到“重复工具调用”系统警告、需要读取多个源码文件或大文件，以及任何需要“执行层不空转、不惊群、不绕门禁”的执行场景。不用于单轮小修改或无需持久化的临时问答。",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation"]
     },
     {
       "name": "subagent-execution-governance",
       "path": "./skills/subagent-execution-governance",
       "version": "0.1.0",
       "description": "把子代理派发从监督型治理升级为契约型治理：探查/实现/验证角色分离、契约快照（含负空间）、三级有界读取、单写者文件所有权、行动门槛替代轮次门槛、结构化 BLOCKED、token/工具/轮次预算、结构化结果回收与 repair-contract 恢复。用于派发实现型子代理、设计或评审子代理执行协议、子代理空转/并行写冲突/上下文膨胀复盘。不用于纯问答、单轮小修改或已有成熟任务流程的普通委派。",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P1",
       "tier": "conditional",
-      "depends_on": [
-        "task-mode-router",
-        "execution-discipline",
-        "minimal-implementation"
-      ]
+      "depends_on": ["task-mode-router", "execution-discipline", "minimal-implementation"]
     },
     {
       "name": "evolution-proposal",
       "path": "./skills/evolution-proposal",
       "version": "0.3.0",
       "description": "把 evolution-inbox 中的审计异常条目转化为可评审的进化提案（规则/技能/插件/路由补丁）。先做系统化问题分析（量化基线→全量聚合→根因分类→结构性方案→联网借鉴→归纳取舍→优先级排序），再用便宜模型起草、前沿模型评审、人工批准后走既有门禁固化。用于处理 evolution_scan.js 产出的异常条目、复盘高频反模式、把会话经验固化为规则或技能改进。不用于单轮小修改和 L0 治理规则的直接修改（只产提案不越权固化）。",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "workflow",
       "priority": "P1",
       "tier": "optional",
-      "depends_on": [
-        "task-mode-router",
-        "minimal-implementation",
-        "execution-discipline",
-        "systematic-optimization"
-      ]
+      "depends_on": ["task-mode-router", "minimal-implementation", "execution-discipline", "systematic-optimization"]
     },
     {
       "name": "publish-and-reuse",
       "path": "./skills/publish-and-reuse",
       "version": "1.0.0",
       "description": "完整发布与跨设备复现的一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP，agent 自动加载即可执行，无需用户逐步教学",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "maintenance",
       "priority": "P0",
       "tier": "core",
-      "depends_on": [
-        "skill-repository-maintainer",
-        "dsh-config-sync",
-        "environment-bootstrap"
-      ]
+      "depends_on": ["skill-repository-maintainer", "dsh-config-sync", "environment-bootstrap"]
     },
     {
       "name": "research-lab",
       "path": "./skills/research-lab",
       "version": "0.1.0",
       "description": "使用独立 Research Core 把模型比较、软件评估等可证伪问题转化为可恢复、可复现、证据可追溯的研究；用于对照实验、Baseline、盲评、模型替代评估和跨设备继续研究",
-      "lang": [
-        "zh"
-      ],
+      "lang": ["zh"],
       "category": "reasoning",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": []
+    },
+    {
+      "name": "personal-ai-operations-review",
+      "path": "./skills/personal-ai-operations-review",
+      "version": "0.1.0",
+      "description": "对已进入 OPERATIONS MODE 的 Personal AI / DSH 基础设施做只读运维复查：聚合 governance、durability、aic drift、proposal、memory/model/routing 状态，健康时明确 NO ACTION，异常时只生成可审计 Change Proposal，不为变绿而静默修改 canonical",
+      "lang": ["zh"],
+      "category": "maintenance",
       "priority": "P1",
       "tier": "optional",
       "depends_on": []
