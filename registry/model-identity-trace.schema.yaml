@@ -1,0 +1,22 @@
+# model-identity-trace.schema.yaml — 模型身份链 Trace Schema（冻结修正 B 生效）
+# 每次 LLM 调用/任务记录以下字段；四段身份链之外不得引入 verified_model / verification_confidence。
+schema: model-identity-trace/v1
+fields:
+  requested_model:
+    desc: "路由策略/会话配置请求的模型（harness 侧请求值）"
+    source: "session header config (data.header.config.provider/model)"
+  gateway_resolved_model:
+    desc: "本地网关 alias 表解析后的模型；无网关=requested 原值"
+    source: "registry/gateways.yaml alias_map（显式声明）"
+  provider_reported_model:
+    desc: "上游响应元数据自报的 provider/model"
+    source: "assistant message source.provider/model 或 replayState.response.*"
+  identity_assessment:
+    status: {enum: [consistent, suspicious, unknown]}
+    rule: "requested==gateway_resolved==provider_reported → consistent；不一致 → suspicious；缺 provider_reported 信号 → unknown"
+    signals: "canary/latency/cost/behavior 仅作 anomaly detection 信号数组，不构成 verified 结论"
+  fallback: {desc: "fallback 链事件（from/reason_code），无则 none-observed"}
+  policy_rule: {desc: "命中 routing-policy.yaml 的规则名"}
+notes:
+  - "数据源实测（2026-08-28，本机会话日志）：requested 与 provider_reported 可从 DSH session JSONL 直接投影"
+  - "DSH 直连 provider（如 kimi-coding）无网关段，gateway_resolved = requested"
