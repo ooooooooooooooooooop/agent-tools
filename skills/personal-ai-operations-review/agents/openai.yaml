@@ -1,0 +1,4 @@
+interface:
+  display_name: "Personal AI 运维复查"
+  short_description: "只读检查 Personal AI/DSH 健康、治理、备份与漂移，异常时只提变更方案。"
+  default_prompt: "使用 $personal-ai-operations-review，对当前 Personal AI Infrastructure 做一次只读运维复查；健康则明确 NO ACTION，发现异常时区分 REVIEW、ACTION REQUIRED 与 EXTERNAL BLOCKER，不为变绿而修改 canonical。"
