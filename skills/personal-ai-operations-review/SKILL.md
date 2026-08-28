@@ -71,7 +71,7 @@ description: 对已进入 OPERATIONS MODE 的 Personal AI / DSH 基础设施做�
      python skills/personal-ai-operations-review/scripts/personalization_status.py
      ```
 
-   - 数据链：`extract_user_msgs.py`（sessions → user_messages.jsonl，缺数据时该域 UNKNOWN 并提示生成方式）→ `behavior_metrics.py`（基线统计）→ 纠正分类 + 选择检查。
+   - 数据链：`scripts/extract_user_msgs.py`（sessions → 仓库 `output/pref-calibration/user_messages.jsonl`，需 zstandard；缺数据时该域 UNKNOWN 并提示先运行此脚本）→ `scripts/behavior_metrics.py`（基线统计）→ 纠正分类 + 选择检查。
    - 至少读取：Correction Rate、Repeat Correction（优先于单发纠正）、Unnecessary Clarification、Over-Personalization、Scope Leakage；只能近似的指标明确标 `PARTIAL/UNKNOWN`，不得伪造精度。
    - 纠正必须分类：`NEW_MODEL_ERROR / KNOWLEDGE_ERROR / TASK_AMBIGUITY / PERSONALIZATION_FAILURE / REPEAT_PERSONALIZATION_FAILURE`；关键词只是候选触发器，判定须结合上下文。
    - Preference Selection 只检查不修改：默认最小规则集、按 task scope 注入、不相关 preference 不注入；发现 `OVER_PERSONALIZATION / IRRELEVANT_INJECTION / WRONG_SCOPE` → `Personalization: DEGRADED`；发现 project 间 scope 泄漏 → `ACTION REQUIRED`；两者都只产 Change Proposal。
