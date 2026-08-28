@@ -36,3 +36,34 @@ Recommended next action:
 ```
 
 这里 `Overall: BLOCKED` 与 `Action: NO ACTION` 可以同时成立：前者描述系统真实状态，后者描述本次是否需要采取新的人工动作。
+
+## Personalization 域示例
+
+用户：
+
+> 看看个性化有没有退化 / AI 最近是不是又变难用了
+
+期望行为：
+
+1. 运行 `personalization_status.py`；无会话消息数据时标 `UNKNOWN` 并提示生成方式，不伪造指标。
+2. 纠正分类：只有命中偏好模式且跨会话重复才算 `REPEAT_PERSONALIZATION_FAILURE`；单发纠正不直接判 personalization 失败。
+3. 简单问答被注入大量无关 workflow preference（over-personalization）→ `DEGRADED`，只产 Change Proposal。
+4. project:A 任务注入了 project:B 的 overlay（scope leakage）→ `ACTION REQUIRED`。
+5. Correction Rate 与基线（校准报告 SSOT）持平且无新增重复纠正 → `HEALTHY`，不要求降到 0。
+
+默认短输出示例：
+
+```text
+Personal AI Status
+
+Infrastructure     HEALTHY
+Personalization    HEALTHY — Correction Rate 与基线持平，无新增重复纠正
+Durability         HEALTHY
+Governance         HEALTHY
+Proposals          HEALTHY — 4 open, no new high-severity
+External Blockers  BLOCKED — KNOWN EXTERNAL BLOCKER（BACKUP_KEY_CUSTODY，无变化）
+
+Overall: EXTERNAL BLOCKER（仅已知外部 blocker，无新增异常，继续正常使用）
+```
+
+用户说“展开 personalization”时才追加 `--detail` 的指标明细与纠正模式清单。
