@@ -30,7 +30,8 @@
       "evolution-proposal",
       "publish-and-reuse",
       "research-lab",
-      "find-session"
+      "find-session",
+      "personal-ai-operations-review"
     ]
   },
   "skills": [
@@ -336,6 +337,19 @@
         "zh"
       ],
       "category": "reasoning",
+      "priority": "P1",
+      "tier": "optional",
+      "depends_on": []
+    },
+    {
+      "name": "personal-ai-operations-review",
+      "path": "./skills/personal-ai-operations-review",
+      "version": "0.1.0",
+      "description": "对已进入 OPERATIONS MODE 的 Personal AI / DSH 基础设施做只读运维复查：聚合 governance、durability、aic drift、proposal、memory/model/routing 状态，健康时明确 NO ACTION，异常时只生成可审计 Change Proposal，不为变绿而静默修改 canonical",
+      "lang": [
+        "zh"
+      ],
+      "category": "maintenance",
       "priority": "P1",
       "tier": "optional",
       "depends_on": []
