@@ -1,0 +1,38 @@
+# switchboard.yaml — agent-switchboard harness adapter contract（canonical）
+harness: switchboard
+home: ".agent-broker"
+version_observed: "config.json schema 2026-08-28 实测"
+
+consumes:
+  - registry/routing-policy.yaml      # broker_preferences
+  - registry/models.yaml              # 准入校验（models 列表须 ⊆ admitted）
+  - personal-ai-state:registry/gateways.yaml  # cpa listen
+  - registry/capabilities.yaml
+
+render_targets:
+  - file: config.json
+    format: json
+    generated_fields:
+      - {path: "routing_preferences", source: "routing-policy.broker_preferences", mode: exact_subset_map}
+      - {path: "cli_backends.cpa.base_url", source: "gateways.cpa.listen_url", mode: exact}
+      - {path: "providers.CPA.base_url", source: "gateways.cpa.listen_url", mode: exact}
+    note: "codex_path/claude_path/claude_model/gemini_model/cdp_ports/app_* = OVERLAY/MACHINE_LOCAL；api_key='123456' 为本地 relay 占位（SECRET 位，校验存在即可）；cli_backends.cpa.models / providers.CPA.models = OVERLAY 暴露清单（约束应 ⊆ admitted，但 gpt-5.6-luna 等在用模型尚未准入 — 见 ADMISSION_GAP 技术债，#5 禁止扩大 catalog）"
+
+overlay:
+  - "config.json: *_path（MACHINE_LOCAL；codex_path 当前漂移过期，见报告）"
+  - "config.json: claude_model / gemini_model / app_autopaste / app_autosubmit / *_cdp_*"
+  - "AGENT_GROUND_RULES.md（switchboard 自有静态规则）"
+  - "harness 指令文件 cost-routing managed block（渲染到 codex/claude/gemini 的 AGENTS|CLAUDE|GEMINI.md）"
+
+static_instructions:
+  file: AGENT_GROUND_RULES.md
+  owner: agent-switchboard
+  legality: "编排治理规则 — 无动态状态（2026-08-28 审计）"
+
+runtime_context_hook:
+  mechanism: "prompt frame injection（route_agent_task/queue 的 prompt 首帧携带 Context Package）"
+  constraint: "supervisor state / ledger / sqlite = RUNTIME_STATE，永不入 canonical"
+
+health_check: "MCP 工具面可达（本会话即证据）"
+runtime_state: "state.sqlite topics/ supervisors/ *-inbox/ routing-gate/ agent-broker.log"
+secret: "config.json api_key 占位符；真实上游凭据由 cpa 网关持有 — 永不入 canonical"

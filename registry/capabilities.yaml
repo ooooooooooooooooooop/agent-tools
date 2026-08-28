@@ -1,0 +1,24 @@
+# capabilities.yaml — 跨 harness 标准能力定义（canonical · Capability Plane）
+# 消费方：codex / gemini 等的 MCP 配置由此生成；harness 专有 MCP（node_repl、agent_switchboard）属各自 overlay。
+capabilities:
+  mcp_standard:
+    memory:
+      type: stdio
+      command: cmd
+      args: ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+    sequential-thinking:
+      type: stdio
+      command: cmd
+      args: ["/c", "npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]
+    time:
+      type: stdio
+      command: cmd
+      args: ["/c", "npx", "-y", "@modelcontextprotocol/server-time"]
+    context7:
+      type: stdio
+      command: cmd
+      args: ["/c", "npx", "-y", "@upstash/context7-mcp"]
+    fetch:
+      type: stdio
+      command: uvx
+      args: ["mcp-server-fetch"]
