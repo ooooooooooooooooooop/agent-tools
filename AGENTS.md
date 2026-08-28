@@ -43,6 +43,7 @@ git diff --check                                  # 空白错误
 
 | 文档 | 用途 |
 |---|---|
+| [`BOOTSTRAP.md`](./BOOTSTRAP.md) | **唯一入口种子**：新设备/新会话把一句"读取 BOOTSTRAP.md，自主配置这台电脑"交给 Agent 即可，安装/更新/恢复/同步意图全部固化在内 |
 | [`docs/sync-ongoing.md`](./docs/sync-ongoing.md) | **优化→同步闭环 SOP**：日常优化流程、跨设备首次/增量同步、各层 SSOT 归属 |
 | [`docs/publishing.md`](./docs/publishing.md) | 可发布性矩阵（哪些包能进哪些市场）+ 发布检查清单 |
 | [`docs/local-experience-and-cross-device-reuse.md`](./docs/local-experience-and-cross-device-reuse.md) | 本地特有经验全景总结（治理/插件/技能/证据链）+ 业界做法对照 |
