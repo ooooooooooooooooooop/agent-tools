@@ -22,3 +22,13 @@ capabilities:
       type: stdio
       command: uvx
       args: ["mcp-server-fetch"]
+  # harness-local capabilities（显式登记 + accepted 状态；capability_gov 比对依据）
+  harness_local:
+    agent_switchboard:
+      harness_scope: codex
+      status: accepted
+      reason: "switchboard MCP 注入 codex（跨 agent 委派通道），属 harness-local overlay"
+    node_repl:
+      harness_scope: codex
+      status: accepted
+      reason: "codex 自带 node REPL 工具，harness-local"

@@ -52,6 +52,22 @@ def load_cordis_yaml(path: Path):
     return yaml.safe_load(_JS_TAG_RE.sub('"<js-expr>"', text))
 
 
+def collect_opaque_paths(node, prefix: str = "") -> list[str]:
+    """Enumerate dotted paths whose value is the <js-expr> opaque marker
+    (AIC_OPAQUE_PATH_VISIBILITY closure: every opaque path is explicit)."""
+    out: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            out.extend(collect_opaque_paths(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            ident = v.get("id") if isinstance(v, dict) and v.get("id") else i
+            out.extend(collect_opaque_paths(v, f"{prefix}[{ident}]"))
+    elif node == "<js-expr>":
+        out.append(prefix)
+    return out
+
+
 def load_canonical() -> dict:
     return {
         "providers": load_yaml(REG / "providers.yaml"),
@@ -201,6 +217,23 @@ def cmd_diff(args) -> int:
                 exp = resolve_value_from(canonical["policy"], check["value_from"])
                 if act != exp:
                     findings.append((target["path"], f"{check['row']}.{check['key']}", exp, act))
+
+    # AIC_OPAQUE_PATH_VISIBILITY closure: enumerate every opaque cordis !!js path,
+    # compare against the declared contract list; silent growth = drift.
+    opaque_found: list[str] = []
+    cordis_path_str = ""
+    for target in contract["render_targets"]:
+        if target["id"] == "agent-preset-cc":
+            actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
+            cordis_path_str = target["path"]
+            if actual_path.is_file():
+                opaque_found = collect_opaque_paths(load_cordis_yaml(actual_path))
+    declared = {o["path"] for o in contract.get("opaque_paths", [])}
+    undeclared = sorted(set(opaque_found) - declared)
+    for p in undeclared:
+        findings.append((cordis_path_str, f"<opaque>{p}", "declared in contract", "undeclared"))
+    print(f"[metadata] opaque_paths ({len(opaque_found)}): "
+          + (", ".join(sorted(opaque_found)) if opaque_found else "none"))
 
     if not findings:
         print("NO DRIFT")

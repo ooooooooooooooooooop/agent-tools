@@ -1,0 +1,31 @@
+# governance-policy.yaml — 冻结的治理变更策略（Migration #7）
+# 原则：Observe → Detect → Explain → Propose → Verify。
+# 默认不做不可逆 canonical mutation；canonical 变更必须走既有治理契约。
+auto_allowed:
+  - runtime_inventory_refresh
+  - derived_report
+  - lint
+  - validation
+  - health_probe            # 低成本 reachability（不消耗付费模型）
+  - canary_cheap
+  - proposal_creation       # 只写 .evolution-inbox，不改 canonical
+  - stale_candidate_creation
+  - drift_detection
+  - derived_index_rebuild
+  - generated_artifact_refresh   # 仅限已有 deterministic contract 的 generated 态
+auto_forbidden:
+  - admit_model
+  - routing_enable_model
+  - delete_provider
+  - delete_plugin
+  - delete_canonical_memory
+  - hard_forget_memory
+  - modify_personal_identity
+  - modify_goals
+  - change_default_model
+  - change_fallback_policy
+  - rewrite_git_history
+identity_assessment_values: [consistent, suspicious, unknown]   # 禁止 verified_model / verification_confidence
+staleness_states: [HEALTHY, REVIEW, SUPERSEDE_CANDIDATE, ARCHIVE_CANDIDATE, UNKNOWN]
+dead_config_states: [ACTIVE, INACTIVE_KNOWN, DEAD_CANDIDATE, BROKEN, UNKNOWN]
+capability_drift_kinds: [registered_but_missing, installed_but_unregistered, broken_dependency, wrong_harness_scope, orphan, unexpected_activation]

@@ -21,6 +21,11 @@ render_targets:
       - {row: tool-subagent-fork, key: config.agentOptions.model, value_from: rules.subagent_fork.model}
       - {row: compaction-basic, key: config.summarizationProvider, value_from: rules.compaction_summary.provider}
       - {row: compaction-basic, key: config.summarizationModel, value_from: rules.compaction_summary.model}
+# AIC_OPAQUE_PATH_VISIBILITY（已关闭）：所有 cordis !!js opaque 字段必须显式登记于此。
+# 新增 opaque 而未登记 => aic diff dsh 报 <opaque> drift（silent growth 检测）。
+opaque_paths:
+  - {path: "[tool-bash].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
+  - {path: "[tool-pwsh].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
 out_of_scope:
   - "profiles/web/cordis.patch.yml 插件组合（harness 特有，属 overlay；Migration #5 再评估）"
   - "profiles/web/package.json bundles（部署组合）"
