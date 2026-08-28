@@ -1,6 +1,6 @@
 # 对抗式对齐审计派工单（闸门 1）
 
-> 用途：每 3 个 checkpoint 启动一次独立审计，防"自检即跑偏"。
+> 用途：闸门 1 触发事件命中时启动独立审计（objective 变更 / 关键假设证伪 / 不可逆高风险边界 / 多 worker 集成 / 证据冲突 / 连续无进展 / 重大架构决策 / 最终验收必跑），防"自检即跑偏"。
 > 硬约束：**只传 objective + 原始证据锚 + 产出物；禁止传任何摘要、work_memory、checkpoint 笔记。**
 > 执行：独立 `subagent(run_in_background: true)`，用最便宜档位；`job_output(job_id, wait=true, timeout_ms=60000)` 长轮询收取。
 

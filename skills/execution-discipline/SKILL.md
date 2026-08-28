@@ -1,7 +1,7 @@
 ---
 name: execution-discipline
 description: 在 DSH 长程/多工具会话中强制九条执行纪律，防止高频反模式重演：禁止无 wait 轮询、禁止把门禁拒绝当交付物抛回决策、外部研究先探测通道再极窄探针、探查派子代理不肉身 Read、子代理派发带进度回报协议、回合结束零悬挂收尾、上下文预算（回合合并+结果落盘）。用于接手长任务、等待子代理/后台任务、发起外部研究、收到 INVALID/FAIL/PARTIAL 门禁结果、收到"重复工具调用"系统警告、需要读取多个源码文件或大文件，以及任何需要"执行层不空转、不惊群、不绕门禁"的执行场景。不用于单轮小修改或无需持久化的临时问答。
-version: 0.2.1
+version: 0.3.0
 triggers:
   - "接手/恢复长任务（.taskflow、goal、跨轮委派）"
   - "接手/交接项目（先跑接手一致性门禁，见下文专用节）"
@@ -50,6 +50,86 @@ depends_on:
 3. **然后真正推进**：把诊断变成系统层改动（代码/门禁/机制）+ 回归测试 + 验证生效，而不是写报告或加文档规则。
 
 三连做完前**禁止**记 blocked/BLOCKED；只有无可用工具、无替代路径、无新增证据且达到预算才算确认阻塞。难度/不确定性不是阻塞理由。
+
+> 三连是 Recovery Ladder 的快速版；完整恢复路径、失败分类与停止裁决见下方「Recovery Ladder 与合法停止策略」（canonical，其他 Skill 的停止/恢复规则不得比它更宽松）。
+
+## 自主执行契约（Autonomy Execution Contract，canonical）
+
+所有执行类 Skill 共享同一运行语义。字段复用既有 artifact，**不新增第二套任务管理 SSOT**：
+
+```text
+INTENT                → goal objective / anchor.md Intent / 子代理契约 GOAL
+DONE-WHEN             → anchor Done-when / 契约 EXIT / 验收标准
+CRITICAL CONSTRAINTS  → anchor Critical Constraints / 契约 MUST PRESERVE·MUST NOT
+NON-GOALS             → anchor Scope.Exclude / 契约 OUT OF SCOPE
+AUTONOMY BOUNDARY     → clarify-before-change「意图解析策略」（什么必须问、什么自己定）
+CURRENT STATE         → checkpoint.md / task-state.json / work_memory
+NEXT BEST ACTION      → checkpoint 下一步（任何时刻有且仅有一个最优下一步）
+VALID STOP CONDITIONS → 本节「合法停止策略」
+```
+
+**规则优先级（EXECUTION_RULE_PRECEDENCE，冲突时按此裁决）**：
+
+```text
+Safety / 不可逆授权
+> 用户显式目标与约束
+> 合法停止策略（Valid Stop Policy）
+> 自主续接（"继续"= 已授权推进）
+> 流程便利（任何流程规则不得成为提前停止或反复澄清的理由）
+```
+
+## Progress Delta 与 No-Progress Governor（canonical）
+
+每个执行周期必须至少产生一种 **PROGRESS_DELTA**：
+
+```text
+DONE_CRITERION_CLOSED        闭合了一条 Done-when
+MEANINGFUL_MUTATION          有实质内容的写入/修改（空 touch、无效改动不算）
+BLOCKER_REMOVED              消除了一个通往 Done 的阻塞
+DECISION_RESOLVED            一个影响后续动作的决策被拍定
+NEW_ACTION_CHANGING_EVIDENCE 产生了改变下一动作的证据
+```
+
+以下**本身不算 progress**：重复读取、重复测试、再次总结、再次审计、生成没有决策作用的报告、同一搜索换措辞重复查询、再派一个 Agent 得到相同结论——除非它真正改变 next action 或 done state。
+
+**NO_PROGRESS_STREAK**：连续动作无 Progress Delta 时，不得继续同类动作。必须：①重读 original objective；②判断当前动作是否缩短 Distance-to-Done；③改变策略；④优先执行可逆的具体动作。
+
+**Retry 必须声明 WHAT_CHANGED**（query / tool / assumption / environment / implementation 至少一项变化）；没有任何变量变化 = 禁止 retry。不拿固定魔法轮次当唯一判定。
+
+**Distance-to-Done Guard**：任何新增工作项必须满足至少一条——A. 闭合 Done Criterion；B. 移除通往 Done 的阻塞；C. 是 A/B 的必要前置。否则归类 OUT_OF_PATH，默认不执行。特别拦截：顺手重构、顺手 benchmark、顺手补文档、顺手研究相关技术、顺手优化非阻塞组件、顺手扩展架构——除非它成为真实 blocker。
+
+## 证据充分即执行（EVIDENCE_SUFFICIENT，canonical）
+
+调查和规划只服务于下一步执行。当已具备 objective / current state / target location / 可逆下一步 时，**必须进入 EXEC**。PREP 的退出条件不是"研究完整"，而是 `enough evidence to safely choose next action`。"还能再查更多资料"不是继续研究的理由。验证动作遵循 decision-gates 的 VERIFICATION_PURPOSE 预算。
+
+## Recovery Ladder 与合法停止策略（canonical）
+
+**Recovery Ladder**（任何失败按此爬升，最后一步强制）：
+
+```text
+Diagnose → Narrow Reproduce → Inspect Local Evidence → Search External Evidence
+→ Alternate Route → Repair → Verify → RESUME ORIGINAL GOAL
+```
+
+修复子问题后**必须恢复** original objective 与被中断的 next action；禁止在子问题中无限优化（RECOVERY_WITHOUT_RESUME 是失败模式）。
+
+**网络/外部信息失败**不自动等于 BLOCKED。先分类：`SEARCH_ZERO_RESULT / PAGE_UNAVAILABLE / AUTH_REQUIRED / RATE_LIMIT / TOOL_FAILURE / SOURCE_CONFLICT / UNKNOWN_TERM`，依次自救：改 query → 官方/primary source → GitHub → docs → 替代检索通道 → CLI worker → 更窄探针 → 缓存/本地源。仅当确需信息经所有可用通道仍无法获得、且缺失会阻止下一步，才可升级阻塞。
+
+**工具失败一次不是 blocker**。先分类：transient / bad args / wrong tool / permission / auth / unsupported operation / environment / real system defect，选对应恢复路径。禁止同参数同工具反复调用。
+
+**合法停止策略（Valid Stop Policy）**——主任务只能因以下五类停止，定义必须机器/流程可审计：
+
+```text
+DONE                                              所有 DONE-WHEN 闭合且有验证证据
+TRUE_HUMAN_JUDGMENT_REQUIRED                      答案实质改变 objective/业务语义/互斥价值偏好，且无可自取证据通道
+IRREVERSIBLE_OR_HIGH_RISK_AUTHORIZATION_REQUIRED  删除/全局写入/凭据/权限/外部系统且无显式授权
+EXTERNAL_CAPABILITY_BLOCKER                       确需能力/信息经全部可用通道（替代工具/模型/本地缓存）确认不可得且阻止下一步
+VERIFIED_EXHAUSTION                               Recovery Ladder 全程走完且预算耗尽，附尝试清单
+```
+
+**以下不是合法停止（Invalid Stop Reasons）**：complex / uncertain / test failed / tool failed once / source not found once / library unfamiliar / another agent failed / context getting long / PARTIAL / gate failed / 模型一时解不出 / "建议后续继续" / "需要进一步研究"。这些只能触发 Recovery / Replan / Continue。
+
+**上下文逼近上限（CONTEXT_ANXIETY）不是停止理由**：必须 checkpoint → 持久化 current state → compact/reset → resume（利用 Project State / checkpoint / Memory / repair contract 恢复）。禁止因上下文变长主动降低目标、提前交付 partial、把剩余任务抛回用户。
 
 ### 铁律三：外部研究：先探测 → 极窄探针 → 单次接管（防惊群）
 

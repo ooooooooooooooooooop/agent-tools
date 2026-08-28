@@ -1,7 +1,7 @@
 ---
 name: subagent-execution-governance
 description: 把子代理派发从"监督型治理"升级为"契约型治理"：探查/实现/验证角色分离、契约快照（含负空间）、三级有界读取、单写者文件所有权、行动门槛替代轮次门槛、结构化 BLOCKED、token/工具/轮次预算、结构化结果回收与 repair-contract 恢复。用于派发实现型子代理（写代码/写文件类任务）、设计"谁读什么/谁写什么/何时算阻塞"的执行协议、审计子代理空转（反复探查不产出、并行写冲突、上下文膨胀）、或复盘"子代理烧了大量 token 却没产出"的会话。不用于纯问答、单轮小修改、或已有成熟任务流程的普通委派。
-version: 0.1.0
+version: 0.2.0
 triggers:
   - "派发实现型子代理（需要写文件/写代码的任务）"
   - "设计或评审子代理执行协议（读边界/写所有权/退出条件）"
@@ -113,7 +113,9 @@ DONE            完成，附验证证据
 FAILED          失败，附原因
 ```
 
-**没有 `STILL_EXPLORING` 状态。** 正常协议里几乎不存在"催促"——orchestrator 不靠"你做好了吗/赶紧实现/不要再读了"判断执行状态，而是看状态机与资源观测。
+**没有 `STILL_EXPLORING` 状态，也不存在无限期的 `STILL_RESEARCHING`。** 正常协议里几乎不存在"催促"——orchestrator 不靠"你做好了吗/赶紧实现/不要再读了"判断执行状态，而是看状态机与资源观测。
+
+**探查充分即停（EVIDENCE_SUFFICIENT）**：证据已足以安全选择下一动作时必须停止读取、进入 MUTATE 或结构化 BLOCKED；"还能再查更多"不是继续探查的理由。每个报告周期必须带 Progress Delta（DONE_CRITERION_CLOSED / MEANINGFUL_MUTATION / BLOCKER_REMOVED / DECISION_RESOLVED / NEW_ACTION_CHANGING_EVIDENCE，见 execution-discipline）；无 delta 的重复读取/重复测试不算进展。
 
 空转判定（替代"催两次就判空转"）：连续 K 个有效动作窗口内 `mutation_count = 0` 且 `discovery_budget` 耗尽 → 自动判定 `STALLED`，由 watchdog（观测通道）触发，不是人工催促。
 
@@ -133,26 +135,33 @@ FAILED          失败，附原因
 
 ## 七、结构化 BLOCKED（防止"无限问主代理"）
 
-BLOCKED 必须是结构化异常，不是自然语言求助：
+BLOCKED 必须是结构化异常，不是自然语言求助。**有效性门禁：缺任一关键字段 = `BLOCKED_INVALID`，orchestrator 不接受停止**：
 
 ```text
 BLOCKED:
-  missing_fact:      FooService.create() 的返回类型
-  why_required:      当前实现需要决定错误处理分支
-  already_checked:   [src/foo.ts, src/types.ts]
-  requested_context: [FooService interface 定义]
+  blocked_reason:                一句话阻塞原因
+  why_it_blocks_done:            为什么它阻止 Done Criterion 闭合
+  evidence:                      已收集的证据（含已查文件/命令/输出）
+  recovery_steps_attempted:      已尝试的恢复步骤（Diagnose/Reproduce/Local/Search/...）
+  alternative_routes_attempted:  已尝试的替代路径（换工具/换通道/换假设）
+  what_external_fact_is_missing: 缺失的外部事实（精确到签名/字段/配置项）
+  why_agent_cannot_obtain_it:    为什么自己无法获得（所有可用通道均已排除的证据）
+
+# 兼容简写：missing_fact≈what_external_fact_is_missing，why_required≈why_it_blocks_done，
+# already_checked≈evidence，requested_context≈希望 orchestrator 补充的上下文
 ```
 
-orchestrator 收到后四选一应答：
+orchestrator 收到 BLOCKED 后，**先按五级阶梯自行解决，不得直接转发用户**：
 
 ```text
-A. 自己回答（把缺失信息补进契约）
-B. 派一个 discovery probe（极窄只读查询）
-C. 修改契约（任务设计错误）
-D. 判定任务设计错误 → 终止并重设计
+1. 自己补 context（把缺失信息补进契约 / 直接回答）
+2. 派 narrow discovery probe（极窄只读查询）
+3. 换 alternate tool / channel / model
+4. 创建 repair contract（只处理失败点）
+5. 修订本地执行计划（任务设计错误 → 终止并重设计）
 ```
 
-**禁止**随手回 `send_message("继续看看")`。
+五级阶梯走完且符合 execution-discipline「合法停止策略」五类之一，才可向用户报告；否则继续推进。**禁止**随手回 `send_message("继续看看")`。
 
 ## 八、资源预算（必须存在且可观测）
 

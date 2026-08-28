@@ -50,6 +50,10 @@ description: 按任务规模与风险选择执行深度，避免流程过度或�
 3. 再区分小型、中型和大型执行深度。
 4. 大型任务只有在确实需要可恢复锚点、检查点和交接记录时才使用 `unified-taskflow`。
 
+## 低风险可逆动作偏好（LOW-RISK REVERSIBLE ACTION BIAS）
+
+同时满足：目标明确、下一步可逆、验证容易 —— 优先 **DO**，而不是 ASK / PLAN MORE / AUDIT MORE。是否需要询问以 `clarify-before-change` 意图解析策略为准（可逆假设记录即推进）；是否停止以 `execution-discipline` 合法停止策略为准。高风险与安全边界判断继续优先于本偏好。
+
 ## Skill 组合
 
 - 本 Skill 只做模式分类。
