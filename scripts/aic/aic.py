@@ -147,6 +147,9 @@ def deep_diff(expected, actual, path: str, out: list):
 
 
 def cmd_render(args) -> int:
+    if args.target != "dsh":
+        print(yaml.safe_dump(render_harness(args.target), allow_unicode=True, sort_keys=False))
+        return 0
     canonical = load_canonical()
     overlay = adapter_overlay()
     expected = render_settings(canonical, overlay)
@@ -162,6 +165,17 @@ def cmd_render(args) -> int:
 
 
 def cmd_diff(args) -> int:
+    if args.target != "dsh":
+        rows = diff_harness(args.target)
+        bad = [r for r in rows if not r["ok"]]
+        if not bad:
+            print("NO DRIFT")
+            return 0
+        print("DRIFT detected:")
+        for r in bad:
+            print(f"  file={r['file']}\n    field={r['field']}\n"
+                  f"    expected={r['expected']!r}\n    actual={r['actual']!r}")
+        return 1
     canonical = load_canonical()
     overlay = adapter_overlay()
     contract = adapter_contract()
@@ -243,6 +257,26 @@ def cmd_validate(_args) -> int:
                 resolve_value_from(canonical["policy"], check["value_from"])
     except Exception as exc:  # noqa: BLE001 - report as validation error
         errors.append(f"harnesses/dsh.yaml: unresolvable value_from: {exc}")
+
+    # Migration #5: multi-harness contract validation
+    admitted_ids = {m["id"] for m in models}
+    pgw = load_private_gateways()
+    for hname in ("codex", "claude", "gemini", "switchboard"):
+        try:
+            hc = harness_contract(hname)
+            for field in ("render_targets", "overlay", "static_instructions",
+                          "runtime_context_hook", "health_check", "consumes"):
+                if field not in hc:
+                    errors.append(f"harnesses/{hname}.yaml: missing contract field '{field}'")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"harnesses/{hname}.yaml: unreadable: {exc}")
+            continue
+        for target in hc.get("render_targets", []):
+            for fspec in target.get("generated_fields", []):
+                try:
+                    resolve_expected(fspec, canonical, hc, pgw)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"harnesses/{hname}.yaml: unresolvable {fspec.get('path')}: {exc}")
 
     if errors:
         print("INVALID:")
@@ -372,6 +406,154 @@ def cmd_discover(_args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- generic harness adapters (Migration #5)
+# render/diff for codex/claude/gemini/switchboard. Field-level projection only:
+# aic renders the GENERATED field projection; overlay/runtime/secret stay
+# user-owned. TARGET BEHAVIOR = CURRENT BEHAVIOR (diff must be NO DRIFT).
+
+PRIVATE_STATE = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
+INSTRUCTION_SYNC_GROUP = ("codex", "claude", "gemini")
+
+
+def load_private_gateways() -> dict:
+    p = PRIVATE_STATE / "registry" / "gateways.yaml"
+    return load_yaml(p) if p.is_file() else {"gateways": {}}
+
+
+def harness_contract(name: str) -> dict:
+    return load_yaml(REG / "harnesses" / f"{name}.yaml")
+
+
+def _dig(node, dotted: str):
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def resolve_expected(spec: dict, canonical: dict, harness: dict, pgw: dict):
+    src = spec["source"]
+    if src == "literal":
+        return spec.get("value")
+    if src == "harness_defaults.model":
+        return harness.get("harness_defaults", {}).get("model")
+    if src == "harness_defaults.model_alias":
+        return harness.get("harness_defaults", {}).get("model_alias")
+    if src == "capabilities.mcp_standard":
+        caps = load_yaml(REG / "capabilities.yaml")
+        return set(caps["capabilities"]["mcp_standard"].keys())
+    if src.startswith("gateways."):
+        rest = src[len("gateways."):]
+        if rest.endswith(".listen_url"):
+            return "http://" + pgw["gateways"][rest[:-len(".listen_url")]]["listen"]
+        if rest.endswith(".alias_map"):
+            amap = pgw["gateways"][rest[:-len(".alias_map")]]["alias_map"]
+            return amap[spec["key"]] if spec.get("side") == "actual" else spec["key"]
+    if src == "routing-policy.broker_preferences":
+        return {k: v for k, v in canonical["policy"]["rules"]["broker_preferences"].items()
+                if k != "evidence"}
+    if src.startswith("models.admitted"):
+        provider = src[src.find("provider=") + 9:].rstrip(")")
+        return {m["id"].split("/", 1)[1] for m in canonical["models"]["models"]
+                if m["id"].startswith(provider + "/")}
+    raise ValueError(f"unknown source: {src}")
+
+
+def compare_field(mode: str, expected, actual) -> bool:
+    if mode == "exact":
+        return expected == actual
+    if mode == "superset_keys":
+        return isinstance(actual, dict) and set(actual.keys()) >= set(expected)
+    if mode == "subset":
+        return isinstance(actual, list) and set(actual) <= set(expected)
+    if mode == "exact_subset_map":
+        return isinstance(actual, dict) and all(
+            actual.get(k) == v for k, v in expected.items())
+    raise ValueError(f"unknown mode: {mode}")
+
+
+def diff_harness(name: str) -> list:
+    canonical = load_canonical()
+    harness = harness_contract(name)
+    pgw = load_private_gateways()
+    base = Path.home() / harness["home"]
+    rows = []
+    for target in harness.get("render_targets", []):
+        fname = target["file"]
+        path = base / fname
+        check = target.get("check")
+        if check:
+            mode = check["mode"]
+            if mode == "exists":
+                rows.append({"file": fname, "field": "<exists>", "expected": "present",
+                             "actual": "present" if path.is_file() else "MISSING",
+                             "ok": path.is_file()})
+            elif mode == "managed_block_marker":
+                text = path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+                ok = check["marker"] in text
+                rows.append({"file": fname, "field": "<managed-block>",
+                             "expected": check["marker"],
+                             "actual": "present" if ok else "MISSING", "ok": ok})
+            continue
+        data = None
+        if path.is_file():
+            fmt = target.get("format")
+            if fmt == "json":
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+            elif fmt == "toml":
+                import tomllib
+                data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        if data is None:
+            rows.append({"file": fname, "field": "<file>", "expected": "present",
+                         "actual": "MISSING", "ok": False})
+            continue
+        for fspec in target.get("generated_fields", []):
+            expected = resolve_expected(fspec, canonical, harness, pgw)
+            actual = _dig(data, fspec["path"])
+            mode = fspec.get("mode", "exact")
+            ok = compare_field(mode, expected, actual)
+            rows.append({"file": fname, "field": fspec["path"],
+                         "expected": sorted(expected) if isinstance(expected, (set, list)) else expected,
+                         "actual": actual if not isinstance(actual, dict) else sorted(actual.keys()),
+                         "ok": ok})
+    # instruction sync-group check (codex/claude/gemini must stay identical)
+    if name in INSTRUCTION_SYNC_GROUP:
+        import hashlib
+        hashes = {}
+        for other in INSTRUCTION_SYNC_GROUP:
+            oh = harness_contract(other)
+            instr = [t for t in oh.get("render_targets", [])
+                     if t.get("kind") == "instruction"]
+            if instr:
+                p = Path.home() / oh["home"] / instr[0]["file"]
+                hashes[other] = hashlib.sha256(p.read_bytes()).hexdigest()[:12] if p.is_file() else "MISSING"
+        ok = len(set(hashes.values())) == 1
+        rows.append({"file": "instructions", "field": "<sync-group>",
+                     "expected": "identical across codex/claude/gemini",
+                     "actual": json.dumps(hashes), "ok": ok})
+    return rows
+
+
+def render_harness(name: str) -> dict:
+    canonical = load_canonical()
+    harness = harness_contract(name)
+    pgw = load_private_gateways()
+    projection = {"harness": name, "home": harness["home"], "targets": []}
+    for target in harness.get("render_targets", []):
+        entry = {"file": target["file"]}
+        if target.get("check"):
+            entry["check"] = target["check"]["mode"]
+            entry["owner"] = target.get("owner", "user")
+        else:
+            entry["generated"] = {f["path"]: (sorted(v) if isinstance(v := resolve_expected(
+                f, canonical, harness, pgw), (set, list)) else v)
+                for f in target.get("generated_fields", [])}
+            entry["overlay"] = "preserved (not rendered)"
+        projection["targets"].append(entry)
+    return projection
+
+
 # ---------------------------------------------------------------- governance (Track A)
 
 def cmd_propose_admissions(_args) -> int:
@@ -426,10 +608,10 @@ def main() -> int:
     p_disc = sub.add_parser("discover")
     p_disc.add_argument("--propose-admissions", action="store_true")
     p_render = sub.add_parser("render")
-    p_render.add_argument("target", choices=["dsh"])
+    p_render.add_argument("target", choices=["dsh", "codex", "claude", "gemini", "switchboard"])
     p_render.add_argument("--out")
     p_diff = sub.add_parser("diff")
-    p_diff.add_argument("target", choices=["dsh"])
+    p_diff.add_argument("target", choices=["dsh", "codex", "claude", "gemini", "switchboard"])
     sub.add_parser("validate")
 
     for name in ("apply", "bootstrap"):

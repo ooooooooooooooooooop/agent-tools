@@ -1,0 +1,43 @@
+# codex.yaml — Codex harness adapter contract（canonical）
+harness: codex
+home: ".codex"
+version_observed: "codex-cli 0.149.0-alpha.4.1 (bin 110b3d66a02d864e)"
+
+consumes:
+  - registry/capabilities.yaml        # 标准 MCP 能力集
+  - registry/models.yaml              # 准入校验（default model 须在 admitted catalog）
+  - personal-ai-state:static          # 静态指令（见 static_instructions）
+
+render_targets:
+  - file: config.toml
+    format: toml
+    generated_fields:
+      - {path: "model", source: "harness_defaults.model", mode: exact}
+      - {path: "mcp_servers", source: "capabilities.mcp_standard", mode: superset_keys}
+    note: "node_repl / agent_switchboard / plugins / desktop / windows / marketplaces / projects / notify = OVERLAY/MACHINE_LOCAL，render 保留、不生成"
+  - file: AGENTS.md
+    kind: instruction
+    owner: agent-switchboard          # GENERATED，但由 switchboard 管理（cost-routing managed block），aic 不渲染
+    check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
+
+harness_defaults:
+  model: gpt-5.6-luna                 # 须在 models.yaml admitted catalog（validate 校验）
+  model_provider_block: "Codex 自有 OpenAI 认证路径（requires_openai_auth），非 cpa 网关 → 属 harness 认证现实，不入 canonical providers"
+
+overlay:
+  - "config.toml: sandbox/windows/features/desktop/notify/plugins/marketplaces/projects/trust_level"
+  - "skills/ agents/ plugins/（harness 自有扩展）"
+
+static_instructions:
+  file: AGENTS.md
+  owner: agent-switchboard
+  legality: "execution policy / cost routing 硬约束 — 无动态状态（2026-08-28 审计）"
+
+runtime_context_hook:
+  mechanism: "session-start injection（无原生动态 hook；由编排方在 prompt 首帧注入 Context Package）"
+  constraint: "禁止把 Context Package 写入 AGENTS.md（static）"
+
+health_check: "codex.exe --version 可执行（bin 路径为 MACHINE_LOCAL，当前 broker config codex_path 已漂移过期 — 见报告）"
+
+runtime_state: "sessions/ *.sqlite logs/ models_cache.json thread-writer-locks/ — 永不入 canonical"
+secret: "auth.json（ChatGPT OAuth）— 永不入 canonical"

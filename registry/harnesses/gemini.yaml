@@ -1,0 +1,37 @@
+# gemini.yaml — Gemini CLI harness adapter contract（canonical）
+harness: gemini
+home: ".gemini"
+
+consumes:
+  - registry/capabilities.yaml
+  - personal-ai-state:static
+
+render_targets:
+  - file: settings.json
+    format: json
+    generated_fields:
+      - {path: "mcpServers", source: "capabilities.mcp_standard", mode: superset_keys}
+    note: "security.auth.selectedType=oauth-personal = OVERLAY"
+  - file: GEMINI.md
+    kind: instruction
+    owner: agent-switchboard
+    check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
+  - file: .env
+    kind: secret-container
+    check: {mode: exists}           # 只查存在性；secret 值永不入 canonical
+
+overlay:
+  - "settings.json: security/auth"
+
+static_instructions:
+  file: GEMINI.md
+  owner: agent-switchboard
+  legality: "execution policy — 无动态状态（2026-08-28 审计）"
+
+runtime_context_hook:
+  mechanism: "session-start injection（未发现原生动态 hook；编排方首帧注入）"
+  constraint: "禁止把动态状态写入 GEMINI.md"
+
+health_check: "gemini CLI 可用性由调用方探测（adapter 不硬编码路径）"
+runtime_state: "（oauth 凭据由 CLI 自管，不在 ~/.gemini 明文目录）"
+secret: ".env — 值永不入 canonical（当前为空文件）"
