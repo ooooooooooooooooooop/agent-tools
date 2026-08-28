@@ -1,15 +1,13 @@
-# gateways.yaml — 本地网关清单（canonical；PHASE-2 过渡位置，终态归 personal-ai-state，见 FREEZE_NOTES）
-# 内容纪律：禁止 secret、禁止设备绝对路径（设备细节进 generated inventory）。
+# gateways.yaml — 本地网关 TEMPLATE/EXAMPLE（公开 schema 面 · 非 SSOT）
+# SSOT 说明：真实私人 gateway alias/mapping 的唯一 canonical 在 personal-ai-state
+# 私有仓库 registry/gateways.yaml（本机路径由运行时按 ~/personal-ai-state 解析）。
+# 本文件仅提供 schema + 示例值；任何 generated copy 不得被误认为 canonical。
 gateways:
-  cpa:
-    process: cli-proxy-api.exe
-    listen: "127.0.0.1:8317"
-    kind: openai-compat relay（EasyCLIProxyAPI 包装）
-    serves: "DSH provider 'cpa'、agent-switchboard cli_backends/providers"
-    alias_behavior: "无（透传模型名）"
-  cc-switch:
-    process: cc-switch.exe
-    listen: "127.0.0.1:15721"
-    kind: claude-code proxy / provider switcher
-    serves: "Claude Code（~/.claude/settings.json env 指向）"
-    alias_behavior: "存在 claude-* → 实际模型的 alias 映射；V2.1 要求显式化，属 Claude adapter（Migration #5）"
+  example-gateway:
+    process: example.exe
+    listen: "127.0.0.1:PORT"
+    kind: openai-compat relay | claude-code proxy | ...
+    serves: "哪些 harness/provider 经此网关"
+    alias_behavior: "无（透传） | 显式 alias 映射"
+    alias_map: {}   # 示例：{"<显示模型名>": "<实际模型名>"}
+    note: "alias 场景必须走 model-identity-trace.schema.yaml 四段身份链核对"

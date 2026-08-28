@@ -372,6 +372,46 @@ def cmd_discover(_args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- governance (Track A)
+
+def cmd_propose_admissions(_args) -> int:
+    """Diff latest discovered inventory vs admitted catalog -> proposal (generated).
+
+    Never writes to models.yaml: promotion to Admitted is a human/policy act.
+    """
+    canonical = load_canonical()
+    admitted_ids = {m["id"] for m in canonical["models"]["models"]}
+    discovered_files = sorted(INV.glob("discovered-models-*.json"))
+    if not discovered_files:
+        print("no discovered inventory; run `aic discover` first")
+        return 2
+    latest = discovered_files[-1]
+    discovered = json.loads(latest.read_text(encoding="utf-8"))
+    pending = [m["id"] for m in discovered.get("models", []) if m["id"] not in admitted_ids]
+    known = [m["id"] for m in discovered.get("models", []) if m["id"] in admitted_ids]
+    proposal = INV / f"admission-proposal-{_dt.date.today().isoformat()}.md"
+    lines = [
+        f"# Admission Proposal {_dt.date.today().isoformat()} (generated, NOT canonical)",
+        "",
+        f"- source inventory: {latest.name} (stage: discovered/reachable)",
+        f"- admitted catalog: {len(admitted_ids)} models (registry/models.yaml)",
+        f"- already admitted & discovered: {len(known)}",
+        f"- pending discovery-only: {len(pending)}",
+        "",
+        "## Pending (Discovered, NOT Admitted — require human admission decision)",
+        "",
+    ]
+    lines += [f"- [ ] `{m}`" for m in pending]
+    lines += ["", "## Pipeline reminder", "",
+              "Discovered ≠ Reachable ≠ Health-checked ≠ Admitted ≠ Routing-enabled.",
+              "Health-checked requires runtime canary evidence (not an aic/LLM concern).",
+              "Edit registry/models.yaml manually to admit; aic never auto-admits."]
+    proposal.write_text("\n".join(lines), encoding="utf-8")
+    print(f"admitted={len(admitted_ids)} discovered={len(discovered.get('models', []))} "
+          f"pending={len(pending)} -> {proposal}")
+    return 0
+
+
 # ---------------------------------------------------------------- stubs (contract only)
 
 def cmd_not_implemented(args) -> int:
@@ -383,19 +423,24 @@ def cmd_not_implemented(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="aic", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("discover")
+    p_disc = sub.add_parser("discover")
+    p_disc.add_argument("--propose-admissions", action="store_true")
     p_render = sub.add_parser("render")
     p_render.add_argument("target", choices=["dsh"])
     p_render.add_argument("--out")
     p_diff = sub.add_parser("diff")
     p_diff.add_argument("target", choices=["dsh"])
     sub.add_parser("validate")
+
     for name in ("apply", "bootstrap"):
         sub.add_parser(name)
     args = parser.parse_args()
 
     if args.command == "discover":
-        return cmd_discover(args)
+        rc = cmd_discover(args)
+        if rc == 0 and getattr(args, "propose_admissions", False):
+            return cmd_propose_admissions(args)
+        return rc
     if args.command == "render":
         return cmd_render(args)
     if args.command == "diff":

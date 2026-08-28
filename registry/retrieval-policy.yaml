@@ -1,0 +1,12 @@
+# retrieval-policy.yaml — 检索策略配置（canonical 配置面 · Control Plane 管配置，Runtime 执行）
+# 归属：Context Builder/MemoryProvider 的运行参数；aic 不调用 MemoryProvider、不承担 runtime retrieval。
+retrieval:
+  budget_chars_default: 4000
+  scope_chain: ["project:<task-project>", "personal", "global"]
+  derived_score:
+    # 查询时派生，永不落盘；权重之和=1.0
+    weights: {retention_prior: 0.4, recency: 0.2, relevance: 0.4}
+    retention_prior: {keep: 1.0, review: 0.6, disposable: 0.2}
+    recency_half_life_days: 30
+  injection:
+    subagents: "never direct provider query; main agent injects package subset honoring access_policy.inject"
