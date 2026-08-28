@@ -314,8 +314,8 @@
     {
       "name": "publish-and-reuse",
       "path": "./skills/publish-and-reuse",
-      "version": "1.0.0",
-      "description": "完整发布与跨设备复现的一体化流程：一键发布门禁、三平面同步、新设备安装/更新 SOP，agent 自动加载即可执行，无需用户逐步教学",
+      "version": "2.0.0",
+      "description": "Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下”自动判断 PULL/PUSH/MERGE/NO ACTION，含 Fresh Restore；保留 DSH 四层环境上传/更新/体检作为子步骤",
       "lang": [
         "zh"
       ],
