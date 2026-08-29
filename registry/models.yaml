@@ -33,6 +33,15 @@ models:
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    # CPA alias -> OpenAI gpt-5.6-sol with reasoning.effort=xhigh; official API model capacity.
+    contextWindow: 1050000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+      upstreamModel: gpt-5.6-sol
+      contextWindow: 1050000
+      maxOutputTokens: 128000
+      retrieved: "2026-08-29"
     roles: []
   - id: claude-sonnet-4-6
     provider: cpa

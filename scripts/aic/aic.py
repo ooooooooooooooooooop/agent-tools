@@ -93,9 +93,19 @@ def resolve_value_from(policy: dict, dotted: str):
 
 def render_settings(canonical: dict, overlay: dict) -> dict:
     md = canonical["policy"]["rules"]["main_default"]
+    providers = canonical["providers"]["providers"]
+    models = canonical["models"]["models"]
+    rendered_providers = json.loads(json.dumps(providers))
+    capacities = {(m["provider"], m["id"]): m["contextWindow"]
+                  for m in models if "contextWindow" in m}
+    for provider, pdef in rendered_providers.items():
+        for model in pdef.get("models", []) or []:
+            context_window = capacities.get((provider, model["id"]))
+            if context_window is not None:
+                model["contextWindow"] = context_window
     out = {}
     out.update(overlay["overlay"]["settings"])  # ui-onboarding, agent-presets
-    out["llm-pi-ai"] = {"providers": canonical["providers"]["providers"]}
+    out["llm-pi-ai"] = {"providers": rendered_providers}
     out["agent-default-model"] = {
         k: md[k] for k in ("provider", "model", "reasoningEffort") if k in md
     }
