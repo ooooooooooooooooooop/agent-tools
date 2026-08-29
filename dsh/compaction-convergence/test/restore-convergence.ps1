@@ -1,27 +1,40 @@
-# Rollback the dsh-compaction-convergence overlay: restore the pristine upstream
-# package captured at install time. Idempotent; no-op if no backup exists.
+# Restore the pristine configuration: remove the profile-local overlay fork, the
+# patch overlay row, and the dependency junction created by install-convergence.ps1.
+# Idempotent; no-op when overlay is not installed.
 param(
   [string]$Checkout = ""
 )
 $ErrorActionPreference = "Stop"
-$repo = Split-Path -Parent $PSScriptRoot
-$backupDir = Join-Path $repo ".dsh-convergence-backup\dsh-compaction-basic-upstream"
+$profileRoot = Join-Path $env:USERPROFILE ".dsh\profiles\web"
+$forkDest = Join-Path $profileRoot "plugins\dsh-compaction-convergence"
+$patch = Join-Path $profileRoot "cordis.patch.yml"
+$bak = Join-Path $profileRoot "cordis.patch.yml.dsh-conv.bak"
 
-if (-not $Checkout) {
-  $candidates = Get-ChildItem "$env:LOCALAPPDATA\npm-cache\_npx\*\node_modules\@deepseek-ai\dsh\package.json" -ErrorAction SilentlyContinue |
-    ForEach-Object { Split-Path (Split-Path (Split-Path $_.FullName -Parent) -Parent) -Parent }
-  $Checkout = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+# 1) fork directory
+if (Test-Path $forkDest) {
+  Remove-Item -Recurse -Force $forkDest
+  Write-Host "removed profile fork $forkDest"
+} else {
+  Write-Host "no profile fork present"
 }
-if (-not $Checkout -or -not (Test-Path (Join-Path $Checkout "node_modules\@deepseek-ai\dsh\package.json"))) {
-  throw "DSH checkout not found; pass -Checkout explicitly"
+
+# 2) patch overlay row — strip the overlay block. The .dsh-conv.bak snapshot is kept
+#    as an extra safety copy but is NOT blindly restored: it predates manual fixes.
+$content = Get-Content $patch -Raw -Encoding UTF8
+$content = [regex]::Replace(
+  $content,
+  '(?ms)# DSH compaction-convergence overlay.*?maxOverflowRetries: 2\r?\n',
+  ''
+)
+[System.IO.File]::WriteAllText($patch, $content)
+Write-Host "stripped overlay block from cordis.patch.yml"
+
+# 3) dependency junction (only remove if it points at the checkout scoped dir)
+$link = Join-Path $profileRoot "node_modules\@deepseek-ai"
+if (Test-Path $link) {
+  $item = Get-Item $link -Force
+  if ($item.LinkType -eq "Junction") { Remove-Item -Force $link; Write-Host "removed dependency junction" }
+  else { Write-Host "left @deepseek-ai directory untouched (not a junction)" }
 }
-$target = Join-Path $Checkout "node_modules\@deepseek-ai\dsh-compaction-basic"
-if (-not (Test-Path (Join-Path $backupDir "package.json"))) {
-  throw "no upstream backup found at $backupDir — nothing to restore"
-}
-Remove-Item -Recurse -Force (Join-Path $target "*")
-Copy-Item -Recurse -Force (Join-Path $backupDir "*") $target
-$markerPath = Join-Path $target ".dsh-convergence.json"
-if (Test-Path $markerPath) { Remove-Item -Force $markerPath }
-Write-Host "restored upstream dsh-compaction-basic from $backupDir"
-Write-Host "NOTE: restart the DSH host process (web GUI) to load the upstream module again."
+
+Write-Host "NOTE: restart the DSH GUI process to reload the upstream module."

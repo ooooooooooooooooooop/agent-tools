@@ -10,15 +10,17 @@ import fs from 'node:fs';
 const CHECK = process.env.DSH_CHECKOUT;
 if (!CHECK) throw new Error('DSH_CHECKOUT must be set');
 const checkout = path.join(CHECK, 'node_modules', '@deepseek-ai');
+const profile = path.join(process.env.USERPROFILE, '.dsh', 'profiles', 'web');
+const forkDir = path.join(profile, 'plugins', 'dsh-compaction-convergence');
 
-const pkgPath = path.join(checkout, 'dsh-compaction-basic', 'package.json');
+const pkgPath = path.join(forkDir, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-const markerPath = path.join(checkout, 'dsh-compaction-basic', '.dsh-convergence.json');
+const markerPath = path.join(forkDir, 'lib', '.dsh-convergence.json');
 const marker = fs.existsSync(markerPath) ? JSON.parse(fs.readFileSync(markerPath, 'utf8')) : null;
-const libHash = await import('node:crypto').then((c) => c.createHash('sha256').update(fs.readFileSync(path.join(checkout, 'dsh-compaction-basic', 'lib', 'index.js'))).digest('hex'));
+const libHash = await import('node:crypto').then((c) => c.createHash('sha256').update(fs.readFileSync(path.join(forkDir, 'lib', 'index.js'))).digest('hex'));
 
 const compactionMod = await import(pathToFileURL(path.join(checkout, 'dsh-compaction', 'lib', 'index.js')).href);
-const deployed = await import(pathToFileURL(path.join(checkout, 'dsh-compaction-basic', 'lib', 'index.js')).href);
+const deployed = await import(pathToFileURL(path.join(forkDir, 'lib', 'index.js')).href);
 const { toolPairingBalancedBefore } = compactionMod;
 const { selectCompactableRange, BasicCompactionEngine, isSummaryNotSmallerError } = deployed;
 
