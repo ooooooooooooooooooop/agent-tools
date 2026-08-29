@@ -175,6 +175,23 @@ class FixtureHomeTest(unittest.TestCase):
 class TestDshApply(unittest.TestCase):
     """DSH full-file / cordis 外科手术 apply（fixture DSH_HOME）。"""
 
+    def test_render_projects_canonical_model_capacity(self):
+        canonical = aic.load_canonical()
+        admitted = next(m for m in canonical["models"]["models"]
+                        if m["provider"] == "cpa" and m["id"] == "gpt-5.6-sol-xhigh")
+        evidence = admitted["capacityEvidence"]
+        self.assertEqual(evidence["grade"], "authoritative")
+        self.assertEqual(evidence["upstreamModel"], "gpt-5.6-sol")
+        self.assertEqual(evidence["contextWindow"], admitted["contextWindow"])
+        self.assertIn("developers.openai.com/api/docs/models/gpt-5.6-sol", evidence["source"])
+        rendered = aic.render_settings(canonical, aic.adapter_overlay())
+        models = rendered["llm-pi-ai"]["providers"]["cpa"]["models"]
+        sol = next(m for m in models if m["id"] == "gpt-5.6-sol-xhigh")
+        self.assertEqual(sol["contextWindow"], 1050000)
+        self.assertEqual(500000 >= int(sol["contextWindow"] * 0.80), False)
+        self.assertEqual(int(sol["contextWindow"] * 0.80), 840000)
+        self.assertEqual(int(sol["contextWindow"] * 0.16), 168000)
+
     def setUp(self):
         self.td_obj = tempfile.TemporaryDirectory()
         self.home = Path(self.td_obj.name)
