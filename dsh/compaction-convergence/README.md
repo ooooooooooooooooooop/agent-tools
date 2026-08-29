@@ -23,18 +23,27 @@ Fixes (see `REPORT.md`):
 
 Entry point: `test/guard-convergence.ps1` (idempotent; safe as part of bootstrap/lifecycle).
 
+Deployment shape (survives GUI restarts, which rebuild the npm-cache checkout):
+- fork lives in `~/.dsh/profiles/web/plugins/dsh-compaction-convergence` (profile-owned)
+- loader overlay row uses its own id `compaction-basic-convergence` pointing at
+  `./plugins/dsh-compaction-convergence/lib/index.js` (explicit file target; the upstream
+  `compaction-basic` host row stays `disabled: true`)
+- dependency resolution reuses the checkout's `@deepseek-ai/*` scope through the profile
+  node_modules chain (junction fallback, rebuilt idempotently)
+
 Verdicts:
-- `VERIFY` (exit 0) — affected version already patched; module version, lib SHA-256 and
-  checkout marker all match.
+- `VERIFY` (exit 0) — affected version already patched; module version, lib SHA-256, marker,
+  patch wiring and dependency resolution all match.
 - `APPLY` (exit 1) — affected version `0.1.1-rc.2` without overlay; installer ran, rerun to VERIFY.
 - `NOT_REQUIRED` (exit 0) — running version differs and upstream already contains both fixes
   (checkpoint-aware selection + pressure convergence).
 - `REVIEW` (exit 2) — running version differs and compatibility cannot be proven; do not patch blindly.
 
 Guarantees:
-- Idempotent install (`install-convergence.ps1` backs up the pristine upstream once; interruption
-  recovery restores before continuing).
-- Rollback: `restore-convergence.ps1` (removes checkout marker, restores upstream, hash-verified).
+- Idempotent install (`install-convergence.ps1` copies the fork into the profile, wires the
+  loader row exactly once, and re-creates the dependency junction only when resolution fails).
+- Rollback: `restore-convergence.ps1` removes the profile fork, strips the overlay block from
+  `cordis.patch.yml`, and removes the junction (hash-verified).
 - Canonical source lives here; the npm cache is never edited by hand — only scripted overlay.
 - No secrets involved (no credentials, keys, or session data in this directory).
 - After install or restore, restart the DSH GUI process so the running process loads the new module.
