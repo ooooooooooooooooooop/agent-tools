@@ -126,6 +126,16 @@ def validate_contract(contract: dict[str, Any]) -> list[str]:
             errors.append(f"missing UI patch asset: {patch}")
         elif sha256_portable_file(patch) != ui["patch_sha256"]:
             errors.append(f"UI patch SHA-256 mismatch: {patch}")
+        build_patch_name = ui.get("build_patch_file")
+        build_patch_sha = ui.get("build_patch_sha256")
+        if not build_patch_name or not build_patch_sha:
+            errors.append("runtime_composition.ui must declare build_patch_file and build_patch_sha256")
+        else:
+            build_patch = ROOT / build_patch_name
+            if not build_patch.is_file():
+                errors.append(f"missing UI build patch asset: {build_patch}")
+            elif sha256_portable_file(build_patch) != build_patch_sha:
+                errors.append(f"UI build patch SHA-256 mismatch: {build_patch}")
         if not profile.get("patch_file") or not profile.get("manifest_file"):
             errors.append("runtime_composition.profile must declare patch_file and manifest_file")
         plugins = cfg["managed_rows"]["plugins"]
@@ -441,6 +451,12 @@ def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str
     if ref != fix:
         _run(["git", "apply", "--check", str(patch)], cwd=worktree, timeout=30)
         _run(["git", "apply", str(patch)], cwd=worktree, timeout=30)
+    build_patch_name = ui_cfg.get("build_patch_file")
+    if build_patch_name:
+        build_patch = ROOT / build_patch_name
+        _run(["git", "apply", "--check", str(build_patch)], cwd=worktree, timeout=30)
+        _run(["git", "apply", str(build_patch)], cwd=worktree, timeout=30)
+        source_state = f"{source_state}+build-patch:{ui_cfg['build_patch_sha256']}"
 
     def cleanup() -> None:
         try:
@@ -750,6 +766,10 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
                 _verify_ui_source_state(Path(configured_source), ui_cfg)
             except DshCompositionError as exc:
                 finding("SOURCE_DRIFT", "ui.source", ui_cfg["fix_commit"], str(exc))
+        build_patch_sha = ui_cfg.get("build_patch_sha256")
+        source_state = str(manifest.get("ui", {}).get("sourceState", ""))
+        if build_patch_sha and not source_state.endswith(f"+build-patch:{build_patch_sha}"):
+            finding("CONFIG_DRIFT", "ui.build-patch", f"applied:{build_patch_sha}", source_state or "missing")
         payload = {k: v for k, v in manifest.items() if k != "profileCombinationHash"}
         calculated = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
