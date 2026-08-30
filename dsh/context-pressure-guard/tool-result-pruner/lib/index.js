@@ -83,6 +83,39 @@ function isPrunableResult(event, currentStep) {
 	if (currentStep !== void 0 && turn === currentStep.turn && step === currentStep.step) return false;
 	return true;
 }
+const PERSISTED_TOOL_NAMES = new Set(["write", "edit", "apply_patch"]);
+const TOOL_CALL_REFERENCE_PREFIX = "[tool-call-reference";
+function parseArguments(argumentsText) {
+	try { return JSON.parse(argumentsText); } catch { return void 0; }
+}
+function persistedToolName(name) {
+	const normalized = String(name ?? "").toLowerCase().replace(/[^a-z_]+/g, "");
+	return PERSISTED_TOOL_NAMES.has(normalized) ? normalized : void 0;
+}
+function argumentFiles(value, key = "", paths = []) {
+	if (typeof value === "string") {
+		if (/(?:path|file|target|filename|uri)/i.test(key) || /(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)[^\s`"'<>]+/.test(value)) paths.push(value);
+		return paths;
+	}
+	if (Array.isArray(value)) for (const item of value) argumentFiles(item, key, paths);
+	else if (value !== null && typeof value === "object") for (const [childKey, childValue] of Object.entries(value)) argumentFiles(childValue, childKey, paths);
+	return paths;
+}
+function toolCallArgumentsReference({ callId, toolName, argumentsText, eventSeq }) {
+	const parsed = parseArguments(argumentsText);
+	const files = [...new Set(argumentFiles(parsed ?? argumentsText))].slice(0, 8);
+	const keys = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed).slice(0, 12).join(",") : "raw";
+	const digest = createHash("sha256").update(argumentsText, "utf8").digest("hex");
+	const file = files[0] ?? "none";
+	const summary = `keys=${keys}; chars=${argumentsText.length}; files=${files.length}`;
+	return `${TOOL_CALL_REFERENCE_PREFIX} call_id=${JSON.stringify(callId)} tool_name=${JSON.stringify(toolName)} status="completed" sha256=${digest} event_seq=${eventSeq} file=${JSON.stringify(file)} short_summary=${JSON.stringify(summary)}] full arguments retained in durable session event`;
+}
+function isToolCallReference(argumentsText) {
+	return typeof argumentsText === "string" && argumentsText.startsWith(TOOL_CALL_REFERENCE_PREFIX);
+}
+function completedToolResult(session, callId) {
+	return session.events.find((event) => event?.type === "tool/result" && (event.data?.message?.source?.callId === callId || event.data?.callId === callId));
+}
 //#endregion
 //#region lib/types/index.js
 /**
@@ -188,6 +221,36 @@ var ToolResultPruner = class extends Service {
 		}
 		throw new Error(`tool-result restore: call ${callId} not found`);
 	}
+	/** Restore the full durable arguments for an old persisted write/edit call. */
+	async restoreToolCallArguments(session, callId) {
+		let visibleSeq;
+		let visibleEvent;
+		let visibleMessage;
+		for (const seq of session.surface.nodes) {
+			const event = session.events[seq];
+			if (event?.type !== "assistant/message") continue;
+			const message = event.data?.message;
+			if (message?.content?.some((block) => block.type === "tool-call" && block.id === callId && isToolCallReference(block.arguments))) {
+				visibleSeq = seq;
+				visibleEvent = event;
+				visibleMessage = message;
+				break;
+			}
+		}
+		if (visibleEvent === void 0) throw new Error(`tool-call restore: reference for call ${callId} not found`);
+		const originalEvent = session.events.find((event) => event?.type === "assistant/message" && event.data?.message?.content?.some((block) => block.type === "tool-call" && block.id === callId && !isToolCallReference(block.arguments)));
+		const originalBlock = originalEvent?.data?.message?.content?.find((block) => block.type === "tool-call" && block.id === callId);
+		if (originalBlock === void 0) throw new Error(`tool-call restore: durable arguments for call ${callId} not found`);
+		const message = freezeMessage({
+			...visibleMessage,
+			content: visibleMessage.content.map((block) => block.type === "tool-call" && block.id === callId ? { ...block, arguments: originalBlock.arguments } : block)
+		});
+		const replacement = session.append("assistant/message", { ...visibleEvent.data, message }, {
+			surfaceOp: { op: "replace", start: visibleSeq, end: visibleSeq },
+			sourceEventSeqs: [visibleSeq]
+		});
+		return { callId, originalSeq: visibleSeq, replacementSeq: replacement.seq, restoredChars: String(originalBlock.arguments).length };
+	}
 	async readArtifact(locator) {
 		const spillStore = this.ctx.get("spillStore");
 		if (typeof spillStore?.readText === "function") return spillStore.readText(locator);
@@ -270,8 +333,41 @@ var ToolResultPruner = class extends Service {
 			});
 			charsRemoved += charsBefore - charsAfter;
 		}
+		const toolCalls = [];
+		for (const seq of [...session.surface.nodes]) {
+			const event = session.events[seq];
+			if (event?.type !== "assistant/message") continue;
+			if (currentStepKey !== void 0 && event.data.turn === currentStepKey.turn && event.data.step === currentStepKey.step) continue;
+			let changed = false;
+			let callCharsRemoved = 0;
+			const content = event.data.message.content.map((block) => {
+				const toolName = block.type === "tool-call" ? persistedToolName(block.name) : void 0;
+				if (toolName === void 0 || typeof block.arguments !== "string" || isToolCallReference(block.arguments)) return block;
+				const result = completedToolResult(session, block.id);
+				if (!isPrunableResult(result, currentStepKey)) return block;
+				const reference = toolCallArgumentsReference({ callId: block.id, toolName, argumentsText: block.arguments, eventSeq: seq });
+				changed = true;
+				callCharsRemoved += Math.max(0, block.arguments.length - reference.length);
+				return { ...block, arguments: reference };
+			});
+			if (!changed) continue;
+			const message = freezeMessage({ ...event.data.message, content });
+			session.append("compaction/prune", {
+				shadowedRange: { start: seq, end: seq },
+				shadowedSeqs: [seq],
+				shadowedTokenCount: this.ctx.tokenMeter.estimateMessage(event.data.message)
+			});
+			const replacement = session.append("assistant/message", { ...event.data, message }, {
+				surfaceOp: { op: "replace", start: seq, end: seq },
+				sourceEventSeqs: [seq]
+			});
+			const callIds = content.filter((block) => block.type === "tool-call" && isToolCallReference(block.arguments)).map((block) => block.id);
+			toolCalls.push({ originalSeq: seq, replacementSeq: replacement.seq, callIds, charsRemoved: callCharsRemoved });
+			charsRemoved += callCharsRemoved;
+		}
 		return {
 			pruned,
+			toolCalls,
 			charsRemoved
 		};
 	}
