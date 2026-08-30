@@ -46,6 +46,26 @@ test('archive sidecar is enforced without changing session bytes', async () => {
   }
 });
 
+test('archived agent input is blocked before inbox append', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-input-guard-'));
+  try {
+    const ctx = new Context();
+    const service = new ContextLifecycle(ctx, { sidecarDir: dir });
+    const session = makeSession('archived-input-session');
+    await service.archiveSnapshot(session.id, { measuredTokens: 920057 });
+    const calls = [];
+    const agent = {
+      session,
+      send(...args) { calls.push(args); }
+    };
+    service.installAgentInputGuard(agent);
+    assert.throws(() => agent.send(createUserMessage({ content: [{ type: 'text', text: 'must not append' }], source: { kind: 'user' } }), 'next-turn', true), (error) => error.code === CONTEXT_PREFLIGHT_BLOCKED);
+    assert.equal(calls.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('handoff preview/export keeps only resumable state and can create a new session', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-handoff-'));
   try {
