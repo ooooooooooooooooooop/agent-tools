@@ -345,7 +345,7 @@ def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any]) -> 
             str(node_exe), str(npm_cli), "install", "--prefix", str(base_root),
             "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false",
             "--omit=dev", "--install-strategy=shallow", "--prefer-offline",
-            "--progress=false",
+            "--progress=false", "--legacy-peer-deps",
             f"{base_cfg['package']}@{base_cfg['version']}",
         ], env=env, timeout=900)
     entry = base_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
