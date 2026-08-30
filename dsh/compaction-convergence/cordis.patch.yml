@@ -1,0 +1,5 @@
+# AIC discovery declaration. The profile-specific plugin directory and load
+# order are owned by registry/harnesses/dsh.yaml and rendered by aic apply dsh.
+- insert:
+  - id: compaction-basic-convergence
+    name: './plugins/dsh-compaction-convergence/lib/index.js'

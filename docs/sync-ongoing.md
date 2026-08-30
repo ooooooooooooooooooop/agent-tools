@@ -8,7 +8,7 @@
 |---|---|---|---|
 | Skill 包 | `<repo-root>\skills/*` | `~/.dsh/skills/*` | `sync_skills.py` / `environment-bootstrap` |
 | 脚本/校验器 | `<repo-root>\scripts/*` | 仓库就地（git clone） | git |
-| DSH 插件源码 | `<repo-root>\dsh/*` | 仓库就地 | git |
+| DSH runtime composition 源码 | `<repo-root>\dsh/*`、`registry/harnesses/dsh.yaml` | `~/.dsh/runtime`、`~/.dsh/profiles/web` | `aic apply dsh` |
 | 配置骨架（AGENTS.md/settings/profiles/presets） | `~/.dsh/` | `~/.dsh/` | `sync_dsh_config.py`（export→check→apply） |
 | **preset 随附技能**（cordis-plugin-development / editing-cordis-compositions） | `~/.dsh/.agent-presets/cc/skills/*`（随 cc 预设分发） | 随预设安装在 `~/.dsh/.agent-presets/<id>/skills/*` | `sync_dsh_config.py --with-optional`（随配置骨架） |
 | MCP 包 | `<repo-root>\mcp/*` | 仓库就地（按需安装） | git |
@@ -23,6 +23,7 @@
     └─ scripts/ 或 skills/<name>/ 或 dsh/<name>/ 或 docs/
     └─ 如果改 skills.json/mcp.json，需同步更新注册表
     └─ 如果改 ~/.dsh 配置，需同步更新仓库归档或走 dsh-config-sync
+    └─ DSH runtime/base/UI/overlay 改动统一走 `aic apply dsh`，不走手工复制
 
 [2] 本地跑门禁
     └─ git add ...; .githooks/pre-commit

@@ -1,0 +1,214 @@
+diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
+index f4e7a7c59a..481b24ba09 100644
+--- a/packages/client/ui-conversation/src/client/locales.ts
++++ b/packages/client/ui-conversation/src/client/locales.ts
+@@ -55,6 +55,22 @@ export const zh = {
+   'context.system': '系统提示词',
+   'context.tools': '工具',
+   'context.messages': '对话消息',
++  'context.details': '展开上下文详情',
++  'context.projectedInput': '预计输入',
++  'context.reservedOutput': '预留输出',
++  'context.combinedContext': '合计上下文',
++  'context.configuredLimit': '配置上限',
++  'context.effectiveLimit': '生效上限',
++  'context.providerAttestedLimit': '提供方声明上限',
++  'context.trustedUsage': '可信用量',
++  'context.usageEstimate': '估算用量',
++  'context.sampleValidity': '样本有效性',
++  'context.sampleSource': '样本来源',
++  'context.sampleStatus': '样本状态',
++  'context.estimateMethod': '估算方法',
++  'context.estimateConfidence': '估算置信度',
++  'context.compactionState': '压缩状态',
++  'context.circuitBreakerState': '熔断状态',
+   'stats.counts': '{turns} 轮 · {steps} 步',
+   'stats.llm': 'LLM {duration}',
+   'stats.toolCall': '工具调用 {duration}',
+@@ -232,6 +248,22 @@ export const en = {
+   'context.system': 'System prompt',
+   'context.tools': 'Tools',
+   'context.messages': 'Messages',
++  'context.details': 'Expand context details',
++  'context.projectedInput': 'Projected input',
++  'context.reservedOutput': 'Reserved output',
++  'context.combinedContext': 'Combined context',
++  'context.configuredLimit': 'Configured limit',
++  'context.effectiveLimit': 'Effective limit',
++  'context.providerAttestedLimit': 'Provider-attested limit',
++  'context.trustedUsage': 'Trusted usage',
++  'context.usageEstimate': 'Estimated usage',
++  'context.sampleValidity': 'Sample validity',
++  'context.sampleSource': 'Sample source',
++  'context.sampleStatus': 'Sample status',
++  'context.estimateMethod': 'Estimate method',
++  'context.estimateConfidence': 'Estimate confidence',
++  'context.compactionState': 'Compaction state',
++  'context.circuitBreakerState': 'Circuit breaker state',
+   'stats.counts': '{turns} turns · {steps} steps',
+   'stats.llm': 'LLM {duration}',
+   'stats.toolCall': 'Tool call {duration}',
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
+index 9eed743214..2192aacaff 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
+@@ -145,3 +145,23 @@
+   font-variant-numeric: tabular-nums;
+   color: var(--dsw-alias-label-primary);
+ }
++
++.details {
++  margin-top: 8px;
++  border-top: 1px solid var(--dsw-alias-border-inverted);
++  padding-top: 6px;
++}
++
++.detailSummary {
++  color: var(--dsw-alias-label-tertiary);
++  cursor: pointer;
++  user-select: none;
++}
++
++.detailSummary:hover {
++  color: var(--dsw-alias-label-primary);
++}
++
++.detailRows {
++  margin: 6px 0 0;
++}
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
+index b6b62468d1..e88e254a68 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
+@@ -7,10 +7,11 @@
+ import { useEffect, useRef, useState } from 'react'
+ import type { UseProjection } from '@deepseek-ai/dsh-client-runtime/client'
+ // Type-only: the `contextPressure` / `contextBreakdown` projection key merges.
+-import type {} from '@deepseek-ai/dsh-token-meter/client'
++import type { ContextPressureProjection } from '@deepseek-ai/dsh-token-meter/client'
+ import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ComposerBarProps } from '../contract/slots.ts'
+ import { contextOccupancy, formatTokens } from '../chat/StatsLine.tsx'
++import type { ConversationKey } from '../locales.ts'
+ import css from './ContextMeter.module.css'
+ 
+ /** Ring geometry: 14px viewBox, 2px stroke. */
+@@ -31,6 +32,24 @@ const ROWS = [
+   { key: 'messageTokens', label: 'context.messages', color: css.colorMessages },
+ ] as const
+ 
++type ContextDiagnostics = ContextPressureProjection & {
++  projectedInput?: number
++  reservedOutput?: number
++  combinedContext?: number
++  configuredLimit?: number
++  effectiveLimit?: number
++  providerAttestedLimit?: number
++  trustedUsage?: number
++  usageEstimate?: number
++  sampleValidity?: string
++  sampleSource?: string
++  sampleStatus?: string
++  estimateMethod?: string
++  estimateConfidence?: string
++  compactionState?: string
++  circuitBreakerState?: string
++}
++
+ export interface ContextMeterProps {
+   useProjection: UseProjection
+   /** The owning bar's locale seat, passed down as a plain prop. */
+@@ -38,7 +57,7 @@ export interface ContextMeterProps {
+ }
+ 
+ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+-  const pressure = useProjection('contextPressure')
++  const pressure = useProjection('contextPressure') as ContextDiagnostics | undefined
+   const breakdown = useProjection('contextBreakdown')
+   const [open, setOpen] = useState(false)
+   const rootRef = useRef<HTMLSpanElement | null>(null)
+@@ -87,6 +106,24 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+     ? [{ key: 'total', color: undefined, width: percent }]
+     : ROWS.map(row => ({ key: row.key, color: row.color, width: percent * breakdown[row.key] / breakdownTotal }))
+   const segments = parts.filter(part => part.width > 0)
++  const details = pressure ?? {}
++  const diagnostics: Array<[string, string | undefined, ConversationKey]> = [
++    ['projectedInput', details.projectedInput === undefined ? undefined : `~${formatTokens(details.projectedInput)}`, 'context.projectedInput'],
++    ['reservedOutput', details.reservedOutput === undefined ? undefined : formatTokens(details.reservedOutput), 'context.reservedOutput'],
++    ['combinedContext', details.combinedContext === undefined ? undefined : formatTokens(details.combinedContext), 'context.combinedContext'],
++    ['configuredLimit', details.configuredLimit === undefined ? undefined : formatTokens(details.configuredLimit), 'context.configuredLimit'],
++    ['effectiveLimit', details.effectiveLimit === undefined ? undefined : formatTokens(details.effectiveLimit), 'context.effectiveLimit'],
++    ['providerAttestedLimit', details.providerAttestedLimit === undefined ? undefined : formatTokens(details.providerAttestedLimit), 'context.providerAttestedLimit'],
++    ['trustedUsage', details.trustedUsage === undefined ? undefined : formatTokens(details.trustedUsage), 'context.trustedUsage'],
++    ['usageEstimate', details.usageEstimate === undefined ? undefined : `~${formatTokens(details.usageEstimate)}`, 'context.usageEstimate'],
++    ['sampleValidity', details.sampleValidity, 'context.sampleValidity'],
++    ['sampleSource', details.sampleSource, 'context.sampleSource'],
++    ['sampleStatus', details.sampleStatus, 'context.sampleStatus'],
++    ['estimateMethod', details.estimateMethod, 'context.estimateMethod'],
++    ['estimateConfidence', details.estimateConfidence, 'context.estimateConfidence'],
++    ['compactionState', details.compactionState, 'context.compactionState'],
++    ['circuitBreakerState', details.circuitBreakerState, 'context.circuitBreakerState'],
++  ].filter((entry): entry is [string, string, ConversationKey] => entry[1] !== undefined)
+ 
+   return (
+     <span ref={rootRef} className={css.root}>
+@@ -146,6 +183,19 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+               ))}
+             </dl>
+           )}
++          {diagnostics.length > 0 && (
++            <details className={css.details}>
++              <summary className={css.detailSummary}>{t('context.details')}</summary>
++              <dl className={css.detailRows}>
++                {diagnostics.map(([key, value, label]) => (
++                  <div key={key} className={css.row}>
++                    <dt>{t(label)}</dt>
++                    <dd>{value}</dd>
++                  </div>
++                ))}
++              </dl>
++            </details>
++          )}
+         </div>
+       )}
+     </span>
+diff --git a/packages/client/ui-conversation/tests/context-meter.client.spec.tsx b/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
+index f4bd33bb8e..be8793f392 100644
+--- a/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
+@@ -112,6 +112,34 @@ describe('ContextMeter', () => {
+     expect(panel.getElementsByClassName(segmentClass)).toHaveLength(1)
+   })
+ 
++  it('distinguishes trusted usage from an estimated sample in expanded details', () => {
++    const view = meter({
++      contextPressure: {
++        pressureTokens: 32_000,
++        contextWindow: 128_000,
++        projectedTokens: 33_000,
++        projectedInput: 31_000,
++        reservedOutput: 65_536,
++        combinedContext: 99_056,
++        configuredLimit: 128_000,
++        effectiveLimit: 128_000,
++        providerAttestedLimit: 128_000,
++        usageEstimate: 2_031,
++        sampleValidity: 'estimated',
++        sampleSource: 'estimated',
++        sampleStatus: 'no-trusted-anchor',
++        estimateMethod: 'fixed-density-conservative-multiplier',
++        estimateConfidence: 'conservative',
++      },
++    })
++    fireEvent.click(view.getByRole('button', { name: '上下文已用 26%' }))
++    const panel = view.container.querySelector('[role="dialog"]')!
++    fireEvent.click(panel.querySelector('summary')!)
++    expect(panel.textContent).toContain('估算用量~2K')
++    expect(panel.textContent).toContain('样本有效性estimated')
++    expect(panel.textContent).not.toContain('可信用量')
++  })
++
+   it('closes when capacity disappears and stays closed when it returns', () => {
+     let values: Record<string, unknown> = {
+       contextPressure: { pressureTokens: 32_000, contextWindow: 128_000 },
+

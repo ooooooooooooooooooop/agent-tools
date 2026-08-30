@@ -59,11 +59,13 @@ KNOWN_BLOCKERS = ["BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT",
                   "NOVEL_REPO_DURABILITY=BLOCKED_PRIVACY"]
 
 
-def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> tuple[int, str]:
+def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
+        env: dict[str, str] | None = None) -> tuple[int, str]:
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            encoding="utf-8", errors="replace",
-                           cwd=str(cwd) if cwd else None)
+                           cwd=str(cwd) if cwd else None,
+                           env={**os.environ, **env} if env else None)
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as exc:  # noqa: BLE001
         return -1, str(exc)
@@ -358,14 +360,18 @@ def runtime_refresh(affected: list[str], mode: str) -> dict:
     """
     out = {"affected": affected, "applied": [], "review": [], "status": "NO DRIFT"}
     for t in affected:
-        rc, _ = run([sys.executable, str(AIC), "diff", t])
+        diff_args = ["diff", t]
+        if t == "dsh":
+            diff_args.append("--runtime-only")
+        rc, _ = run([sys.executable, str(AIC), *diff_args])
         if rc == 0:
             continue
         if mode not in ("sync", "restore"):
             out["review"].append({t: "drift（check/pull/push 模式不自动 apply）"})
             out["status"] = "DRIFT"
             continue
-        arc, aout = run([sys.executable, str(AIC), "apply", t])
+        arc, aout = run([sys.executable, str(AIC), "apply", t],
+                        timeout=1800 if t == "dsh" else 120)
         if arc == 0:
             out["applied"].append(t)
         else:
@@ -376,12 +382,15 @@ def runtime_refresh(affected: list[str], mode: str) -> dict:
     return out
 
 
-def runtime_status() -> dict:
+def runtime_status(env: dict[str, str] | None = None) -> dict:
     """aic validate + 已安装 harness diff（只读）。"""
-    rc, _ = run([sys.executable, str(AIC), "validate"])
+    rc, _ = run([sys.executable, str(AIC), "validate"], env=env)
     drifts = []
     for t in ("dsh", "codex", "claude", "gemini", "switchboard"):
-        r, _ = run([sys.executable, str(AIC), "diff", t])
+        diff_args = ["diff", t]
+        if t == "dsh":
+            diff_args.append("--runtime-only")
+        r, _ = run([sys.executable, str(AIC), *diff_args], env=env)
         if r != 0:
             drifts.append(t)
     return {"validate": rc == 0, "drift": drifts,
@@ -650,15 +659,16 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     skills_changed = any(f.startswith("skills/") for f in changed_at)
     plugins_changed = any(f.startswith("dsh/") for f in changed_at)
 
-    # skills/plugins 增量同步（§24：skills/*→skill sync；dsh/*→plugin refresh）
-    if mode in ("sync", "restore") and (skills_changed or plugins_changed):
+    # Skills remain a library sync. DSH runtime composition has one owner:
+    # aic apply dsh; sync_skills.py is not a second plugin deployment truth.
+    if mode in ("sync", "restore") and skills_changed:
         cmd = [sys.executable, str(SYNC_SKILLS), "--destination",
                str(Path.home() / ".dsh" / "skills")]
-        if plugins_changed:
-            cmd += ["--plugins-destination",
-                    str(Path.home() / ".dsh" / "profiles" / "web" / "plugins")]
         rc, out = run([*cmd, "--apply"])
         results["skill_sync"] = "PASS" if rc == 0 else f"FAIL: {out[-200:]}"
+    if mode in ("sync", "restore") and plugins_changed:
+        rc, out = run([sys.executable, str(AIC), "apply", "dsh"], timeout=1800)
+        results["dsh_composition"] = "PASS" if rc == 0 else f"FAIL: {out[-200:]}"
     # memory-only change → 只做 derived 校验，绝不触发 Harness apply（§8）
     if memory_changed:
         results["memory_refresh"] = memory_merge_verify(state_repo) if state_repo else {}
@@ -713,6 +723,7 @@ def _overall(plan: list[dict], results: dict) -> str:
 def run_restore(detail: bool = False, repo: Path = REPO,
                 state_repo: Path = STATE_REPO,
                 skills_dest: Path | None = None,
+                apply_dsh: bool = True,
                 agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/agent-tools.git",
                 state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-state.git"
                 ) -> dict:
@@ -756,8 +767,19 @@ def run_restore(detail: bool = False, repo: Path = REPO,
             step("skills restore (apply)", rc == 0,
                  out.splitlines()[-1] if out else "")
         if aic_script.is_file():
-            rt = runtime_status()
-            step("harness diff", rt["status"] == "NO DRIFT", json.dumps(rt["drift"]))
+            runtime_home = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh")))
+            if skills_dest is not None and "DSH_HOME" not in os.environ:
+                runtime_home = dest.parent if dest.name == "skills" else dest / ".dsh"
+            runtime_env = {"DSH_HOME": str(runtime_home)}
+            if apply_dsh:
+                rc, out = run([sys.executable, str(aic_script), "apply", "dsh"],
+                              env=runtime_env, timeout=1800)
+                step("dsh runtime composition apply", rc == 0,
+                     out.splitlines()[-1] if out else "")
+                rt = runtime_status(env=runtime_env)
+                step("harness diff", rt["status"] == "NO DRIFT", json.dumps(rt["drift"]))
+            else:
+                step("harness diff", True, "skipped by test/embedded restore caller")
         if (state_repo / "memory").is_dir():
             v = memory_merge_verify(state_repo)
             step("memory loadable", v["ok"], f"records={v.get('records')}")

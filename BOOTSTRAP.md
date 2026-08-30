@@ -48,11 +48,12 @@
 3. **校验 canonical**：`python <REPO>/scripts/validate_repo.py --strict` 必须退出码 0，否则 §5。
 4. **安装 full Skill profile**（[skills.json](./skills.json) 中 profile `full`，含 publish-and-reuse）：
    `python <REPO>/scripts/sync_skills.py --destination <SKILLS_DIR> --profile full --apply`
-   DSH 追加 `--plugins-destination <HOME>/.dsh/profiles/web/plugins`。
+   DSH 的 runtime/base/UI/overlay 不由此工具复制；统一由随后执行的
+   `DSH_HOME=<HOME>/.dsh python <REPO>/scripts/aic/aic.py apply dsh` 接管。
    该工具只做增量覆盖，绝不删除目标端额外文件；装完重跑 `--check` 必须退出码 0。
 5. **Handoff 给 `$publish-and-reuse`**：打开 [`skills/publish-and-reuse/SKILL.md`](./skills/publish-and-reuse/SKILL.md)（权威细节：[`references/personal-ai-lifecycle-sync.md`](./skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md)），严格按其 **RESTORE** 模式契约执行：
    `python <REPO>/scripts/personal_ai_sync.py restore`
-   restore 自动完成：克隆 personal-ai-state（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills/Plugins → 校验 Memory canonical 可读 → 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
+   restore 自动完成：克隆 personal-ai-state（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills → `aic apply dsh` 重建固定 Node/Base/UI/五个 overlay/Profile → 校验 Memory canonical 可读 → 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
 6. restore 结果 `PASS` → §4 收尾；`REVIEW` / `BLOCKED` → §5。
 
 ## 3. AUTO_SYNC（已安装设备的日常入口）
@@ -91,14 +92,12 @@ Result: PASS
 
 ## 4.1 Harness compatibility overlay（自动恢复）
 
-本机 DSH 若命中受影响版本（DSH 0.1.1-rc.2 / @deepseek-ai/dsh-compaction-basic 0.1.1-rc.2），在 §4 收尾前自主运行：
+DSH 的固定 Base、Node、UI bundle、五个 overlay、Profile patch、组合 manifest
+和原子回滚统一由：
 
-    powershell -File <REPO>/dsh/compaction-convergence/test/guard-convergence.ps1
+    DSH_HOME=<HOME>/.dsh python <REPO>/scripts/aic/aic.py apply dsh
 
-- 输出 VERIFY / APPLY / NOT_REQUIRED 即 PASS；APPLY 后重跑一次确认 VERIFY。
-- 输出 REVIEW 时停止并进入 §5（无法证明兼容，不盲目应用旧 overlay，等待人工/上游判定）。
-- 运行后若已安装或恢复，重启 DSH GUI 进程再收尾。
-- 该 overlay 幂等、可回滚，详见 <REPO>/dsh/compaction-convergence/README.md。
+负责。不得再直接调用旧的测试安装器；旧安装器仅作为历史取证材料保留。
 ## 5. 只有这些情况才报告用户
 
 其余一切问题（含拉取、合并、安装、refresh、重跑）必须自主解决，禁止抛回用户、禁止把门禁输出当交付物。

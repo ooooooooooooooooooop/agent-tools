@@ -1,6 +1,7 @@
 # harnesses/dsh.yaml — DSH adapter 契约（canonical）
 # 边界：本文件只声明"哪些配置的哪些字段由 canonical 生成/校验"；其余内容属 overlay 或 harness 自有。
 harness: dsh
+schema_version: 3
 render_targets:
   - id: settings
     path: "{{DSH_HOME}}/settings.yaml"
@@ -27,6 +28,104 @@ opaque_paths:
   - {path: "[tool-bash].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
   - {path: "[tool-pwsh].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
 out_of_scope:
-  - "profiles/web/cordis.patch.yml 插件组合（harness 特有，属 overlay；Migration #5 再评估）"
-  - "profiles/web/package.json bundles（部署组合）"
   - "会话/skills/hooks 等非模型路由面"
+
+# Runtime composition is part of the DSH adapter contract.  It deliberately
+# lives here, instead of in a second deployment registry: `aic apply dsh` is
+# the only writer for the managed composition below.
+runtime_composition:
+  id: dsh-context-lifecycle
+  profile:
+    relative_to_dsh_home: profiles/web
+    patch_file: cordis.patch.yml
+    manifest_file: dsh-runtime-composition.json
+    launcher_file: dsh-launch-web.ps1
+    base_distribution_file: base-distribution.json
+  node:
+    version: v22.19.0
+    relative_to_dsh_home: runtime/node-v22.19.0-win-x64
+    archive:
+      windows-x64:
+        url: https://nodejs.org/dist/v22.19.0/node-v22.19.0-win-x64.zip
+        sha256: ea3fad0e67a991d8477d8c01344b56e69c676ccb733f065b22436994b1253f86
+  base:
+    package: '@deepseek-ai/dsh'
+    version: 0.1.1-rc.2
+    install_mode: managed-profile-fixed-directory
+    entry_relative_to_distribution: node_modules/@deepseek-ai/dsh/lib/bin.js
+  ui:
+    repository: https://github.com/deepseek-ai/deepseek-harness.git
+    baseline_commit: b150a551b8d465e31e418e1b2eaf5e79bbb7d28e
+    fix_commit: 68826e9a6d8911239770016223719559c2842885
+    fix_commit_remote: unavailable-at-audit
+    patch_file: dsh/ui/deepseek-harness-68826e9.patch
+    patch_sha256: 6b3d1f9bac533f6e9de06441b6916173b229afb0590c1adbfa53bfd712fc931e
+    source_root_env: DSH_HARNESS_ROOT
+    client_package: '@deepseek-ai/dsh-client-ui-conversation'
+    client_bundle_relative: packages/client/ui-conversation/lib/client.js
+    web_package: '@deepseek-ai/dsh-web-frontend'
+    web_dist_relative: apps/web/dist
+  managed_rows:
+    disable:
+      - {id: compaction-basic, disabled: true}
+      - {id: token-meter, disabled: true}
+      - {id: agent-loop, disabled: true}
+    plugins:
+      - id: token-meter-pressure-guard
+        package: '@deepseek-ai/dsh-token-meter'
+        version: 0.1.1-rc.2+pressure.3
+        source_relative: dsh/context-pressure-guard/token-meter
+        plugin_directory: dsh-token-meter-pressure-guard
+        entry_relative: lib/index.js
+        config: {}
+      - id: agent-loop-pressure-guard
+        package: '@deepseek-ai/dsh-agent-loop'
+        version: 0.1.1-rc.2+pressure.3
+        source_relative: dsh/context-pressure-guard
+        plugin_directory: dsh-agent-loop-pressure-guard
+        entry_relative: lib/index.js
+        config:
+          contextAdmission:
+            safetyMargin: 16384
+            operationalMaxOutput: 65536
+            inputMultiplier: 1.08
+            routes:
+              - provider: opencode-go
+                model: deepseek-v4-flash
+                providerAttestedLimit: 1048576
+      - id: tool-result-pruner-pressure-guard
+        package: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+        version: 0.1.1-rc.2+pressure.2
+        source_relative: dsh/context-pressure-guard/tool-result-pruner
+        plugin_directory: dsh-tool-result-pruner-pressure-guard
+        entry_relative: lib/index.js
+        config:
+          thresholdChars: 8192
+          headChars: 4096
+          tailChars: 1024
+      - id: compaction-basic-convergence
+        package: '@deepseek-ai/dsh-compaction-basic'
+        version: 0.1.1-rc.2+pressure.2
+        source_relative: dsh/compaction-convergence
+        plugin_directory: dsh-compaction-convergence
+        entry_relative: lib/index.js
+        config:
+          summarizationProvider: cpa
+          summarizationModel: gemini-3.7-flash-high
+          maxTokens: 2048
+          maxOverflowRetries: 2
+          maxConsecutiveFailures: 3
+      - id: context-lifecycle
+        package: '@deepseek-ai/dsh-context-lifecycle'
+        version: 0.1.1-rc.2+pressure.4
+        source_relative: dsh/context-lifecycle
+        plugin_directory: dsh-context-lifecycle
+        entry_relative: lib/index.js
+        config:
+          archiveThresholdTokens: 800000
+          sidecarDir: ./.dsh-context-lifecycle
+  archive_anchor:
+    session_id: session-cdc4ad5d-0e4c-45c3-a596-efee4a7544b9
+    status: READ_ONLY_CONTEXT_EXHAUSTED
+    operational_label: READ_ONLY_ARCHIVED
+    artifact_sha256: 17d0b5c91c7f0f76adfad658daddfa8e3980ea6913d81fb29eafce1e6fd5f64f

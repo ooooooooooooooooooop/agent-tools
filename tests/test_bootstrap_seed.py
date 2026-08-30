@@ -144,7 +144,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
 
             dest_state = home / "personal-ai-state"
             # restore 校验的 skills_dest 必须就是 §2.4 装好的 SKILLS_DIR（与 BOOTSTRAP 流程一致）
-            r = pas.run_restore(repo=repo, state_repo=dest_state,
+            r = pas.run_restore(repo=repo, state_repo=dest_state, apply_dsh=False,
                                 skills_dest=skills_dir,
                                 agent_tools_remote=str(ROOT),
                                 state_remote=str(remote))
@@ -159,7 +159,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             self.assertEqual(r["result"], "PASS", r["steps"])
 
             # 幂等：完整重跑一次仍 PASS
-            r2 = pas.run_restore(repo=repo, state_repo=dest_state,
+            r2 = pas.run_restore(repo=repo, state_repo=dest_state, apply_dsh=False,
                                  skills_dest=skills_dir,
                                  agent_tools_remote=str(ROOT),
                                  state_remote=str(remote))
