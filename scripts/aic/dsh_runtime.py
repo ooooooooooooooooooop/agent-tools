@@ -434,7 +434,8 @@ def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str
     baseline = ui_cfg["baseline_commit"]
     fix = ui_cfg["fix_commit"]
     patch = ROOT / ui_cfg["patch_file"]
-    if _git_has(source, fix):
+    fix_is_recoverable = ui_cfg.get("fix_commit_remote") not in (None, "", "unavailable-at-audit")
+    if _git_has(source, fix) and fix_is_recoverable:
         # Always build from a clean detached worktree. The configured checkout
         # may carry unrelated user changes (including staged build tooling);
         # those must never leak into the released UI bundle.
@@ -768,8 +769,11 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
                 finding("SOURCE_DRIFT", "ui.source", ui_cfg["fix_commit"], str(exc))
         build_patch_sha = ui_cfg.get("build_patch_sha256")
         source_state = str(manifest.get("ui", {}).get("sourceState", ""))
-        if build_patch_sha and not source_state.endswith(f"+build-patch:{build_patch_sha}"):
-            finding("CONFIG_DRIFT", "ui.build-patch", f"applied:{build_patch_sha}", source_state or "missing")
+        expected_source_state = f"{ui_cfg['baseline_commit']}+patch:{ui_cfg['patch_sha256']}"
+        if build_patch_sha:
+            expected_source_state += f"+build-patch:{build_patch_sha}"
+        if source_state != expected_source_state:
+            finding("CONFIG_DRIFT", "ui.source-state", expected_source_state, source_state or "missing")
         payload = {k: v for k, v in manifest.items() if k != "profileCombinationHash"}
         calculated = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
