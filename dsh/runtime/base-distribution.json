@@ -1,0 +1,10 @@
+{
+  "package": "@deepseek-ai/dsh",
+  "version": "0.1.1-rc.2",
+  "nodeRange": ">=22.19.0 <23 || >=24",
+  "entryRelativeToProfile": "base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/lib/bin.js",
+  "installPolicy": "profile-owned-fixed-directory",
+  "baseEntrySha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62",
+  "uiBundleSha256": "b7a3e1482aa6ac37f09489e9e345455747743354d6103612aee957681d948071",
+  "forbiddenLaunchers": ["npx --yes @deepseek-ai/dsh", "npx @deepseek-ai/dsh"]
+}

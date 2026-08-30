@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-context-lifecycle",
   "description": "Durable sidecar guard for context exhaustion, handoff, observability and host restart requests",
-  "version": "0.1.1-rc.2+pressure.3",
+  "version": "0.1.1-rc.2+pressure.4",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
