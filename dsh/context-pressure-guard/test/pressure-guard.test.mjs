@@ -125,6 +125,45 @@ test('8. oversized historical tool result becomes a traceable artifact reference
   const restoredEvent = session.events[restored.replacementSeq];
   assert.equal(restoredEvent.data.message.content[0].content[0].text, original);
 });
+test('8b. persisted write arguments collapse to a durable reference and restore on demand', async () => {
+  const ctx = new Context();
+  ctx.reflect.provide('tokenMeter', { estimateMessage: () => 30000 });
+  const pruner = new ToolResultPruner(ctx, { thresholdChars: 128, headChars: 8, tailChars: 8 });
+  const id = 'tool-call-lifecycle-' + Math.random().toString(36).slice(2);
+  const session = Session.create(id, [], { version: 0, id, createdAt: Date.now(), cwd: 'C:/test' });
+  const fullArguments = JSON.stringify({ file_path: 'C:/workspace/src/recovery.ts', content: 'x'.repeat(2000), mode: 'overwrite' });
+  session.append('turn/start', { turn: 1 });
+  session.append('step/start', { turn: 1, step: 1 });
+  const original = session.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: { role: 'assistant', content: [{ type: 'tool-call', id: 'write-1', name: 'write', arguments: fullArguments }] }
+  }, { surfaceOp: 'append' });
+  session.append('tool/call', { turn: 1, step: 1, callId: 'write-1', name: 'write' });
+  session.append('tool/result', {
+    turn: 1,
+    step: 1,
+    message: { role: 'user', source: { kind: 'tool', callId: 'write-1' }, id: 'write-result', content: [{ type: 'tool-result', toolCallId: 'write-1', content: [{ type: 'text', text: 'written' }] }] }
+  }, { surfaceOp: 'append' });
+  session.append('turn/end', { turn: 1 });
+  session.append('turn/start', { turn: 2 });
+  session.append('step/start', { turn: 2, step: 1 });
+  const outcome = await pruner.pruneSession(session);
+  assert.equal(outcome.toolCalls.length, 1);
+  const replacement = session.events[outcome.toolCalls[0].replacementSeq];
+  const reference = replacement.data.message.content[0].arguments;
+  assert.match(reference, /tool-call-reference/);
+  assert.match(reference, /call_id="write-1"/);
+  assert.match(reference, /tool_name="write"/);
+  assert.match(reference, /sha256=[0-9a-f]{64}/);
+  assert.match(reference, /event_seq=/);
+  assert.match(reference, /file="C:\/workspace\/src\/recovery\.ts"/);
+  assert.equal(session.events[original.seq].data.message.content[0].arguments, fullArguments, 'durable event keeps full arguments');
+  const restored = await pruner.restoreToolCallArguments(session, 'write-1');
+  assert.equal(restored.restoredChars, fullArguments.length);
+  const restoredEvent = session.events[restored.replacementSeq];
+  assert.equal(restoredEvent.data.message.content[0].arguments, fullArguments);
+});
 test('9. failed, incomplete, and current-step results remain on the live surface', async () => {
   const ctx = new Context();
   ctx.reflect.provide('tokenMeter', { estimateMessage: () => 30000 });
