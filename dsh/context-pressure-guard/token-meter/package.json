@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-token-meter",
-  "description": "Replay-aware token measurement service for the DeepSeek Harness — invalid zero-usage pressure samples preserved safely",
-  "version": "0.1.1-rc.2+pressure.1",
+  "description": "Replay-aware token measurement service for the DeepSeek Harness — invalid zero-usage samples and lifecycle provenance preserved safely",
+  "version": "0.1.1-rc.2+pressure.2",
   "publishConfig": {
     "access": "public"
   },

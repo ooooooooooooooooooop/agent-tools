@@ -36,7 +36,18 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 /** The context-pressure state schema and source of its inferred type. */
 declare const contextPressureStateSchema: z.ZodObject<{
     contextWindow: z.ZodOptional<z.ZodNumber>;
-    pressureTokens: z.ZodOptional<z.ZodNumber>;`r`n    sampleValid: z.ZodOptional<z.ZodBoolean>;
+    pressureTokens: z.ZodOptional<z.ZodNumber>;
+    sampleValid: z.ZodOptional<z.ZodBoolean>;
+    projectedInput: z.ZodOptional<z.ZodNumber>;
+    reservedOutput: z.ZodOptional<z.ZodNumber>;
+    combinedContext: z.ZodOptional<z.ZodNumber>;
+    configuredLimit: z.ZodOptional<z.ZodNumber>;
+    effectiveLimit: z.ZodOptional<z.ZodNumber>;
+    providerAttestedLimit: z.ZodOptional<z.ZodNumber>;
+    trustedUsage: z.ZodOptional<z.ZodNumber>;
+    sampleValidity: z.ZodOptional<z.ZodString>;
+    compactionState: z.ZodOptional<z.ZodString>;
+    circuitBreakerState: z.ZodOptional<z.ZodString>;
     surfaceTokens: z.ZodNumber;
     sampledSurfaceTokens: z.ZodOptional<z.ZodNumber>;
     claim: z.ZodOptional<z.ZodObject<{
@@ -174,7 +185,18 @@ export declare const contextPressureProjectionDefinition: {
     stateVersion: number;
     stateSchema: z.ZodObject<{
         contextWindow: z.ZodOptional<z.ZodNumber>;
-        pressureTokens: z.ZodOptional<z.ZodNumber>;`r`n    sampleValid: z.ZodOptional<z.ZodBoolean>;
+        pressureTokens: z.ZodOptional<z.ZodNumber>;
+        sampleValid: z.ZodOptional<z.ZodBoolean>;
+        projectedInput: z.ZodOptional<z.ZodNumber>;
+        reservedOutput: z.ZodOptional<z.ZodNumber>;
+        combinedContext: z.ZodOptional<z.ZodNumber>;
+        configuredLimit: z.ZodOptional<z.ZodNumber>;
+        effectiveLimit: z.ZodOptional<z.ZodNumber>;
+        providerAttestedLimit: z.ZodOptional<z.ZodNumber>;
+        trustedUsage: z.ZodOptional<z.ZodNumber>;
+        sampleValidity: z.ZodOptional<z.ZodString>;
+        compactionState: z.ZodOptional<z.ZodString>;
+        circuitBreakerState: z.ZodOptional<z.ZodString>;
         surfaceTokens: z.ZodNumber;
         sampledSurfaceTokens: z.ZodOptional<z.ZodNumber>;
         claim: z.ZodOptional<z.ZodObject<{
@@ -189,7 +211,18 @@ export declare const contextPressureProjectionDefinition: {
     apply: (state: NoInfer<{
         surfaceTokens: number;
         contextWindow?: number | undefined;
-        pressureTokens?: number | undefined;`r`n            sampleValid?: boolean | undefined;
+        pressureTokens?: number | undefined;
+            sampleValid?: boolean | undefined;
+        projectedInput?: number | undefined;
+        reservedOutput?: number | undefined;
+        combinedContext?: number | undefined;
+        configuredLimit?: number | undefined;
+        effectiveLimit?: number | undefined;
+        providerAttestedLimit?: number | undefined;
+        trustedUsage?: number | undefined;
+        sampleValidity?: string | undefined;
+        compactionState?: string | undefined;
+        circuitBreakerState?: string | undefined;
         sampledSurfaceTokens?: number | undefined;
         claim?: {
             start: number;
@@ -199,7 +232,18 @@ export declare const contextPressureProjectionDefinition: {
     }>, event: SessionEvent) => {
         surfaceTokens: number;
         contextWindow?: number | undefined;
-        pressureTokens?: number | undefined;`r`n            sampleValid?: boolean | undefined;
+        pressureTokens?: number | undefined;
+            sampleValid?: boolean | undefined;
+        projectedInput?: number | undefined;
+        reservedOutput?: number | undefined;
+        combinedContext?: number | undefined;
+        configuredLimit?: number | undefined;
+        effectiveLimit?: number | undefined;
+        providerAttestedLimit?: number | undefined;
+        trustedUsage?: number | undefined;
+        sampleValidity?: string | undefined;
+        compactionState?: string | undefined;
+        circuitBreakerState?: string | undefined;
         sampledSurfaceTokens?: number | undefined;
     };
     wire: {
@@ -207,7 +251,22 @@ export declare const contextPressureProjectionDefinition: {
         view: ({ contextWindow, pressureTokens, sampleValid, surfaceTokens, sampledSurfaceTokens }: NoInfer<{
             surfaceTokens: number;
             contextWindow?: number | undefined;
-            pressureTokens?: number | undefined;`r`n            sampleValid?: boolean | undefined;
+            pressureTokens?: number | undefined;
+            sampleValid?: boolean | undefined;
+            projectedInput?: number | undefined;
+            reservedOutput?: number | undefined;
+            combinedContext?: number | undefined;
+            configuredLimit?: number | undefined;
+            effectiveLimit?: number | undefined;
+            providerAttestedLimit?: number | undefined;
+            trustedUsage?: number | undefined;
+            sampleValidity?: string | undefined;
+            compactionState?: string | undefined;
+            circuitBreakerState?: string | undefined;
+            sampleSource?: 'provider' | 'none' | undefined;
+            sampleStatus?: 'valid' | 'invalid-zero-usage' | 'no-trusted-anchor' | undefined;
+            estimateMethod?: 'fixed-density-signed-surface' | undefined;
+            estimateConfidence?: 'anchored-conservative' | 'conservative-estimate' | undefined;
             sampledSurfaceTokens?: number | undefined;
             claim?: {
                 start: number;
@@ -218,6 +277,21 @@ export declare const contextPressureProjectionDefinition: {
             projectedTokens?: number;
             pressureTokens?: number;
             contextWindow?: number;
+            sampleValid?: boolean;
+            projectedInput?: number;
+            reservedOutput?: number;
+            combinedContext?: number;
+            configuredLimit?: number;
+            effectiveLimit?: number;
+            providerAttestedLimit?: number;
+            trustedUsage?: number;
+            sampleValidity?: string;
+            compactionState?: string;
+            circuitBreakerState?: string;
+            sampleSource?: 'provider' | 'none';
+            sampleStatus?: 'valid' | 'invalid-zero-usage' | 'no-trusted-anchor';
+            estimateMethod?: 'fixed-density-signed-surface';
+            estimateConfidence?: 'anchored-conservative' | 'conservative-estimate';
         };
     };
 };

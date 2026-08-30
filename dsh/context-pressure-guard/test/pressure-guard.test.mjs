@@ -91,20 +91,59 @@ test('8. oversized historical tool result becomes a traceable artifact reference
   const id = 'artifact-' + Math.random().toString(36).slice(2);
   const session = Session.create(id, [], { version: 0, id, createdAt: Date.now(), cwd: 'C:/test' });
   const original = 'z'.repeat(50000);
+  const artifacts = new Map();
+  const spill = ctx.get('spillStore');
+  spill.readText = async (locator) => artifacts.get(locator);
+  const originalSave = spill.saveText;
+  spill.saveText = async (input) => {
+    const ref = await originalSave(input);
+    artifacts.set(ref.locator, input.content);
+    return ref;
+  };
+  session.append('turn/start', { turn: 1 });
+  session.append('step/start', { turn: 1, step: 1 });
+  session.append('tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'search' });
   const event = session.append('tool/result', {
     turn: 1, step: 1,
     message: { role: 'user', source: { kind: 'tool', callId: 'call-1' }, id: 'r1', content: [{ type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: original }] }] },
   }, { surfaceOp: 'append' });
+  session.append('turn/end', { turn: 1 });
+  session.append('turn/start', { turn: 2 });
+  session.append('step/start', { turn: 2, step: 1 });
   const beforeChars = original.length;
   const outcome = await pruner.pruneSession(session);
   const replacement = session.events[outcome.pruned[0].replacementSeq];
   const text = replacement.data.message.content[0].content[0].text;
   assert.equal(saved.length, 1);
-  assert.match(text, /artifact-reference sha256=[0-9a-f]{64}/);
-  assert.match(text, /locator=C:\/tmp\/artifact.txt/);
+  assert.match(text, /tool-result-reference call_id="call-1"/);
+  assert.match(text, /sha256=[0-9a-f]{64}/);
+  assert.match(text, new RegExp(`event_seq=${event.seq}`));
+  assert.match(text, /artifact_path=C:\/tmp\/artifact.txt/);
   assert.ok(text.length < beforeChars / 4, `replacement ${text.length} must be much smaller than ${beforeChars}`);
+  const restored = await pruner.restore(session, 'call-1');
+  assert.equal(restored.restoredChars, original.length);
+  const restoredEvent = session.events[restored.replacementSeq];
+  assert.equal(restoredEvent.data.message.content[0].content[0].text, original);
 });
-test('9. deployed overlay config resolves the observed route effective limit to 1000000', () => {
+test('9. failed, incomplete, and current-step results remain on the live surface', async () => {
+  const ctx = new Context();
+  ctx.reflect.provide('tokenMeter', { estimateMessage: () => 30000 });
+  const pruner = new ToolResultPruner(ctx, { thresholdChars: 128, headChars: 8, tailChars: 8 });
+  const id = 'tool-lifecycle-' + Math.random().toString(36).slice(2);
+  const session = Session.create(id, [], { version: 0, id, createdAt: Date.now(), cwd: 'C:/test' });
+  session.append('turn/start', { turn: 2 });
+  session.append('step/start', { turn: 2, step: 3 });
+  const append = (seqLabel, data) => session.append('tool/result', { turn: data.turn, step: data.step, ...data, message: { role: 'user', source: { kind: 'tool', callId: seqLabel }, id: 'r-' + seqLabel, content: [{ type: 'tool-result', toolCallId: seqLabel, ...data.isError === undefined ? {} : { isError: data.isError }, content: [{ type: 'text', text: 'x'.repeat(200) }] }] } }, { surfaceOp: 'append' });
+  const failed = append('failed', { turn: 1, step: 1, error: { code: 'FAIL' } });
+  const incomplete = append('incomplete', { turn: 1, step: 2, completed: false });
+  const current = append('current', { turn: 2, step: 3 });
+  const outcome = await pruner.pruneSession(session);
+  assert.deepEqual(outcome.pruned, []);
+  assert.ok(session.surface.nodes.includes(failed.seq));
+  assert.ok(session.surface.nodes.includes(incomplete.seq));
+  assert.ok(session.surface.nodes.includes(current.seq));
+});
+test('10. deployed overlay config resolves the observed route effective limit to 1000000', () => {
   const configured = 1000000;
   const attested = 1048576;
   assert.equal(effectiveContextLimit(configured, attested), 1000000);

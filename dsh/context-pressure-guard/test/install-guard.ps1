@@ -11,7 +11,8 @@ if (-not $Checkout) { throw 'DSH checkout not found' }
 $packages = @(
   @{ Source=$root; Name='dsh-agent-loop-pressure-guard' },
   @{ Source=(Join-Path $root 'token-meter'); Name='dsh-token-meter-pressure-guard' },
-  @{ Source=(Join-Path $root 'tool-result-pruner'); Name='dsh-tool-result-pruner-pressure-guard' }
+  @{ Source=(Join-Path $root 'tool-result-pruner'); Name='dsh-tool-result-pruner-pressure-guard' },
+  @{ Source=(Join-Path (Split-Path $root -Parent) 'context-lifecycle'); Name='dsh-context-lifecycle' }
 )
 foreach ($p in $packages) {
   $dest = Join-Path $profile ("plugins\" + $p.Name)
@@ -58,7 +59,16 @@ $start
             providerAttestedLimit: 1048576
   - id: tool-result-pruner-pressure-guard
     name: './plugins/dsh-tool-result-pruner-pressure-guard/lib/index.js'
-    disabled: true
+    disabled: false
+    config:
+      thresholdChars: 8192
+      headChars: 4096
+      tailChars: 1024
+  - id: context-lifecycle
+    name: './plugins/dsh-context-lifecycle/lib/index.js'
+    config:
+      archiveThresholdTokens: 800000
+      sidecarDir: './.dsh-context-lifecycle'
 "@
   [System.IO.File]::WriteAllText($patch, $content + $block, [System.Text.UTF8Encoding]::new($false))
 }

@@ -1,0 +1,7 @@
+# Portable profile fragment for durable context lifecycle state and handoff.
+- insert:
+  - id: context-lifecycle
+    name: './plugins/dsh-context-lifecycle/lib/index.js'
+    config:
+      archiveThresholdTokens: 800000
+      sidecarDir: './.dsh-context-lifecycle'

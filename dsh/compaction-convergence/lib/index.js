@@ -1,4 +1,4 @@
-// dsh-compaction-convergence patch v0.1.1-rc.2+conv.1 (FIX A checkpoint-aware selection, FIX B pressure convergence)
+// dsh-compaction-convergence patch v0.1.1-rc.2+conv.2 (checkpoint-safe selection, bounded pressure convergence)
 import z from "@deepseek-ai/schemastery";
 import { CompactionEngine, CompactionId, ManualCompactionError, compactCheckpointSource, isCompactCheckpointSource, toolPairingBalancedAfter, toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
 import { BlockAssembler, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, assertNever, contentHasImage, createUserMessage, deepFreeze, errorChain } from "@deepseek-ai/dsh-llm";
@@ -23,7 +23,8 @@ const POLICY_CONFIG_KEYS = [
 	"summarizationModel",
 	"maxTokens",
 	"compactionRetries",
-	"maxOverflowRetries"
+	"maxOverflowRetries",
+	"maxConsecutiveFailures"
 ];
 /** Complete public top-level configuration key set. */
 const BASIC_COMPACT_CONFIG_KEYS = new Set([
@@ -71,6 +72,7 @@ function resolveConfig(config = {}) {
 		maxTokens: config.maxTokens ?? 8192,
 		compactionRetries: config.compactionRetries ?? 1,
 		maxOverflowRetries: config.maxOverflowRetries ?? 1,
+		maxConsecutiveFailures: config.maxConsecutiveFailures ?? 3,
 		modelPolicies,
 		auto: config.auto ?? true
 	});
@@ -95,7 +97,8 @@ function resolveTargetPolicy(config, target) {
 		summarizationModel: override?.summarizationModel ?? config.summarizationModel,
 		maxTokens: override?.maxTokens ?? config.maxTokens,
 		compactionRetries: override?.compactionRetries ?? config.compactionRetries,
-		maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries
+		maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
+		maxConsecutiveFailures: override?.maxConsecutiveFailures ?? config.maxConsecutiveFailures
 	});
 }
 /**
@@ -120,7 +123,8 @@ function resolveCompactSpec(policy, contextWindow) {
 		summarizationModel: policy.summarizationModel,
 		maxTokens: policy.maxTokens,
 		compactionRetries: policy.compactionRetries,
-		maxOverflowRetries: policy.maxOverflowRetries
+		maxOverflowRetries: policy.maxOverflowRetries,
+		maxConsecutiveFailures: policy.maxConsecutiveFailures
 	});
 }
 /** Choose an explicit retention form or inherit the already-resolved fallback. */
@@ -162,6 +166,7 @@ function validatePolicy(config, name) {
 	const maxTokens = config.maxTokens;
 	const compactionRetries = config.compactionRetries;
 	const maxOverflowRetries = config.maxOverflowRetries;
+	const maxConsecutiveFailures = config.maxConsecutiveFailures;
 	if (thresholdRatio !== void 0) assertRatio(`${name}.thresholdRatio`, thresholdRatio);
 	if (retainRatio !== void 0) assertRatio(`${name}.retainRatio`, retainRatio);
 	if (retainTokens !== void 0) assertNonNegativeInteger(`${name}.retainTokens`, retainTokens);
@@ -169,6 +174,7 @@ function validatePolicy(config, name) {
 	if (maxTokens !== void 0) assertPositiveInteger(`${name}.maxTokens`, maxTokens);
 	if (compactionRetries !== void 0) assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries);
 	if (maxOverflowRetries !== void 0) assertNonNegativeInteger(`${name}.maxOverflowRetries`, maxOverflowRetries);
+	if (maxConsecutiveFailures !== void 0) assertPositiveInteger(`${name}.maxConsecutiveFailures`, maxConsecutiveFailures);
 	validateSummarizationPair(config, name);
 }
 /** Require one scope to omit, clear, or replace the summarization target as a pair. */
@@ -419,6 +425,30 @@ function selectCompactableRange(session, measurement, retainTokens) {
 		startIdx += 1;
 	}
 	if (startIdx >= keepFromIdx) return null;
+	// Prefer the largest stale successful tool result that is outside the
+	// retained tail.  The replacement remains one contiguous balanced range,
+	// so replay is deterministic and a checkpoint can never be the sole target.
+	// Failed/incomplete results and the current tail are deliberately excluded.
+	let preferredEndIdx = -1;
+	let preferredTokens = -1;
+	for (let index = startIdx; index < keepFromIdx; index += 1) {
+		const event = session.events[surfaceNodes[index]];
+		const result = event?.type === "tool/result" ? event.data : void 0;
+		const block = result?.message?.content?.[0];
+		const staleSuccessfulResult = event?.type === "tool/result" && result?.error === void 0 && block?.isError !== true;
+		if (!staleSuccessfulResult || !toolPairingBalancedAfter(session, surfaceNodes[index])) continue;
+		const tokens = pricedNodes[index]?.tokens ?? 0;
+		if (tokens > preferredTokens) {
+			preferredTokens = tokens;
+			preferredEndIdx = index;
+		}
+	}
+	if (preferredEndIdx >= startIdx) {
+		return {
+			start: surfaceNodes[startIdx],
+			end: surfaceNodes[preferredEndIdx]
+		};
+	}
 	return {
 		start: surfaceNodes[startIdx],
 		end: surfaceNodes[keepFromIdx - 1]
@@ -744,6 +774,7 @@ const summarizationModelSchema = z.string();
 const maxTokensSchema = z.number().step(1).min(1);
 const compactionRetriesSchema = z.number().step(1).min(0);
 const maxOverflowRetriesSchema = z.number().step(1).min(0);
+const maxConsecutiveFailuresSchema = z.number().step(1).min(1);
 const modelPolicy = z.object({
 	provider: z.string().required(),
 	model: z.string().required(),
@@ -754,7 +785,8 @@ const modelPolicy = z.object({
 	summarizationModel: summarizationModelSchema,
 	maxTokens: maxTokensSchema,
 	compactionRetries: compactionRetriesSchema,
-	maxOverflowRetries: maxOverflowRetriesSchema
+	maxOverflowRetries: maxOverflowRetriesSchema,
+	maxConsecutiveFailures: maxConsecutiveFailuresSchema
 });
 /**
 * Dependency-light compaction backend using `ctx.tokenMeter` for pressure,
@@ -779,6 +811,7 @@ var BasicCompactionEngine = class extends CompactionEngine {
 		maxTokens: maxTokensSchema,
 		compactionRetries: compactionRetriesSchema,
 		maxOverflowRetries: maxOverflowRetriesSchema,
+		maxConsecutiveFailures: maxConsecutiveFailuresSchema.default(3),
 		modelPolicies: z.array(modelPolicy),
 		auto: z.boolean()
 	});
@@ -789,6 +822,10 @@ var BasicCompactionEngine = class extends CompactionEngine {
 	overflowAgents = /* @__PURE__ */ new WeakMap();
 	/** FIX B: pressure 路径同一 region 且 surface 未变的 summary-not-smaller 失败状态. */
 	failedPressureRegion = /* @__PURE__ */ new WeakMap();
+	/** Cross-step non-shrinking breaker state, reset only by material surface change or successful compaction. */
+	failureCircuits = /* @__PURE__ */ new WeakMap();
+	/** Last pressure failure outcome consumed by the final request admission guard. */
+	pressureFailures = /* @__PURE__ */ new WeakMap();
 	constructor(ctx, config = {}) {
 		super(ctx);
 		this.config = resolveConfig(config);
@@ -807,8 +844,13 @@ var BasicCompactionEngine = class extends CompactionEngine {
 		ctx.on("agent/pre-step", async ({ agent, signal }, next) => {
 			if (!signal.aborted) try {
 				const result = await this.compactIfNeeded(agent, "pressure", signal);
+				this.pressureFailures.delete(agent);
 				if (result !== null) logResult(result, "step pressure");
 			} catch (error) {
+				this.pressureFailures.set(agent, {
+					error,
+					surfaceVersion: `${agent.session.surface.replaceGeneration}:${agent.session.surface.nodes.length}`
+				});
 				if (error instanceof TargetPressureConfigError) {
 					if (this.warnedPressureConfigTargets.has(error.targetKey)) return next();
 					this.warnedPressureConfigTargets.add(error.targetKey);
@@ -825,6 +867,19 @@ var BasicCompactionEngine = class extends CompactionEngine {
 			if (event.type !== "assistant/message") return;
 			const agent = this.overflowAgents.get(session);
 			if (agent !== void 0) this.overflowRetries.delete(agent);
+		});
+		ctx.on("agent/request", async ({ agent }, next) => {
+			const config = await next();
+			const failed = this.pressureFailures.get(agent);
+			if (failed === void 0) return config;
+			const measurement = this.ctx.tokenMeter.measure(agent.session);
+			const target = { provider: config.provider, model: config.model };
+			const context = (await this.ctx.llm.resolveModelInfo(target.provider, target.model)).context;
+			if (context === void 0) return config;
+			const spec = resolveCompactSpec(resolveTargetPolicy(this.config, target), context.contextWindow);
+			const reserved = config.maxTokens ?? 65536;
+			if (measurement.totalTokens + reserved + 16384 > context.contextWindow) throw new LlmError(`pressure compaction failed and request has no proven safety margin (${measurement.totalTokens} + ${reserved} + 16384 > ${context.contextWindow})`, "CONTEXT_PREFLIGHT_BLOCKED");
+			return config;
 		});
 		ctx.on("agent/request-error", async ({ agent, failure, signal }, next) => {
 			if (failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || signal.aborted) return next();
@@ -894,7 +949,7 @@ var BasicCompactionEngine = class extends CompactionEngine {
 		const prune = this.ctx.get("toolResultPruner");
 		if (trigger === "context-overflow") {
 			if (prune !== void 0) {
-				prune.pruneSession(agent.session);
+				await prune.pruneSession(agent.session);
 				measurement = meter.measure(agent.session);
 			}
 			const range = selectCompactableRange(agent.session, measurement, 0);
@@ -908,7 +963,7 @@ var BasicCompactionEngine = class extends CompactionEngine {
 		const spec = resolveCompactSpec(policy, context.contextWindow);
 		if (measurement.totalTokens < spec.thresholdTokens) return null;
 		if (prune !== void 0) {
-			prune.pruneSession(agent.session);
+			await prune.pruneSession(agent.session);
 			measurement = meter.measure(agent.session);
 		}
 		if (measurement.totalTokens < spec.thresholdTokens) return null;
@@ -922,17 +977,36 @@ var BasicCompactionEngine = class extends CompactionEngine {
 				/* v8 ignore next -- paired with the defensive post-success branch above. */
 				break;
 			}
+			const selectedNodes = measurement.nodes.filter((node) => node.seq >= range.start && node.seq <= range.end);
+			const selectedContent = selectedNodes.map((node) => {
+				const event = agent.session.events[node.seq];
+				return `${node.seq}:${node.tokens}:${event?.type ?? "missing"}:${JSON.stringify(event?.data ?? null)}`;
+			}).join("|");
+			const contentFingerprint = selectedContent.length > 0 ? selectedContent : "empty";
+			const wholeSurfaceFingerprint = `${agent.session.surface.replaceGeneration}:${agent.session.surface.nodes.map((seq) => `${seq}:${measurement.nodes.find((node) => node.seq === seq)?.tokens ?? 0}`).join(",")}`;
+			// The circuit is intentionally keyed to the selected surface, not the
+			// whole session. New work appended after the retained tail belongs to a
+			// later step but must not reset a non-shrinking failure for the unchanged
+			// region. Any change inside the selected range produces a new fingerprint.
+			const surfaceVersion = `${range.start}:${range.end}:${contentFingerprint}`;
+			const fingerprint = surfaceVersion;
+			const circuit = this.failureCircuits.get(agent);
+			if (circuit !== void 0 && circuit.surfaceVersion === surfaceVersion && circuit.open) {
+				this.ctx.get("contextLifecycle")?.recordCircuit(agent.session, { state: "OPEN", count: circuit.count, fingerprint, reason: "summary_not_smaller" });
+				return null;
+			}
 			if (
 				attempt === 0 &&
 				failedRegion !== void 0 &&
 				failedRegion.start === range.start &&
 				failedRegion.end === range.end &&
-				failedRegion.fingerprint === `${measurement.surfaceTokens}:${agent.session.surface.nodes.length}`
+				failedRegion.fingerprint === wholeSurfaceFingerprint
 			) {
 				// FIX B: 同一 region 且 surface 无变化（无新增/替换）时不再调用 summarizer。
 				return null;
 			}
 			try {
+				this.ctx.get("contextLifecycle")?.recordCompaction(agent.session, { state: "RUNNING", trigger, selectedRange: { start: range.start, end: range.end } });
 				result = await this.compactRegion(range.start, range.end, agent, signal);
 			} catch (error) {
 				if (isSummaryNotSmallerError(error)) {
@@ -941,12 +1015,34 @@ var BasicCompactionEngine = class extends CompactionEngine {
 					this.failedPressureRegion.set(agent, {
 						start: range.start,
 						end: range.end,
-						fingerprint: `${measurement.surfaceTokens}:${agent.session.surface.nodes.length}`
+						fingerprint: wholeSurfaceFingerprint
+					});
+					const previous = this.failureCircuits.get(agent);
+					const count = previous?.surfaceVersion === surfaceVersion ? previous.count + 1 : 1;
+					this.failureCircuits.set(agent, {
+						fingerprint,
+						selectedRange: { start: range.start, end: range.end },
+						shadowedTokenEstimate: Number(error.message.match(/>= (\d+)\)/)?.[1] ?? 0),
+						summaryTokenEstimate: Number(error.message.match(/\((\d+) estimated/)?.[1] ?? 0),
+						surfaceVersion,
+						failureReason: "summary_not_smaller",
+						count,
+						open: count >= spec.maxConsecutiveFailures
+					});
+					this.ctx.get("contextLifecycle")?.recordCircuit(agent.session, {
+						state: count >= spec.maxConsecutiveFailures ? "OPEN" : "COUNTING",
+						count,
+						fingerprint,
+						reason: "summary_not_smaller"
 					});
 				}
 				throw error;
 			}
 			this.failedPressureRegion.delete(agent);
+			this.failureCircuits.delete(agent);
+			this.pressureFailures.delete(agent);
+			this.ctx.get("contextLifecycle")?.recordCompaction(agent.session, { state: "IDLE", trigger, selectedRange: { start: range.start, end: range.end } });
+			this.ctx.get("contextLifecycle")?.recordCircuit(agent.session, { state: "CLOSED", reason: "successful_compaction" });
 			measurement = meter.measure(agent.session);
 			if (measurement.totalTokens < spec.thresholdTokens) return result;
 		}

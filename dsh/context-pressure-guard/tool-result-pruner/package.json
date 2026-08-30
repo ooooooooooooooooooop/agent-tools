@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-compaction-tool-result-pruner",
-  "description": "Replay-safe tool-result pruning with traceable spill artifact references",
-  "version": "0.1.1-rc.2+pressure.1",
+  "description": "Replay-safe tool-result pruning with durable, restorable artifact references",
+  "version": "0.1.1-rc.2+pressure.2",
   "publishConfig": {
     "access": "public"
   },
