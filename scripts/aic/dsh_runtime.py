@@ -44,6 +44,12 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def sha256_portable_file(path: Path) -> str:
+    """Hash text assets independent of Git checkout line-ending policy."""
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
 def sha256_tree(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted((p for p in root.rglob("*") if p.is_file()),
@@ -118,7 +124,7 @@ def validate_contract(contract: dict[str, Any]) -> list[str]:
         patch = ROOT / ui["patch_file"]
         if not patch.is_file():
             errors.append(f"missing UI patch asset: {patch}")
-        elif sha256_file(patch) != ui["patch_sha256"]:
+        elif sha256_portable_file(patch) != ui["patch_sha256"]:
             errors.append(f"UI patch SHA-256 mismatch: {patch}")
         if not profile.get("patch_file") or not profile.get("manifest_file"):
             errors.append("runtime_composition.profile must declare patch_file and manifest_file")
