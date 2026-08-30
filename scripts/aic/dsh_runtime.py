@@ -241,8 +241,11 @@ def render_patch(existing: Path | None, cfg: dict[str, Any]) -> tuple[str, str]:
     old = existing.read_text(encoding="utf-8-sig") if existing and existing.is_file() else ""
     known_ids = {r["id"] for r in _managed_rows(cfg)}
     base = _strip_legacy_blocks(old, known_ids).rstrip()
-    managed = yaml.safe_dump([{"insert": _managed_rows(cfg)}],
-                             allow_unicode=True, sort_keys=False)
+    rows = _managed_rows(cfg)
+    disable_ids = {r["id"] for r in cfg["managed_rows"]["disable"]}
+    managed_rows = [r for r in rows if r["id"] in disable_ids]
+    managed_rows.append({"insert": [r for r in rows if r["id"] not in disable_ids]})
+    managed = yaml.safe_dump(managed_rows, allow_unicode=True, sort_keys=False)
     block = f"{MANAGED_BEGIN}\n{managed}{MANAGED_END}\n"
     return ((base + "\n\n" if base else "") + block, sha256_text(block))
 
@@ -341,13 +344,26 @@ def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any]) -> 
                 f"managed Node distribution lacks bundled npm CLI: {npm_cli}"
             )
         env = {**os.environ, "PATH": str(node_root) + os.pathsep + os.environ.get("PATH", "")}
-        _run([
+        install_args = [
             str(node_exe), str(npm_cli), "install", "--prefix", str(base_root),
             "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false",
             "--omit=dev", "--install-strategy=shallow", "--prefer-offline",
             "--progress=false", "--legacy-peer-deps",
             f"{base_cfg['package']}@{base_cfg['version']}",
-        ], env=env, timeout=900)
+        ]
+        _run(install_args, env=env, timeout=900)
+        for _ in range(4):
+            peer_specs = _missing_peer_specs(base_root)
+            if not peer_specs:
+                break
+            _run([
+                str(node_exe), str(npm_cli), "install", "--prefix", str(base_root),
+                "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false",
+                "--no-save", "--omit=dev", "--install-strategy=shallow", "--prefer-offline",
+                "--progress=false", "--legacy-peer-deps", *peer_specs,
+            ], env=env, timeout=900)
+        else:
+            raise DshCompositionError("DSH base peer dependency closure did not converge")
     entry = base_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
     package_json = base_root / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
     if not entry.is_file() or not package_json.is_file():
@@ -355,7 +371,45 @@ def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any]) -> 
     package = json.loads(package_json.read_text(encoding="utf-8-sig"))
     if package.get("name") != base_cfg["package"] or package.get("version") != base_cfg["version"]:
         raise DshCompositionError("installed DSH base package identity mismatch")
+    node_exe = node_root / "node.exe"
+    try:
+        _run([str(node_exe), str(entry), "--help"], cwd=base_root, timeout=60)
+    except DshCompositionError as exc:
+        raise DshCompositionError(f"installed DSH base failed startup dependency check: {exc}") from exc
     return base_root
+
+
+def _resolvable_package_json(start: Path, package_name: str) -> bool:
+    """Apply Node's upward node_modules lookup for a package name."""
+    relative = Path(*package_name.split("/"))
+    current = start
+    for parent in (current, *current.parents):
+        if (parent / "node_modules" / relative / "package.json").is_file():
+            return True
+    return False
+
+
+def _missing_peer_specs(base_root: Path) -> list[str]:
+    """Return required, registry-resolvable peer packages absent from the staged Base."""
+    missing: dict[str, str] = {}
+    modules = base_root / "node_modules"
+    if not modules.is_dir():
+        return []
+    for package_json in modules.rglob("package.json"):
+        try:
+            package = json.loads(package_json.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        peers = package.get("peerDependencies") or {}
+        optional = (package.get("peerDependenciesMeta") or {})
+        for name, requirement in peers.items():
+            if str(requirement).startswith("workspace:"):
+                continue
+            if optional.get(name, {}).get("optional"):
+                continue
+            if not _resolvable_package_json(package_json.parent, name):
+                missing.setdefault(name, f"{name}@{requirement}")
+    return sorted(missing.values())
 
 
 def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str, Any]:
@@ -440,21 +494,39 @@ def _build_ui(source: Path, node_root: Path, cfg: dict[str, Any]) -> tuple[Path,
     return client, web_dist, sha256_tree(web_dist)
 
 
+def _dsh_resolved_dependency_root(base_root: Path, package_name: str) -> Path:
+    relative = Path(*package_name.split("/"))
+    nested = base_root / "node_modules" / "@deepseek-ai" / "dsh" / "node_modules" / relative
+    root = base_root / "node_modules" / relative
+    return nested if (nested / "package.json").is_file() else root
+
+
 def _copy_ui(base_root: Path, client: Path, web_dist: Path) -> tuple[Path, Path, str]:
-    package_root = base_root / "node_modules" / "@deepseek-ai" / "dsh-client-ui-conversation"
-    package_root.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(client.parent.parent / "package.json", package_root / "package.json")
-    shutil.copytree(client.parent, package_root / "lib", dirs_exist_ok=True)
-    client_dest = package_root / "lib" / "client.js"
+    client_roots = [
+        base_root / "node_modules" / "@deepseek-ai" / "dsh" / "node_modules" /
+        "@deepseek-ai" / "dsh-client-ui-conversation",
+        base_root / "node_modules" / "@deepseek-ai" / "dsh-client-ui-conversation",
+    ]
+    for package_root in client_roots:
+        package_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(client.parent.parent / "package.json", package_root / "package.json")
+        shutil.copytree(client.parent, package_root / "lib", dirs_exist_ok=True)
+    client_dest = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-client-ui-conversation") / "lib" / "client.js"
     if sha256_file(client_dest) != sha256_file(client):
         raise DshCompositionError("UI client bundle copy hash mismatch")
-    frontend = base_root / "node_modules" / "@deepseek-ai" / "dsh-web-frontend"
-    frontend.mkdir(parents=True, exist_ok=True)
+    frontend_roots = [
+        base_root / "node_modules" / "@deepseek-ai" / "dsh" / "node_modules" /
+        "@deepseek-ai" / "dsh-web-frontend",
+        base_root / "node_modules" / "@deepseek-ai" / "dsh-web-frontend",
+    ]
     source_package = web_dist.parent / "package.json"
-    if source_package.is_file():
-        shutil.copy2(source_package, frontend / "package.json")
-    shutil.copytree(web_dist, frontend / "dist", dirs_exist_ok=True)
-    return client_dest, frontend / "dist", sha256_tree(frontend / "dist")
+    for frontend in frontend_roots:
+        frontend.mkdir(parents=True, exist_ok=True)
+        if source_package.is_file():
+            shutil.copy2(source_package, frontend / "package.json")
+        shutil.copytree(web_dist, frontend / "dist", dirs_exist_ok=True)
+    frontend_dest = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-web-frontend") / "dist"
+    return client_dest, frontend_dest, sha256_tree(frontend_dest)
 
 
 def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -470,7 +542,7 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
         source_package = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
         if source_package.get("name") != plugin["package"] or source_package.get("version") != plugin["version"]:
             raise DshCompositionError(f"overlay package identity mismatch: {plugin['id']}")
-        result.append({
+        record = {
             "id": plugin["id"],
             "package": plugin["package"],
             "version": plugin["version"],
@@ -480,7 +552,17 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
             "deploymentRelative": str(Path(cfg["profile"]["relative_to_dsh_home"]) / "plugins" /
                                         plugin["plugin_directory"] / plugin["entry_relative"]).replace("\\", "/"),
             "deploymentSha256": sha256_file(deployed_entry),
-        })
+        }
+        if plugin["id"] == "compaction-basic-convergence":
+            marker = {
+                "schema_version": 1,
+                "deployed_version": plugin["version"],
+                "fork_lib_index_sha256": record["deploymentSha256"],
+            }
+            marker_path = destination / "lib" / ".dsh-convergence.json"
+            marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
+            record["markerSha256"] = sha256_file(marker_path)
+        result.append(record)
     return result
 
 
@@ -587,15 +669,20 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         actual_hash = sha256_file(base_entry)
         if actual_hash != manifest["base"]["entrySha256"]:
             finding("DEPLOYMENT_DRIFT", "base.entrySha256", manifest["base"]["entrySha256"], actual_hash)
+    if node_exe.is_file() and base_entry.is_file():
+        try:
+            _run([str(node_exe), str(base_entry), "--help"], cwd=base_root, timeout=60)
+        except DshCompositionError as exc:
+            finding("RUNTIME_DRIFT", "base.startup-dependencies", "DSH CLI help exits 0", str(exc))
 
-    client = base_root / "node_modules" / "@deepseek-ai" / "dsh-client-ui-conversation" / "lib" / "client.js"
+    client = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-client-ui-conversation") / "lib" / "client.js"
     if not client.is_file():
         finding("DEPLOYMENT_DRIFT", "ui.client.bundle", "present", "missing")
     elif manifest.get("ui", {}).get("clientBundleSha256"):
         actual_hash = sha256_file(client)
         if actual_hash != manifest["ui"]["clientBundleSha256"]:
             finding("DEPLOYMENT_DRIFT", "ui.client.bundle", manifest["ui"]["clientBundleSha256"], actual_hash)
-    frontend = base_root / "node_modules" / "@deepseek-ai" / "dsh-web-frontend" / "dist"
+    frontend = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-web-frontend") / "dist"
     if not frontend.is_dir():
         finding("DEPLOYMENT_DRIFT", "ui.web.dist", "present", "missing")
     elif manifest.get("ui", {}).get("webDistSha256"):
@@ -636,6 +723,13 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             finding("DEPLOYMENT_DRIFT", plugin["id"], "present", "missing")
         elif sha256_file(dest) != source_hash:
             finding("DEPLOYMENT_DRIFT", plugin["id"], source_hash, sha256_file(dest))
+        if plugin["id"] == "compaction-basic-convergence":
+            marker_path = dest.parent / ".dsh-convergence.json"
+            expected_marker = deployed.get(plugin["id"], {}).get("markerSha256")
+            if not marker_path.is_file():
+                finding("DEPLOYMENT_DRIFT", plugin["id"] + ".marker", "present", "missing")
+            elif expected_marker and sha256_file(marker_path) != expected_marker:
+                finding("DEPLOYMENT_DRIFT", plugin["id"] + ".marker", expected_marker, sha256_file(marker_path))
         if deployed.get(plugin["id"], {}).get("loadOrder") != order:
             finding("CONFIG_DRIFT", f"{plugin['id']}.loadOrder", order,
                     deployed.get(plugin["id"], {}).get("loadOrder", "missing"))
@@ -714,11 +808,9 @@ def apply(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "ui": {"repository": cfg["ui"]["repository"], "baselineCommit": cfg["ui"]["baseline_commit"],
                    "sourceState": source_state, "fixCommit": cfg["ui"]["fix_commit"],
                    "patchFile": cfg["ui"]["patch_file"], "patchSha256": cfg["ui"]["patch_sha256"],
-                   "clientBundleRelative": str((profile_rel / base_root.name /
-                                                  "node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js")).replace("\\", "/"),
+                   "clientBundleRelative": str((profile_rel / client_dest.relative_to(stage_profile))).replace("\\", "/"),
                    "clientBundleSha256": sha256_file(client_dest),
-                   "webDistRelative": str((profile_rel / base_root.name /
-                                             "node_modules/@deepseek-ai/dsh-web-frontend/dist")).replace("\\", "/"),
+                   "webDistRelative": str((profile_rel / web_dest.relative_to(stage_profile))).replace("\\", "/"),
                    "webDistSha256": web_hash},
             "overlays": overlays,
             "cordisPatch": {"relativePath": str((Path(cfg["profile"]["relative_to_dsh_home"]) /

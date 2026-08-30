@@ -66,6 +66,6 @@ const tiny = { events, surface: { nodes: [99], replaceGeneration: 0 } };
 const r2 = selectCompactableRange(tiny, { nodes: [{ seq: 99, tokens: 200 }], surfaceTokens: 200, totalTokens: 200, baseline: { kind: 'estimated', tokens: 0 }, surfaceDeltaTokens: 0 }, 0);
 results.allCheckpointReturnsNull = r2 === null;
 
-const allPass = Object.values(results).every((v) => v === true || v === '0.1.1-rc.2+conv.1');
+const allPass = Object.values(results).every((v) => v === true || v === pkg.version);
 console.log(JSON.stringify({ deployed: results, allPass }, null, 2));
 process.exit(allPass ? 0 : 1);
