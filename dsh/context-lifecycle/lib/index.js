@@ -2,6 +2,7 @@ import { Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { LlmError, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -91,6 +92,7 @@ export class ContextLifecycle extends Service {
 	admissions = new Map();
 	compactions = new Map();
 	circuits = new Map();
+	guardedAgents = new WeakMap();
 	constructor(ctx, config = {}) {
 		super(ctx, "contextLifecycle");
 		this.config = {
@@ -99,6 +101,8 @@ export class ContextLifecycle extends Service {
 		};
 		ctx.on("session/created", (session) => { void this.observe(session); });
 		ctx.on("session/event", (session) => { void this.observe(session); });
+		ctx.on("agent/created", ({ agent }) => { this.installAgentInputGuard(agent); });
+		ctx.on("agent/disposed", ({ agent }) => { this.uninstallAgentInputGuard(agent); });
 		ctx.on("agent/request", async ({ agent }, next) => {
 			const state = await this.ensureState(agent.session);
 			if (state?.status === READ_ONLY_CONTEXT_EXHAUSTED) {
@@ -117,6 +121,39 @@ export class ContextLifecycle extends Service {
 	}
 
 	stateFile(sessionId) { return join(this.config.sidecarDir, `${safeName(sessionId)}.json`); }
+
+	loadStateSync(sessionId) {
+		const cached = this.states.get(sessionId);
+		if (cached !== void 0) return cached;
+		try {
+			const parsed = JSON.parse(readFileSync(this.stateFile(sessionId), "utf8"));
+			if (parsed.sessionId === sessionId) {
+				this.states.set(sessionId, parsed);
+				return parsed;
+			}
+		} catch (error) {
+			if (error?.code !== "ENOENT") this.ctx.logger.warn(`context-lifecycle: synchronous sidecar read failed: ${String(error)}`);
+		}
+		return void 0;
+	}
+
+	installAgentInputGuard(agent) {
+		if (!agent || typeof agent.send !== "function" || this.guardedAgents.has(agent)) return;
+		const originalSend = agent.send;
+		const service = this;
+		agent.send = function guardedSend(message, target, wakeup) {
+			service.assertAdmissible(agent.session);
+			return originalSend.call(this, message, target, wakeup);
+		};
+		this.guardedAgents.set(agent, { originalSend });
+	}
+
+	uninstallAgentInputGuard(agent) {
+		const entry = this.guardedAgents.get(agent);
+		if (entry === void 0) return;
+		if (agent.send !== entry.originalSend) agent.send = entry.originalSend;
+		this.guardedAgents.delete(agent);
+	}
 
 	async ensureState(session) {
 		if (this.states.has(session.id)) return this.states.get(session.id);
@@ -197,7 +234,7 @@ export class ContextLifecycle extends Service {
 	}
 
 	assertAdmissible(session) {
-		const state = this.states.get(session.id);
+		const state = this.loadStateSync(session.id);
 		if (state?.status === READ_ONLY_CONTEXT_EXHAUSTED) throw new LlmError(`session ${session.id} is ${READ_ONLY_CONTEXT_EXHAUSTED}; continue from a handoff session`, CONTEXT_PREFLIGHT_BLOCKED);
 		return true;
 	}
