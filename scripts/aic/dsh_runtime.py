@@ -463,10 +463,10 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
         source_root = ROOT / plugin["source_relative"]
         source_entry = source_root / plugin["entry_relative"]
         destination = stage_profile / "plugins" / plugin["plugin_directory"]
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_entry, destination / Path(plugin["entry_relative"]).name)
+        deployed_entry = destination / plugin["entry_relative"]
+        deployed_entry.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_entry, deployed_entry)
         shutil.copy2(source_root / "package.json", destination / "package.json")
-        deployed_entry = destination / Path(plugin["entry_relative"]).name
         source_package = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
         if source_package.get("name") != plugin["package"] or source_package.get("version") != plugin["version"]:
             raise DshCompositionError(f"overlay package identity mismatch: {plugin['id']}")
@@ -478,7 +478,7 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
             "sourceRelative": str(Path(plugin["source_relative"]) / plugin["entry_relative"]).replace("\\", "/"),
             "sourceSha256": sha256_file(source_entry),
             "deploymentRelative": str(Path(cfg["profile"]["relative_to_dsh_home"]) / "plugins" /
-                                        plugin["plugin_directory"] / Path(plugin["entry_relative"]).name).replace("\\", "/"),
+                                        plugin["plugin_directory"] / plugin["entry_relative"]).replace("\\", "/"),
             "deploymentSha256": sha256_file(deployed_entry),
         })
     return result
@@ -627,7 +627,7 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
     deployed = {p["id"]: p for p in manifest.get("overlays", [])}
     for order, plugin in enumerate(cfg["managed_rows"]["plugins"], start=1):
         source_entry = ROOT / plugin["source_relative"] / plugin["entry_relative"]
-        dest = profile / "plugins" / plugin["plugin_directory"] / Path(plugin["entry_relative"]).name
+        dest = profile / "plugins" / plugin["plugin_directory"] / plugin["entry_relative"]
         source_hash = sha256_file(source_entry) if source_entry.is_file() else "missing"
         if deployed.get(plugin["id"], {}).get("sourceSha256") != source_hash:
             finding("SOURCE_DRIFT", plugin["id"], source_hash,
@@ -701,6 +701,7 @@ def apply(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         launcher_stage.write_text(launcher_text, encoding="utf-8")
         launcher_hash = sha256_file(launcher_stage)
         archive = cfg["archive_anchor"]
+        profile_rel = Path(cfg["profile"]["relative_to_dsh_home"])
         payload: dict[str, Any] = {
             "schemaVersion": 1,
             "compositionId": cfg["id"],
@@ -713,9 +714,11 @@ def apply(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "ui": {"repository": cfg["ui"]["repository"], "baselineCommit": cfg["ui"]["baseline_commit"],
                    "sourceState": source_state, "fixCommit": cfg["ui"]["fix_commit"],
                    "patchFile": cfg["ui"]["patch_file"], "patchSha256": cfg["ui"]["patch_sha256"],
-                   "clientBundleRelative": str(client_dest.relative_to(home)).replace("\\", "/"),
+                   "clientBundleRelative": str((profile_rel / base_root.name /
+                                                  "node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js")).replace("\\", "/"),
                    "clientBundleSha256": sha256_file(client_dest),
-                   "webDistRelative": str(web_dest.relative_to(home)).replace("\\", "/"),
+                   "webDistRelative": str((profile_rel / base_root.name /
+                                             "node_modules/@deepseek-ai/dsh-web-frontend/dist")).replace("\\", "/"),
                    "webDistSha256": web_hash},
             "overlays": overlays,
             "cordisPatch": {"relativePath": str((Path(cfg["profile"]["relative_to_dsh_home"]) /
@@ -745,7 +748,6 @@ def apply(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         }
         base_manifest_stage = stage_profile / cfg["profile"]["base_distribution_file"]
         base_manifest_stage.write_text(json.dumps(base_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        profile_rel = Path(cfg["profile"]["relative_to_dsh_home"])
         entries: list[tuple[str, Path]] = [
             (cfg["node"]["relative_to_dsh_home"], node_root),
             (str(profile_rel / base_root.name), base_root),
