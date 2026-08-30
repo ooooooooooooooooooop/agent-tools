@@ -13,6 +13,7 @@ export const RESTART_REQUIRED = "RESTART_REQUIRED";
 export const CONTEXT_PREFLIGHT_BLOCKED = "CONTEXT_PREFLIGHT_BLOCKED";
 const DEFAULT_ARCHIVE_THRESHOLD = 800000;
 const DEFAULT_MAX_TEXT = 320;
+const API_PROMPT_GUARD = Symbol("dsh-context-lifecycle.api-prompt-guard");
 
 const textOf = (value) => {
 	if (typeof value === "string") return value;
@@ -93,6 +94,7 @@ export class ContextLifecycle extends Service {
 	compactions = new Map();
 	circuits = new Map();
 	guardedAgents = new WeakMap();
+	guardedApis = new WeakMap();
 	constructor(ctx, config = {}) {
 		super(ctx, "contextLifecycle");
 		this.config = {
@@ -116,8 +118,41 @@ export class ContextLifecycle extends Service {
 			if (session !== void 0) await this.requestExternalRestart(session, { command: exec.name });
 			return { kind: "deny", reason: `${RESTART_REQUIRED}: persist state and let the external supervisor restart this host` };
 		});
+		// The HTTP/API boundary must reject a cold archived session before agent
+		// lookup, durable prompt append, prepareCall, compaction, or dispatch.
+		// Agent-level guards remain installed as a second line for non-HTTP callers.
+		ctx.inject(["apiProxy"], (apiCtx) => {
+			if (this.installApiPromptGuard(apiCtx.apiProxy)) {
+				ctx.effect(() => () => this.uninstallApiPromptGuard(apiCtx.apiProxy), "contextLifecycle.apiPromptGuard");
+			}
+		});
 		const sessions = ctx.get("sessions");
 		for (const session of sessions?.list?.() ?? []) void this.observe(session);
+	}
+
+	installApiPromptGuard(apiProxy) {
+		const prompt = apiProxy?.sessions?.prompt;
+		if (typeof prompt !== "function" || prompt[API_PROMPT_GUARD] !== void 0) return false;
+		const service = this;
+		const guarded = async function guardedPrompt(request, ...args) {
+			const sessionId = request?.payload?.sessionId;
+			if (typeof sessionId === "string") {
+				const error = service.promptAdmissionError(sessionId);
+				if (error !== void 0) return { rpcId: request.rpcId, result: { ok: false, error } };
+			}
+			return prompt.apply(this, [request, ...args]);
+		};
+		guarded[API_PROMPT_GUARD] = true;
+		apiProxy.sessions.prompt = guarded;
+		this.guardedApis.set(apiProxy, { original: prompt, guarded });
+		return true;
+	}
+
+	uninstallApiPromptGuard(apiProxy) {
+		const entry = this.guardedApis.get(apiProxy);
+		if (entry === void 0) return;
+		if (apiProxy?.sessions?.prompt === entry.guarded) apiProxy.sessions.prompt = entry.original;
+		this.guardedApis.delete(apiProxy);
 	}
 
 	stateFile(sessionId) { return join(this.config.sidecarDir, `${safeName(sessionId)}.json`); }
@@ -234,28 +269,53 @@ export class ContextLifecycle extends Service {
 	}
 
 	assertAdmissible(session) {
-		const state = this.loadStateSync(session.id);
-		if (state?.status === READ_ONLY_CONTEXT_EXHAUSTED) throw new LlmError(`session ${session.id} is ${READ_ONLY_CONTEXT_EXHAUSTED}; continue from a handoff session`, CONTEXT_PREFLIGHT_BLOCKED);
+		const error = this.promptAdmissionError(session.id);
+		if (error !== void 0) throw new LlmError(error.message, error.details.admissionCode);
 		return true;
 	}
 
+	promptAdmissionError(sessionId) {
+		const state = this.loadStateSync(sessionId);
+		if (state?.status !== READ_ONLY_CONTEXT_EXHAUSTED) return void 0;
+		return {
+			code: READ_ONLY_CONTEXT_EXHAUSTED,
+			message: `session ${sessionId} is ${READ_ONLY_CONTEXT_EXHAUSTED}; continue from a handoff session`,
+			details: { sessionId, status: state.status, operationalLabel: state.operationalLabel, admissionCode: CONTEXT_PREFLIGHT_BLOCKED }
+		};
+	}
+
 	recordAdmission(session, snapshot) {
-		const value = clone({ ...snapshot, sessionId: session.id, recordedAt: new Date().toISOString() });
+		const normalized = clone(snapshot);
+		// `trustedUsage` is a provenance claim, not a numeric fallback.  If an
+		// upstream caller supplies an estimate in that slot, move it to the
+		// explicitly estimated field before it can reach the durable projection.
+		if (normalized.sampleValidity !== "trusted" && normalized.trustedUsage !== void 0) {
+			normalized.usageEstimate ??= typeof normalized.trustedUsage === "object" ? normalized.trustedUsage.tokens : normalized.trustedUsage;
+			delete normalized.trustedUsage;
+		}
+		const value = clone({ ...normalized, sessionId: session.id, recordedAt: new Date().toISOString() });
 		this.admissions.set(session.id, value);
 		this.appendObservabilityContext(session, {
-			...snapshot.provider === void 0 ? {} : { provider: snapshot.provider },
-			...snapshot.model === void 0 ? {} : { model: snapshot.model },
-			...snapshot.contextWindow === void 0 ? {} : { contextWindow: snapshot.contextWindow },
-			projectedInput: snapshot.projectedInput,
-			reservedOutput: snapshot.reservedOutput,
-			combinedContext: snapshot.combinedContext,
-			configuredLimit: snapshot.configuredLimit,
-			effectiveLimit: snapshot.effectiveLimit,
-			providerAttestedLimit: snapshot.providerAttestedLimit,
-			trustedUsage: typeof snapshot.trustedUsage === "object" ? snapshot.trustedUsage.tokens : snapshot.trustedUsage,
-			sampleValidity: snapshot.sampleValidity,
-			estimateMethod: snapshot.estimateMethod,
-			estimateConfidence: snapshot.estimateConfidence
+			...normalized.provider === void 0 ? {} : { provider: normalized.provider },
+			...normalized.model === void 0 ? {} : { model: normalized.model },
+			...normalized.contextWindow === void 0 ? {} : { contextWindow: normalized.contextWindow },
+			projectedInput: normalized.projectedInput,
+			reservedOutput: normalized.reservedOutput,
+			combinedContext: normalized.combinedContext,
+			configuredLimit: normalized.configuredLimit,
+			effectiveLimit: normalized.effectiveLimit,
+			providerAttestedLimit: normalized.providerAttestedLimit,
+			...normalized.sampleValidity === "trusted" && normalized.trustedUsage !== void 0
+				? { trustedUsage: typeof normalized.trustedUsage === "object" ? normalized.trustedUsage.tokens : normalized.trustedUsage }
+				: {},
+			sampleValidity: normalized.sampleValidity,
+			sampleSource: normalized.sampleSource,
+			sampleStatus: normalized.sampleStatus,
+			...normalized.sampleValidity === "estimated" && normalized.usageEstimate !== void 0
+				? { usageEstimate: normalized.usageEstimate }
+				: {},
+			estimateMethod: normalized.estimateMethod,
+			estimateConfidence: normalized.estimateConfidence
 		});
 		return value;
 	}

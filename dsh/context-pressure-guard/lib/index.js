@@ -814,8 +814,12 @@ var ReactLoopAgent = class {
 				configuredLimit: resolvedContextWindow,
 				effectiveLimit: decision.effectiveLimit,
 				providerAttestedLimit: admissionPolicy.providerAttestedLimit,
-				trustedUsage: usageSnapshot,
+				// An estimate is never serialized as trustedUsage.  Keep its numeric
+				// value under an explicitly non-trusted field for diagnostics only.
+				...usageSnapshot.validity === "trusted" ? { trustedUsage: usageSnapshot.tokens } : { usageEstimate: usageSnapshot.tokens },
 				sampleValidity: usageSnapshot.validity,
+				sampleSource: usageSnapshot.source,
+				sampleStatus: usageSnapshot.status,
 				estimateMethod: "fixed-density-conservative-multiplier",
 				estimateConfidence: "conservative",
 				admission: decision.safe ? "PASS" : "CONTEXT_PREFLIGHT_BLOCKED"

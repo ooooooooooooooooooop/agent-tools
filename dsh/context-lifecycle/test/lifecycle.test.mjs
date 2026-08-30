@@ -66,6 +66,35 @@ test('archived agent input is blocked before inbox append', async () => {
   }
 });
 
+test('idle API archive guard returns READ_ONLY_CONTEXT_EXHAUSTED before the provider pipeline', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-idle-api-guard-'));
+  try {
+    const ctx = new Context();
+    const service = new ContextLifecycle(ctx, { sidecarDir: dir });
+    const session = makeSession('idle-archived-session');
+    await service.archiveSnapshot(session.id, { measuredTokens: 920057 });
+    const calls = { provider: 0, prepareCall: 0, compaction: 0 };
+    const apiProxy = { sessions: { prompt: async () => {
+      calls.prepareCall += 1;
+      calls.compaction += 1;
+      calls.provider += 1;
+      return { result: { ok: true, value: { accepted: true } } };
+    } } };
+    assert.equal(service.installApiPromptGuard(apiProxy), true);
+    const response = await apiProxy.sessions.prompt({
+      rpcId: 'idle-archive',
+      payload: { sessionId: session.id, mode: 'followup', content: [{ type: 'text', text: 'must be rejected locally' }] }
+    });
+    assert.equal(response.result.ok, false);
+    assert.equal(response.result.error.code, READ_ONLY_CONTEXT_EXHAUSTED);
+    assert.equal(response.result.error.details.admissionCode, CONTEXT_PREFLIGHT_BLOCKED);
+    assert.notEqual(response.result.error.code, 'agent-busy');
+    assert.deepEqual(calls, { provider: 0, prepareCall: 0, compaction: 0 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('handoff preview/export keeps only resumable state and can create a new session', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-handoff-'));
   try {
@@ -140,4 +169,17 @@ test('cold durable session archive and observability are sidecar-only', async ()
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('estimated usage never occupies the trustedUsage field', () => {
+  const ctx = new Context();
+  const service = new ContextLifecycle(ctx, { sidecarDir: join(tmpdir(), `dsh-usage-${Math.random().toString(36).slice(2)}`) });
+  const session = makeSession('usage-semantics');
+  const recorded = service.recordAdmission(session, {
+    provider: 'cpa', model: 'gpt-5.6-sol-xhigh', sampleValidity: 'estimated', trustedUsage: 2031,
+    usageEstimate: 2031, sampleSource: 'estimated', sampleStatus: 'no-trusted-anchor'
+  });
+  assert.equal(recorded.trustedUsage, undefined);
+  assert.equal(recorded.usageEstimate, 2031);
+  assert.equal(service.observability(session).trustedUsage, undefined);
 });
