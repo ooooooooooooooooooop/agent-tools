@@ -25,6 +25,11 @@ from pathlib import Path
 
 import yaml
 
+from dsh_runtime import DshCompositionError, apply as apply_dsh_runtime
+from dsh_runtime import inspect as inspect_dsh_runtime
+from dsh_runtime import rollback as rollback_dsh_runtime
+from dsh_runtime import validate_contract as validate_dsh_contract
+
 ROOT = Path(__file__).resolve().parents[2]          # repo root (scripts/aic/aic.py)
 REG = ROOT / "registry"
 INV = REG / "inventory"                              # generated runtime inventory
@@ -202,6 +207,28 @@ def cmd_diff(args) -> int:
             print(f"  file={r['file']}\n    field={r['field']}\n"
                   f"    expected={r['expected']!r}\n    actual={r['actual']!r}")
         return 1
+    runtime = None
+    if not getattr(args, "settings_only", False):
+        runtime = inspect_dsh_runtime(dsh_home(), adapter_contract())
+    if getattr(args, "runtime_only", False):
+        runtime = inspect_dsh_runtime(dsh_home(), adapter_contract())
+        print(f"[dsh-runtime] {runtime['status']}")
+        for item in runtime["findings"]:
+            print(f"  [{item['category']}] {item['component']}\n"
+                  f"    expected={item['expected']!r}\n    actual={item['actual']!r}")
+        for item in runtime.get("warnings", []):
+            print(f"  [{item['category']}] {item['component']} WARNING\n"
+                  f"    expected={item['expected']!r}\n    actual={item['actual']!r}")
+        return 0 if runtime["status"] == "PASS" else 1
+    runtime_findings = runtime["findings"] if runtime is not None else []
+    if runtime is not None:
+        print(f"[dsh-runtime] {runtime['status']}")
+        for item in runtime_findings:
+            print(f"  [{item['category']}] {item['component']}\n"
+                  f"    expected={item['expected']!r}\n    actual={item['actual']!r}")
+        for item in runtime.get("warnings", []):
+            print(f"  [{item['category']}] {item['component']} WARNING\n"
+                  f"    expected={item['expected']!r}\n    actual={item['actual']!r}")
     canonical = load_canonical()
     overlay = adapter_overlay()
     contract = adapter_contract()
@@ -245,7 +272,7 @@ def cmd_diff(args) -> int:
     print(f"[metadata] opaque_paths ({len(opaque_found)}): "
           + (", ".join(sorted(opaque_found)) if opaque_found else "none"))
 
-    if not findings:
+    if not findings and not runtime_findings:
         print("NO DRIFT")
         return 0
     print("DRIFT detected:")
@@ -295,6 +322,7 @@ def cmd_validate(_args) -> int:
 
     try:
         contract = adapter_contract()
+        errors.extend(validate_dsh_contract(contract))
         for target in contract["render_targets"]:
             for check in target.get("field_checks", []):
                 resolve_value_from(canonical["policy"], check["value_from"])
@@ -1025,10 +1053,46 @@ def cmd_apply(args) -> int:
     if not dev.is_file():
         cmd_discover(args)
     if target == "dsh":
-        rc, _ = _apply_dsh()
+        # Existing callers that construct the small unit-test Args object do
+        # not carry CLI-only options. Keep their settings projection explicit;
+        # the real CLI defaults to the complete runtime composition.
+        if not hasattr(args, "settings_only"):
+            rc, _ = _apply_dsh()
+        elif args.settings_only:
+            rc, _ = _apply_dsh()
+        else:
+            try:
+                result = apply_dsh_runtime(dsh_home(), adapter_contract())
+                print(f"APPLY dsh runtime: {result['status']}"
+                      + (f" composition={result['profileCombinationHash']}"
+                         if result.get("profileCombinationHash") else ""))
+                if result.get("transactionId"):
+                    print(f"transaction={result['transactionId']}")
+                rc = 0
+            except DshCompositionError as exc:
+                print(f"APPLY dsh runtime: FAIL_ROLLED_BACK — {exc}")
+                rc = 3
     else:
         rc, _ = _apply_generic(target)
     return rc if rc != 4 else 0     # OPTIONAL_NOT_INSTALLED 不算失败
+
+
+def cmd_rollback(args) -> int:
+    if args.target != "dsh":
+        print("rollback currently supports only dsh")
+        return 2
+    if not args.transaction:
+        print("usage: aic rollback dsh --transaction <transaction-id>")
+        return 2
+    try:
+        result = rollback_dsh_runtime(dsh_home(), args.transaction)
+    except DshCompositionError as exc:
+        print(f"ROLLBACK dsh: FAIL — {exc}")
+        return 1
+    print(f"ROLLBACK dsh: {result['status']} transaction={result['transactionId']} "
+          f"components={result['components']}")
+    print(f"current-snapshot={result['savedCurrent']}")
+    return 0
 
 
 # ---------------------------------------------------------------- stubs (contract only)
@@ -1049,10 +1113,20 @@ def main() -> int:
     p_render.add_argument("--out")
     p_diff = sub.add_parser("diff")
     p_diff.add_argument("target", choices=["dsh", "codex", "claude", "gemini", "switchboard"])
+    p_diff.add_argument("--settings-only", action="store_true",
+                        help="legacy generated settings projection only")
+    p_diff.add_argument("--runtime-only", action="store_true",
+                        help="DSH managed runtime composition only")
     sub.add_parser("validate")
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("target",
                          choices=["dsh", "codex", "claude", "gemini", "switchboard"])
+    p_apply.add_argument("--settings-only", action="store_true",
+                         help="legacy generated settings projection only; never deploy DSH runtime")
+
+    p_rollback = sub.add_parser("rollback")
+    p_rollback.add_argument("target", choices=["dsh"])
+    p_rollback.add_argument("--transaction", required=True)
 
     sub.add_parser("bootstrap")
     args = parser.parse_args()
@@ -1070,6 +1144,8 @@ def main() -> int:
         return cmd_validate(args)
     if args.command == "apply":
         return cmd_apply(args)
+    if args.command == "rollback":
+        return cmd_rollback(args)
     return cmd_not_implemented(args)
 
 

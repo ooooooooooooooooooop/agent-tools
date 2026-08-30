@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Check or explicitly sync published skill packages (and optionally dsh/* plugins)
-to another device. Also supports checking dsh-config archive consistency and
+"""Check or explicitly sync published skill packages and optionally delegate
+DSH runtime composition to the canonical AIC apply path. Also supports checking dsh-config archive consistency and
 MCP server path validity.
 
 The command never deletes destination files. Use ``--check`` for a read-only
 comparison and ``--apply`` only when the destination is intentional.
-Pass ``--plugins-destination`` to also sync registered dsh/* plugins (the runtime
-files referenced by each package's cordis.patch.yml).
+Pass ``--plugins-destination`` for compatibility; DSH runtime composition is
+delegated to ``aic diff/apply dsh`` and is not copied by this script.
 Pass ``--dsh-config-dir`` (with ``--check``) to compare a dsh-config archive
 against the live ``~/.dsh``.
 Pass ``--mcp-cordis`` (with ``--check``) to validate MCP server paths in a
@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -301,24 +302,38 @@ def main() -> int:
             )
 
         if args.plugins_destination:
+            # Compatibility flag retained for callers of the old interface.
+            # The DSH runtime itself has one owner now: delegate to AIC rather
+            # than copying individual plugin files or editing a second patch.
             ensure_destination_is_safe(args.plugins_destination)
-            for plugin in discover_dsh_plugins():
-                source = plugin["source"]
-                destination = args.plugins_destination / plugin["name"]
-                comparison = compare_file(source, destination)
-                if args.apply:
-                    for relative in comparison["missing"] + comparison["different"]:
-                        atomic_copy(source, destination)
-                    comparison = compare_file(source, destination)
-                results.append(
-                    {
-                        "skill": f"dsh/{plugin['name']}",
-                        "kind": "plugin",
-                        "source": str(source),
-                        "destination": str(destination),
-                        **comparison,
-                    }
-                )
+            aic_script = ROOT / "scripts" / "aic" / "aic.py"
+            profile = args.plugins_destination.parent
+            dsh_root = profile.parent.parent
+            aic_env = {**os.environ, "DSH_HOME": str(dsh_root)}
+            operation = "diff" if args.check else "apply"
+            runtime_args = [operation, "dsh"]
+            if args.check:
+                runtime_args.append("--runtime-only")
+            proc = subprocess.run(
+                [sys.executable, str(aic_script), *runtime_args],
+                capture_output=True, text=True, env=aic_env,
+                encoding="utf-8", errors="replace", timeout=1800,
+            )
+            output = (proc.stdout + proc.stderr).strip()
+            comparison = {
+                "missing": [], "different": [] if proc.returncode == 0 else ["dsh-runtime"],
+                "same": ["dsh-runtime"] if proc.returncode == 0 else [],
+                "extra": [], "pass": proc.returncode == 0,
+                "note": "delegated to aic apply/diff dsh",
+            }
+            results.append({
+                "skill": "dsh/runtime-composition",
+                "kind": "dsh-runtime",
+                "source": str(aic_script),
+                "destination": str(args.plugins_destination),
+                "output": output[-4000:],
+                **comparison,
+            })
 
         if args.check and args.dsh_config_dir:
             comparison = check_dsh_config_archive(args.dsh_config_dir)

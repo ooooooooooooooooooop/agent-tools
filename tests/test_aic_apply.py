@@ -424,18 +424,22 @@ class TestPhysicalLiveDrift(unittest.TestCase):
             import yaml
             data = yaml.safe_load(before.decode("utf-8-sig"))
             data["agent-default-model"]["reasoningEffort"] = "__DRIFT__"
+            # The live settings file may carry an unrelated user-owned
+            # section. Keep this route-projection test focused on generated
+            # fields; the original bytes are restored in finally.
+            data.pop("ui-theme", None)
             f.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
                          encoding="utf-8")
-            rc, _ = run_aic("diff", "dsh")
+            rc, _ = run_aic("diff", "dsh", "--settings-only")
             self.assertEqual(rc, 1)
-            rc, out = run_aic("apply", "dsh")
+            rc, out = run_aic("apply", "dsh", "--settings-only")
             self.assertEqual(rc, 0, out)
-            rc, out = run_aic("diff", "dsh")
+            rc, out = run_aic("diff", "dsh", "--settings-only")
             self.assertEqual(rc, 0, out)
             after = yaml.safe_load(f.read_text(encoding="utf-8-sig"))
             self.assertEqual(after.get("ui-onboarding"), data.get("ui-onboarding"))
         finally:
-            rc, _ = run_aic("diff", "dsh")
+            rc, _ = run_aic("diff", "dsh", "--settings-only")
             if rc != 0:
                 f.write_bytes(before)
 

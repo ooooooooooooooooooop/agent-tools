@@ -1,15 +1,17 @@
 param(
-  [string]$ProfileRoot = 'C:\Users\admin\.dsh\profiles\web',
+  [string]$ProfileRoot = $PSScriptRoot,
   [string]$NodePath = $env:DSH_NODE_PATH
 )
 
 $ErrorActionPreference = 'Stop'
+$DshHome = Split-Path -Parent (Split-Path -Parent $ProfileRoot)
 $distributionVersion = '0.1.1-rc.2'
 $distributionRoot = Join-Path $ProfileRoot "base-dsh-$distributionVersion"
 $entry = Join-Path $distributionRoot 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 $packageJson = Join-Path $distributionRoot 'node_modules\@deepseek-ai\dsh\package.json'
+$managedNodePath = Join-Path $DshHome 'runtime\node-v22.19.0-win-x64\node.exe'
 
-if ([string]::IsNullOrWhiteSpace($NodePath)) { throw 'DSH_NODE_PATH must point to a supported Node runtime (>=22.19.0).' }
+if ([string]::IsNullOrWhiteSpace($NodePath)) { $NodePath = $managedNodePath }
 if (!(Test-Path -LiteralPath $NodePath)) { throw "Node runtime not found: $NodePath" }
 if (!(Test-Path -LiteralPath $entry) -or !(Test-Path -LiteralPath $packageJson)) { throw "Pinned DSH distribution is incomplete: $distributionRoot" }
 

@@ -358,7 +358,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
             dest_st = td / "restore" / "personal-ai-state"
             dest_skills = td / "restore" / "skills"
             r = pas.run_restore(repo=dest_at, state_repo=dest_st,
-                                skills_dest=dest_skills,
+                                skills_dest=dest_skills, apply_dsh=False,
                                 agent_tools_remote=str(at_remote),
                                 state_remote=str(st.remote))
             steps = {s["step"]: s["ok"] for s in r["steps"]}
@@ -372,7 +372,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
             self.assertEqual(v["records"], 1)
             # 幂等：再跑一次 already present
             r2 = pas.run_restore(repo=dest_at, state_repo=dest_st,
-                                 skills_dest=dest_skills,
+                                 skills_dest=dest_skills, apply_dsh=False,
                                  agent_tools_remote=str(at_remote),
                                  state_remote=str(st.remote))
             self.assertEqual(r2["result"], "PASS")
