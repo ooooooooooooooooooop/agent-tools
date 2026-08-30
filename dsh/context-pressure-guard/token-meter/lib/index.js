@@ -455,27 +455,35 @@ const contextPressureProjectionDefinition = {
 	},
 	wire: {
 		viewSchema: pressureSchema,
-	view: ({ contextWindow, pressureTokens, sampleValid, projectedInput, reservedOutput, combinedContext, configuredLimit, effectiveLimit, providerAttestedLimit, trustedUsage, usageEstimate, sampleValidity, sampleSource, sampleStatus, estimateMethod, estimateConfidence, compactionState, circuitBreakerState, surfaceTokens, sampledSurfaceTokens }) => ({
-			...contextWindow === void 0 ? {} : { contextWindow },
-			...pressureTokens === void 0 ? {} : { pressureTokens },
-			...sampleValid === void 0 ? {} : { sampleValid },
-			...projectedInput === void 0 ? {} : { projectedInput },
-			...reservedOutput === void 0 ? {} : { reservedOutput },
-			...combinedContext === void 0 ? {} : { combinedContext },
-			...configuredLimit === void 0 ? {} : { configuredLimit },
-			...effectiveLimit === void 0 ? {} : { effectiveLimit },
-			...providerAttestedLimit === void 0 ? {} : { providerAttestedLimit },
-			...trustedUsage === void 0 ? {} : { trustedUsage },
-			...usageEstimate === void 0 ? {} : { usageEstimate },
-			...sampleValidity === void 0 ? {} : { sampleValidity },
-			...compactionState === void 0 ? {} : { compactionState },
-			...circuitBreakerState === void 0 ? {} : { circuitBreakerState },
-			...sampleSource === void 0 ? sampleValid === true ? { sampleSource: "provider" } : sampleValid === false ? { sampleSource: "provider" } : { sampleSource: "none" } : { sampleSource },
-			...sampleStatus === void 0 ? sampleValid === true ? { sampleStatus: "valid" } : sampleValid === false ? { sampleStatus: "invalid-zero-usage" } : { sampleStatus: "no-trusted-anchor" } : { sampleStatus },
-			estimateMethod: estimateMethod ?? "fixed-density-signed-surface",
-			estimateConfidence: estimateConfidence ?? (sampleValid === true ? "anchored-conservative" : "conservative-estimate"),
-			...pressureTokens === void 0 || sampledSurfaceTokens === void 0 ? {} : { projectedTokens: Math.max(0, pressureTokens + surfaceTokens - sampledSurfaceTokens) }
-		})
+	view: (input) => {
+			const { contextWindow, pressureTokens, sampleValid, projectedInput, reservedOutput, combinedContext, configuredLimit, effectiveLimit, providerAttestedLimit, trustedUsage, usageEstimate, sampleValidity, sampleSource, sampleStatus, estimateMethod, estimateConfidence, compactionState, circuitBreakerState, surfaceTokens, sampledSurfaceTokens } = input;
+			// Historical projections can contain the old contradictory pair
+			// { trustedUsage, sampleValidity: "estimated" }.  Keep the number useful,
+			// but expose it only as an estimate until a provider sample re-anchors it.
+			const visibleTrustedUsage = sampleValidity === "estimated" ? void 0 : trustedUsage;
+			const visibleUsageEstimate = sampleValidity === "estimated" ? usageEstimate ?? trustedUsage : usageEstimate;
+			return {
+				...contextWindow === void 0 ? {} : { contextWindow },
+				...pressureTokens === void 0 ? {} : { pressureTokens },
+				...sampleValid === void 0 ? {} : { sampleValid },
+				...projectedInput === void 0 ? {} : { projectedInput },
+				...reservedOutput === void 0 ? {} : { reservedOutput },
+				...combinedContext === void 0 ? {} : { combinedContext },
+				...configuredLimit === void 0 ? {} : { configuredLimit },
+				...effectiveLimit === void 0 ? {} : { effectiveLimit },
+				...providerAttestedLimit === void 0 ? {} : { providerAttestedLimit },
+				...visibleTrustedUsage === void 0 ? {} : { trustedUsage: visibleTrustedUsage },
+				...visibleUsageEstimate === void 0 ? {} : { usageEstimate: visibleUsageEstimate },
+				...sampleValidity === void 0 ? {} : { sampleValidity },
+				...compactionState === void 0 ? {} : { compactionState },
+				...circuitBreakerState === void 0 ? {} : { circuitBreakerState },
+				...sampleSource === void 0 ? sampleValid === true ? { sampleSource: "provider" } : sampleValid === false ? { sampleSource: "provider" } : { sampleSource: "none" } : { sampleSource },
+				...sampleStatus === void 0 ? sampleValid === true ? { sampleStatus: "valid" } : sampleValid === false ? { sampleStatus: "invalid-zero-usage" } : { sampleStatus: "no-trusted-anchor" } : { sampleStatus },
+				estimateMethod: estimateMethod ?? "fixed-density-signed-surface",
+				estimateConfidence: estimateConfidence ?? (sampleValid === true ? "anchored-conservative" : "conservative-estimate"),
+				...pressureTokens === void 0 || sampledSurfaceTokens === void 0 ? {} : { projectedTokens: Math.max(0, pressureTokens + surfaceTokens - sampledSurfaceTokens) }
+			};
+		}
 	}
 };
 //#endregion
