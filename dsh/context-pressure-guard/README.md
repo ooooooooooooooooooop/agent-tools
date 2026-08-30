@@ -11,8 +11,13 @@ is then dispatched exactly once. Unsafe requests fail locally with
 `CONTEXT_PREFLIGHT_BLOCKED` and do not reach the provider.
 
 The package also carries the pressure-safe token meter and artifact-backed
-tool-result pruner used by the profile deployment. Compaction convergence is a
-separate overlay.
+tool-result pruner used by the profile deployment. The pruner keeps the durable
+full result in the spill artifact and replaces only stale successful results on
+the model-visible surface with a reference containing call id, tool name,
+status, hash, event sequence, artifact path and a short summary; its
+`restore(session, callId)` operation rehydrates one result on demand.
+Compaction convergence is a separate overlay, and the context-lifecycle
+package owns read-only exhaustion, handoff and restart protection.
 
 ## Portable profile fragment
 

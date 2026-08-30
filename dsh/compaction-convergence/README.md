@@ -10,11 +10,16 @@ Fixes (see `REPORT.md`):
 - **FIX B — pressure convergence**: after a `summary is not smaller` failure on an unchanged
   region/fingerprint, later pre-step pressure events do not re-invoke the summarizer; any surface
   mutation re-enables evaluation.
+- **FIX C — cross-step non-shrinking breaker**: a stable selected-surface fingerprint counts
+  repeated non-shrinking summaries across steps, opens after three failures, and prevents a
+  retry storm until the selected surface materially changes.
+- **FIX D — stale tool-result preference**: the selector prefers the largest completed stale
+  tool result outside the retained tail while preserving balanced ranges and ordered bounds.
 
 ## Contents
 
-- `lib/` — patched package source (same package name, `version 0.1.1-rc.2+conv.1`)
-- `test/` — 12-case node:test suite, offline session replay, runtime smoke,
+- `lib/` — patched package source (same package name, `version 0.1.1-rc.2+pressure.2`)
+- `test/` — selector/convergence node:test suite, offline session replay, runtime smoke,
   `install-convergence.ps1`, `restore-convergence.ps1`, `guard-convergence.ps1`,
   `run-tests.ps1`
 - `REPORT.md` — forensic evidence and acceptance record

@@ -305,6 +305,58 @@ test('12. continue after checkpoint: new normal history compacts while checkpoin
   assert.ok(session.surface.nodes.length < 10, 'surface keeps shrinking');
 });
 
+test('13. three same-surface non-shrinking failures open a circuit and stop further summarizer calls', async () => {
+  const session = makeSession();
+  const meter = makeMeter();
+  const engine = new TestEngine(makeCtx(meter), { ...ENGINE_CFG, maxConsecutiveFailures: 3 });
+  engine.summaryText = 'Q'.repeat(12000);
+  session.append('turn/start', { turn: 1 });
+  const seqs = [];
+  for (let i = 0; i < 10; i += 1) seqs.push(pushUser(session, `q${i}`.repeat(300)));
+  for (const s of seqs) meter.priceByText(s, `q${s}`.repeat(300));
+  const agent = makeAgent(session);
+  for (let i = 0; i < 3; i += 1) {
+    // Material but zero-token nodes change the surface fingerprint without changing the selected priced range.
+    if (i > 0) {
+      const seq = pushUser(session, '');
+      meter.price(seq, 0);
+    }
+    await assert.rejects(() => engine.compactIfNeeded(agent, 'pressure', new AbortController().signal));
+  }
+  const calls = engine.summarizeCalls;
+  const result = await engine.compactIfNeeded(agent, 'pressure', new AbortController().signal);
+  assert.equal(result, null);
+  assert.equal(engine.summarizeCalls, calls, 'open circuit must stop further summarizer calls');
+  assert.equal(calls, 3, 'cross-step breaker must bound the failed summarizer calls');
+});
+
+test('14. selector prefers a large stale successful tool result and keeps a valid range', () => {
+  const session = makeSession();
+  const meter = makeMeter();
+  session.append('turn/start', { turn: 1 });
+  session.append('step/start', { turn: 1, step: 1 });
+  const before = pushUser(session, 'before'.repeat(500));
+  meter.priceByText(before, 'before'.repeat(500));
+  const assistant = session.append('assistant/message', {
+    turn: 1, step: 1,
+    message: { role: 'assistant', content: [{ type: 'tool-call', id: 'tool-1', name: 'search', arguments: '{}' }] }
+  }, { surfaceOp: 'append' });
+  const call = session.append('tool/call', { turn: 1, step: 1, callId: 'tool-1', name: 'search' });
+  const result = session.append('tool/result', {
+    turn: 1, step: 1,
+    message: { role: 'user', source: { kind: 'tool', callId: 'tool-1' }, id: 'result-1', content: [{ type: 'tool-result', toolCallId: 'tool-1', content: [{ type: 'text', text: 'large stale result'.repeat(2000) }] }] }
+  }, { surfaceOp: 'append' });
+  const after = pushUser(session, 'after'.repeat(500));
+  meter.price(assistant.seq, 20);
+  meter.price(call.seq, 4);
+  meter.price(result.seq, 5000);
+  meter.priceByText(after, 'after'.repeat(500));
+  const range = selectCompactableRange(session, meter.measure(session), 600);
+  assert.ok(range !== null);
+  assert.ok(range.start <= range.end, 'selected range must be ordered');
+  assert.equal(range.end, result.seq, 'largest stale successful tool result is selected before retained tail');
+});
+
 test('isSummaryNotSmallerError recognizes only the documented prefix', () => {
   assert.equal(isSummaryNotSmallerError(new Error('summary is not smaller than the shadowed content (10 >= 10)')), true);
   assert.equal(isSummaryNotSmallerError(new Error('provider timeout')), false);

@@ -17,3 +17,15 @@
           - provider: 'opencode-go'
             model: 'deepseek-v4-flash'
             providerAttestedLimit: 1048576
+  - id: tool-result-pruner-pressure-guard
+    name: './plugins/dsh-tool-result-pruner-pressure-guard/lib/index.js'
+    disabled: false
+    config:
+      thresholdChars: 8192
+      headChars: 4096
+      tailChars: 1024
+  - id: context-lifecycle
+    name: './plugins/dsh-context-lifecycle/lib/index.js'
+    config:
+      archiveThresholdTokens: 800000
+      sidecarDir: './.dsh-context-lifecycle'

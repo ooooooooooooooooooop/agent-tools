@@ -2,6 +2,7 @@ import { Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { deepFreeze, freezeMessage } from "@deepseek-ai/dsh-llm";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 //#region lib/types/config.js
 /** Configuration resolution for deterministic tool-result pruning. */
 /** Fixed marker substituted for every removed middle span. */
@@ -49,6 +50,38 @@ function assertPositiveInteger(name, value) {
 }
 function assertNonNegativeInteger(name, value) {
 	if (!Number.isInteger(value) || value < 0) throw new Error(`ToolResultPruneConfig: ${name} (${value}) must be a non-negative integer`);
+}
+/** Find the durable model call paired with one tool result. */
+function callFor(session, callId, resultSeq) {
+	for (let index = resultSeq - 1; index >= 0; index -= 1) {
+		const event = session.events[index];
+		if (event?.type === "tool/call" && event.data.callId === callId) return event;
+	}
+}
+/** Keep the reference summary short enough to be useful on the next request. */
+function shortSummary(content) {
+	return content.filter((block) => block.type === "text").map((block) => block.text).join(" ").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+/** Parse the opaque local locator emitted by the deterministic reference. */
+function referenceIn(content) {
+	const text = content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+	const match = text.match(/\[tool-result-reference[\s\S]*?artifact_path=(.*?)]/);
+	if (!match) return;
+	const body = match[0];
+	const path = body.match(/artifact_path=([^\s\]]+)/)?.[1];
+	const hash = body.match(/sha256=([a-f0-9]{64})/)?.[1];
+	return hash === void 0 || path === void 0 || path.length === 0 ? void 0 : { locator: path, sha256: hash };
+}
+/** Only completed, stale results are eligible for model-surface replacement. */
+function isPrunableResult(event, currentStep) {
+	if (event?.type !== "tool/result") return false;
+	const data = event.data ?? {};
+	const result = data.message?.content?.[0];
+	if (data.error !== void 0 || data.completed === false || data.status === "failed" || data.status === "incomplete" || result?.isError === true) return false;
+	const turn = data.turn;
+	const step = data.step;
+	if (currentStep !== void 0 && turn === currentStep.turn && step === currentStep.step) return false;
+	return true;
 }
 //#endregion
 //#region lib/types/index.js
@@ -133,13 +166,41 @@ var ToolResultPruner = class extends Service {
 	* @returns landed replacements and aggregate Unicode-code-point savings.
 	* @throws when the session rejects a replacement; replacements committed
 	* earlier in the pass remain durable.
-	*/
+	 */
+	async restore(session, callId) {
+		for (const seq of [...session.surface.nodes]) {
+			const event = session.events[seq];
+			if (event?.type !== "tool/result" || event.data.message.source.callId !== callId) continue;
+			const reference = referenceIn(event.data.message.content[0].content);
+			if (reference === void 0) throw new Error(`tool-result restore: no durable reference for call ${callId}`);
+			const originalText = await this.readArtifact(reference.locator);
+			const digest = createHash("sha256").update(originalText, "utf8").digest("hex");
+			if (digest !== reference.sha256) throw new Error(`tool-result restore: artifact hash mismatch for call ${callId}`);
+			const message = freezeMessage({
+				...event.data.message,
+				content: [{ ...event.data.message.content[0], content: [{ type: "text", text: originalText }] }]
+			});
+			const replacement = session.append("tool/result", { ...event.data, message }, {
+				surfaceOp: { op: "replace", start: seq, end: seq },
+				sourceEventSeqs: [seq]
+			});
+			return { callId, originalSeq: seq, replacementSeq: replacement.seq, restoredChars: originalText.length };
+		}
+		throw new Error(`tool-result restore: call ${callId} not found`);
+	}
+	async readArtifact(locator) {
+		const spillStore = this.ctx.get("spillStore");
+		if (typeof spillStore?.readText === "function") return spillStore.readText(locator);
+		return readFile(locator, "utf8");
+	}
 	async pruneSession(session) {
 		const candidates = [];
+		const currentStep = [...session.events].reverse().find((event) => event.type === "step/start");
+		const currentStepKey = currentStep === void 0 ? void 0 : { turn: currentStep.data.turn, step: currentStep.data.step };
 		for (const seq of [...session.surface.nodes]) {
 			const event = session.events[seq];
 			/* v8 ignore next -- surface seqs are validated contiguous log references. */
-			if (event?.type === "tool/result") candidates.push({
+			if (isPrunableResult(event, currentStepKey)) candidates.push({
 				seq,
 				event
 			});
@@ -162,10 +223,12 @@ var ToolResultPruner = class extends Service {
 						content: originalText
 					});
 					const digest = createHash("sha256").update(originalText, "utf8").digest("hex");
-					const summary = content.filter((block) => block.type === "text").map((block) => block.text).join("");
+					const summary = shortSummary(content);
+					const call = callFor(session, event.data.message.source.callId, seq);
+					const status = event.data.error?.code ?? (result.isError === true ? "failed" : "completed");
 					content = [{
 						type: "text",
-						text: `${summary}\n\n[artifact-reference sha256=${digest} bytes=${Buffer.byteLength(originalText, "utf8")} locator=${ref.locator}] ${ref.retrievalHint}`
+						text: `${summary}\n\n[tool-result-reference call_id=${JSON.stringify(event.data.message.source.callId)} tool_name=${JSON.stringify(call?.data.name ?? "unknown")} status=${JSON.stringify(status)} sha256=${digest} event_seq=${seq} artifact_path=${ref.locator} short_summary=${JSON.stringify(summary)}] ${ref.retrievalHint}`
 					}];
 				} catch (error) {
 					this.ctx.logger.warn(`tool-result prune: artifact save failed; retaining deterministic preview: ${String(error)}`);

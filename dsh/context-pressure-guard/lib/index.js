@@ -784,6 +784,42 @@ var ReactLoopAgent = class {
 				operationalMaxOutput: admissionPolicy.operationalMaxOutput,
 				requestedMaxTokens
 			});
+			const lifecycle = this.loopCtx.get("contextLifecycle");
+			const meter = this.loopCtx.get("tokenMeter");
+			let usageSnapshot;
+			try {
+				const measurement = meter?.measure(this.session);
+				const baseline = measurement?.baseline;
+				usageSnapshot = baseline?.kind === "usage" ? {
+					tokens: baseline.tokens,
+					validity: "trusted",
+					source: "provider",
+					status: "valid"
+				} : {
+					tokens: baseline?.tokens ?? 0,
+					validity: "estimated",
+					source: baseline?.kind ?? "none",
+					status: "no-trusted-anchor"
+				};
+			} catch {
+				usageSnapshot = { tokens: 0, validity: "estimated", source: "unavailable", status: "unavailable" };
+			}
+			lifecycle?.recordAdmission(this.session, {
+				provider: proposedConfig.provider,
+				model: proposedConfig.model,
+				contextWindow: resolvedContextWindow,
+				projectedInput: decision.estimatedInput,
+				reservedOutput: decision.allowedOutput,
+				combinedContext: decision.conservativeInputUpperBound + decision.allowedOutput,
+				configuredLimit: resolvedContextWindow,
+				effectiveLimit: decision.effectiveLimit,
+				providerAttestedLimit: admissionPolicy.providerAttestedLimit,
+				trustedUsage: usageSnapshot,
+				sampleValidity: usageSnapshot.validity,
+				estimateMethod: "fixed-density-conservative-multiplier",
+				estimateConfidence: "conservative",
+				admission: decision.safe ? "PASS" : "CONTEXT_PREFLIGHT_BLOCKED"
+			});
 			if (!decision.safe) {
 				loopService.pendingAdmissionMaxTokens.delete(this);
 				loopService.pendingAdmissionMaxTokensBySession.delete(this.session);

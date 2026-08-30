@@ -34,6 +34,34 @@ export interface ContextPressureProjection {
     pressureTokens?: number;
     /** Whether the newest usage-bearing event was a trustworthy non-zero occupancy sample. */
     sampleValid?: boolean;
+    /** Provenance of the pressure sample used by the view. */
+    sampleSource?: 'provider' | 'none';
+    /** Explicit status for invalid samples and missing trusted anchors. */
+    sampleStatus?: 'valid' | 'invalid-zero-usage' | 'no-trusted-anchor';
+    /** Heuristic input estimate for the final assembled request. */
+    projectedInput?: number;
+    /** Completion reservation admitted for this request. */
+    reservedOutput?: number;
+    /** Input upper bound plus reserved completion, excluding safety margin. */
+    combinedContext?: number;
+    /** Configured route capacity. */
+    configuredLimit?: number;
+    /** Minimum of configured and provider-attested capacities. */
+    effectiveLimit?: number;
+    /** Provider-reported/route-attested capacity. */
+    providerAttestedLimit?: number;
+    /** Trusted usage anchor in provider tokens, when available. */
+    trustedUsage?: number;
+    /** Lifecycle validity label for the usage sample. */
+    sampleValidity?: string;
+    /** Current compaction lifecycle state. */
+    compactionState?: string;
+    /** Current non-shrinking compaction breaker state. */
+    circuitBreakerState?: string;
+    /** Stable estimator identifier for the non-provider surface delta. */
+    estimateMethod?: 'fixed-density-signed-surface';
+    /** Whether the estimate is anchored to provider usage or conservative only. */
+    estimateConfidence?: 'anchored-conservative' | 'conservative-estimate';
     /**
      * What the NEXT request's prompt would cost: {@link pressureTokens} plus the
      * heuristic repricing of everything the surface gained or lost since that

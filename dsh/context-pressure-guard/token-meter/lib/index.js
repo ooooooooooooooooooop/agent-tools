@@ -257,12 +257,40 @@ const pressureSchema = z$1.object({
 	pressureTokens: z$1.number().int().nonnegative().optional(),
 	projectedTokens: z$1.number().int().nonnegative().optional(),
 	contextWindow: z$1.number().int().positive().optional(),
-	sampleValid: z$1.boolean().optional()
-}).strict().transform(({ pressureTokens, projectedTokens, contextWindow, sampleValid }) => ({
+	sampleValid: z$1.boolean().optional(),
+	projectedInput: z$1.number().int().nonnegative().optional(),
+	reservedOutput: z$1.number().int().nonnegative().optional(),
+	combinedContext: z$1.number().int().nonnegative().optional(),
+	configuredLimit: z$1.number().int().positive().optional(),
+	effectiveLimit: z$1.number().int().positive().optional(),
+	providerAttestedLimit: z$1.number().int().positive().optional(),
+	trustedUsage: z$1.number().int().nonnegative().optional(),
+	sampleValidity: z$1.string().optional(),
+	compactionState: z$1.string().optional(),
+	circuitBreakerState: z$1.string().optional(),
+	sampleSource: z$1.string().optional(),
+	sampleStatus: z$1.string().optional(),
+	estimateMethod: z$1.string().optional(),
+	estimateConfidence: z$1.string().optional()
+}).strict().transform(({ pressureTokens, projectedTokens, contextWindow, sampleValid, projectedInput, reservedOutput, combinedContext, configuredLimit, effectiveLimit, providerAttestedLimit, trustedUsage, sampleValidity, compactionState, circuitBreakerState, sampleSource, sampleStatus, estimateMethod, estimateConfidence }) => ({
 	...pressureTokens === void 0 ? {} : { pressureTokens },
 	...projectedTokens === void 0 ? {} : { projectedTokens },
 	...contextWindow === void 0 ? {} : { contextWindow },
-	...sampleValid === void 0 ? {} : { sampleValid }
+	...sampleValid === void 0 ? {} : { sampleValid },
+	...projectedInput === void 0 ? {} : { projectedInput },
+	...reservedOutput === void 0 ? {} : { reservedOutput },
+	...combinedContext === void 0 ? {} : { combinedContext },
+	...configuredLimit === void 0 ? {} : { configuredLimit },
+	...effectiveLimit === void 0 ? {} : { effectiveLimit },
+	...providerAttestedLimit === void 0 ? {} : { providerAttestedLimit },
+	...trustedUsage === void 0 ? {} : { trustedUsage },
+	...sampleValidity === void 0 ? {} : { sampleValidity },
+	...compactionState === void 0 ? {} : { compactionState },
+	...circuitBreakerState === void 0 ? {} : { circuitBreakerState },
+	...sampleSource === void 0 ? {} : { sampleSource },
+	...sampleStatus === void 0 ? {} : { sampleStatus },
+	...estimateMethod === void 0 ? {} : { estimateMethod },
+	...estimateConfidence === void 0 ? {} : { estimateConfidence }
 }));
 /** Prompt-side pressure of one request: input plus cache traffic, no output. */
 const pressureFrom = (usage) => usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
@@ -278,6 +306,16 @@ const contextPressureStateSchema = z$1.object({
 	contextWindow: z$1.number().int().positive().optional(),
 	pressureTokens: z$1.number().int().nonnegative().optional(),
 	sampleValid: z$1.boolean().optional(),
+	projectedInput: z$1.number().int().nonnegative().optional(),
+	reservedOutput: z$1.number().int().nonnegative().optional(),
+	combinedContext: z$1.number().int().nonnegative().optional(),
+	configuredLimit: z$1.number().int().positive().optional(),
+	effectiveLimit: z$1.number().int().positive().optional(),
+	providerAttestedLimit: z$1.number().int().positive().optional(),
+	trustedUsage: z$1.number().int().nonnegative().optional(),
+	sampleValidity: z$1.string().optional(),
+	compactionState: z$1.string().optional(),
+	circuitBreakerState: z$1.string().optional(),
 	surfaceTokens: z$1.number().int().nonnegative(),
 	sampledSurfaceTokens: z$1.number().int().nonnegative().optional(),
 	claim: z$1.object({
@@ -369,6 +407,9 @@ const contextPressureProjectionDefinition = {
 				const { contextWindow: _removed, ...withoutContextWindow } = next;
 				next = withoutContextWindow;
 			}
+			for (const key of ["projectedInput", "reservedOutput", "combinedContext", "configuredLimit", "effectiveLimit", "providerAttestedLimit", "trustedUsage", "sampleValidity", "compactionState", "circuitBreakerState"]) {
+				if (event.data[key] !== void 0 && next[key] !== event.data[key]) next = { ...next, [key]: event.data[key] };
+			}
 		}
 		const rawUsage = event.type === "assistant/chunk" && event.data.chunk.type === "usage" ? event.data.chunk.usage : event.type === "assistant/message" ? event.data.usage : void 0;
 		const usage = usageOf(event);
@@ -397,10 +438,23 @@ const contextPressureProjectionDefinition = {
 	},
 	wire: {
 		viewSchema: pressureSchema,
-		view: ({ contextWindow, pressureTokens, sampleValid, surfaceTokens, sampledSurfaceTokens }) => ({
+	view: ({ contextWindow, pressureTokens, sampleValid, projectedInput, reservedOutput, combinedContext, configuredLimit, effectiveLimit, providerAttestedLimit, trustedUsage, sampleValidity, compactionState, circuitBreakerState, surfaceTokens, sampledSurfaceTokens }) => ({
 			...contextWindow === void 0 ? {} : { contextWindow },
 			...pressureTokens === void 0 ? {} : { pressureTokens },
 			...sampleValid === void 0 ? {} : { sampleValid },
+			...projectedInput === void 0 ? {} : { projectedInput },
+			...reservedOutput === void 0 ? {} : { reservedOutput },
+			...combinedContext === void 0 ? {} : { combinedContext },
+			...configuredLimit === void 0 ? {} : { configuredLimit },
+			...effectiveLimit === void 0 ? {} : { effectiveLimit },
+			...providerAttestedLimit === void 0 ? {} : { providerAttestedLimit },
+			...trustedUsage === void 0 ? {} : { trustedUsage },
+			...sampleValidity === void 0 ? {} : { sampleValidity },
+			...compactionState === void 0 ? {} : { compactionState },
+			...circuitBreakerState === void 0 ? {} : { circuitBreakerState },
+			...sampleValid === true ? { sampleSource: "provider", sampleStatus: "valid" } : sampleValid === false ? { sampleSource: "provider", sampleStatus: "invalid-zero-usage" } : { sampleSource: "none", sampleStatus: "no-trusted-anchor" },
+			estimateMethod: "fixed-density-signed-surface",
+			estimateConfidence: sampleValid === true ? "anchored-conservative" : "conservative-estimate",
 			...pressureTokens === void 0 || sampledSurfaceTokens === void 0 ? {} : { projectedTokens: Math.max(0, pressureTokens + surfaceTokens - sampledSurfaceTokens) }
 		})
 	}
