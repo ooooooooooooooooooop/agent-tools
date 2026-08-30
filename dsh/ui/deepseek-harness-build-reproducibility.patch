@@ -1,0 +1,78 @@
+diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
+index 44aab8cf1b..bc9eb7d06e 100644
+--- a/packages/client/tsdown.client.ts
++++ b/packages/client/tsdown.client.ts
+@@ -87,6 +87,17 @@ function browserSourcePath(source: string, sourcemapPath: string): string {
+   return repositoryPath.startsWith('packages/') ? `../../../${repositoryPath}` : source
+ }
+ 
++/** Keep CSS virtual IDs and lightningcss module hashes independent of checkout roots. */
++function stableAssetPath(fileId: string): string {
++  const repositoryPath = relative(REPOSITORY_ROOT, fileId).split(sep).join('/')
++  return repositoryPath.startsWith('../') || isAbsolute(repositoryPath) ? fileId : repositoryPath
++}
++
++/** Recover the physical file from a checkout-relative virtual asset ID. */
++function physicalAssetPath(stablePath: string): string {
++  return isAbsolute(stablePath) ? stablePath : resolvePath(REPOSITORY_ROOT, stablePath)
++}
++
+ /**
+  * Build the tsdown config for one UI plugin package: the node-half lib build
+  * plus the browser client bundle. Client packages emit both halves during the
+@@ -500,16 +511,16 @@ function clientConfig(id: string, entry: string): UserConfig {
+       resolveId(source: string, importer: string | undefined) {
+         if (!source.endsWith('.module.css')) return null
+         const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
+-        return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        return CSS_VIRTUAL_PREFIX + stableAssetPath(abs) + CSS_VIRTUAL_SUFFIX
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
+-        const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
++        const fileId = physicalAssetPath(virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
+         // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
+         this.addWatchFile(fileId)
+         const source = await readFile(fileId)
+         const { code, exports: cssExports } = transform({
+-          filename: fileId,
++          filename: stableAssetPath(fileId),
+           code: source,
+           cssModules: { pattern: '[hash]_[local]' },
+           minify: true,
+@@ -526,14 +537,14 @@ function clientConfig(id: string, entry: string): UserConfig {
+         if (!source.endsWith(`.css${INLINE_CSS_QUERY}`)) return null
+         const stylesheet = source.slice(0, -INLINE_CSS_QUERY.length)
+         const abs = importer !== undefined ? sourceAssetPath(stylesheet, importer) : stylesheet
+-        return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        return INLINE_CSS_VIRTUAL_PREFIX + stableAssetPath(abs) + CSS_VIRTUAL_SUFFIX
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(INLINE_CSS_VIRTUAL_PREFIX)) return null
+-        const fileId = virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
++        const fileId = physicalAssetPath(virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
+         this.addWatchFile(fileId)
+         const source = await readFile(fileId)
+-        const { code } = transform({ filename: fileId, code: source, minify: true })
++        const { code } = transform({ filename: stableAssetPath(fileId), code: source, minify: true })
+         return `export default ${JSON.stringify(code.toString())};`
+       },
+     }, {
+@@ -541,14 +552,14 @@ function clientConfig(id: string, entry: string): UserConfig {
+       resolveId(source: string, importer: string | undefined) {
+         if (!source.endsWith('.css') || source.endsWith('.module.css')) return null
+         const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
+-        return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        return GLOBAL_CSS_VIRTUAL_PREFIX + stableAssetPath(abs) + CSS_VIRTUAL_SUFFIX
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(GLOBAL_CSS_VIRTUAL_PREFIX)) return null
+-        const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
++        const fileId = physicalAssetPath(virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))
+         this.addWatchFile(fileId)
+         const source = await readFile(fileId)
+-        const { code } = transform({ filename: fileId, code: source, minify: true })
++        const { code } = transform({ filename: stableAssetPath(fileId), code: source, minify: true })
+         return styleInjectionModule(id, fileId, code.toString())
+       },
+     }],

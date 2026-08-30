@@ -60,6 +60,8 @@ runtime_composition:
     fix_commit_remote: unavailable-at-audit
     patch_file: dsh/ui/deepseek-harness-68826e9.patch
     patch_sha256: 6b3d1f9bac533f6e9de06441b6916173b229afb0590c1adbfa53bfd712fc931e
+    build_patch_file: dsh/ui/deepseek-harness-build-reproducibility.patch
+    build_patch_sha256: 71ef402ec364faa2ae02ee42117d82daa1005861839b4f06d8cb913c7379e33b
     source_root_env: DSH_HARNESS_ROOT
     client_package: '@deepseek-ai/dsh-client-ui-conversation'
     client_bundle_relative: packages/client/ui-conversation/lib/client.js
