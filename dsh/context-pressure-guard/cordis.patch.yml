@@ -1,0 +1,19 @@
+# Portable overlay fragment for the persistent DSH Web profile.
+- id: token-meter
+  disabled: true
+- id: agent-loop
+  disabled: true
+- insert:
+  - id: token-meter-pressure-guard
+    name: './plugins/dsh-token-meter-pressure-guard/lib/index.js'
+  - id: agent-loop-pressure-guard
+    name: './plugins/dsh-agent-loop-pressure-guard/lib/index.js'
+    config:
+      contextAdmission:
+        safetyMargin: 16384
+        operationalMaxOutput: 65536
+        inputMultiplier: 1.08
+        routes:
+          - provider: 'opencode-go'
+            model: 'deepseek-v4-flash'
+            providerAttestedLimit: 1048576
