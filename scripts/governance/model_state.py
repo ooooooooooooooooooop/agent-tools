@@ -22,10 +22,15 @@ TRACE = REPO / "registry" / "model-trace.jsonl"
 
 
 def discovered() -> set[str]:
-    inv = REPO / "registry" / "inventory" / "models-discovered.json"
-    if inv.is_file():
-        d = json.loads(inv.read_text(encoding="utf-8"))
-        return {m if isinstance(m, str) else m.get("id") for m in d.get("models", [])}
+    files = sorted((REPO / "registry" / "inventory").glob("discovered-models-*.json"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    for inv in files:
+        try:
+            d = json.loads(inv.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        return {mid for m in d.get("models", [])
+                if (mid := (m if isinstance(m, str) else m.get("id")))}
     return set()
 
 

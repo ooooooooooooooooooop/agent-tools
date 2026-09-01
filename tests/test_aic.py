@@ -4,8 +4,10 @@ The physical drift red-team against the live DSH config is a separate manual
 procedure; these tests only pin the semantics of the pure functions.
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "aic"))
@@ -48,6 +50,47 @@ class TestRowProjection(unittest.TestCase):
 
     def test_missing_key(self):
         self.assertIs(aic.get_nested(self.ROWS[0], "config.nope"), aic._MISSING)
+
+
+class TestCapabilityAdoptionProjection(unittest.TestCase):
+    POLICY = """## CONTINUOUS_CAPABILITY_ADOPTION\n\n- Discovery is not adoption.\n"""
+
+    def test_policy_projection_is_checksum_protected_and_idempotent(self):
+        rendered = aic.policy_projection.render_managed_block(self.POLICY)
+        updated, status = aic.policy_projection.update_managed_block_text("# User rules\n", self.POLICY)
+        self.assertEqual(status, "updated")
+        self.assertIn(rendered, updated)
+        again, status = aic.policy_projection.update_managed_block_text(updated, self.POLICY)
+        self.assertEqual(status, "unchanged")
+        self.assertEqual(again, updated)
+
+    def test_tampered_policy_projection_is_rejected(self):
+        updated, _ = aic.policy_projection.update_managed_block_text("", self.POLICY)
+        tampered = updated.replace("Discovery is not adoption", "Discovery is adoption")
+        with self.assertRaises(ValueError):
+            aic.policy_projection.update_managed_block_text(tampered, self.POLICY)
+
+    def test_diff_and_apply_use_private_canonical_without_rewriting_user_text(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            home = root / "home"
+            state = root / "state"
+            (state / "state").mkdir(parents=True)
+            (state / "state" / "preferences.md").write_text(self.POLICY, encoding="utf-8")
+            (home / ".codex").mkdir(parents=True)
+            target = home / ".codex" / "AGENTS.md"
+            target.write_text("# User rules\nkeep this\n", encoding="utf-8")
+            with mock.patch.object(Path, "home", return_value=home), \
+                    mock.patch.object(aic, "PRIVATE_STATE", state):
+                row = aic._policy_diff_row("codex")
+                self.assertFalse(row["ok"])
+                rc, _ = aic._apply_policy_projection("codex")
+                self.assertEqual(rc, 0)
+                row = aic._policy_diff_row("codex")
+                self.assertTrue(row["ok"])
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("keep this", text)
+            self.assertEqual(text.count("aic:continuous-capability-adoption:begin"), 1)
 
 
 class TestCanonicalIntegrity(unittest.TestCase):

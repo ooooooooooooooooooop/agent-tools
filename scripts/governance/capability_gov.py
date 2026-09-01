@@ -3,7 +3,8 @@
 
 Regenerates the actual installed inventory and diffs against
 registry/capabilities.yaml + skills.json + mcp.json. Every drift is either
-zero or must carry an explicit accepted status.
+zero or must carry an explicit accepted status. Upstream discovery remains
+proposal-only in upstream_capability_review.py; it never enters canonical here.
 """
 from __future__ import annotations
 

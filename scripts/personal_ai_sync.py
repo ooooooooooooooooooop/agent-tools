@@ -28,6 +28,7 @@ STATE_REPO = Path.home() / "personal-ai-state"
 CHECKPOINT = Path.home() / ".dsh" / ".personal-ai-sync" / "status.json"
 AIC = REPO / "scripts" / "aic" / "aic.py"
 SYNC_SKILLS = REPO / "scripts" / "sync_skills.py"
+GOVERNANCE_TASKS = REPO / "scripts" / "governance" / "register_governance_tasks.ps1"
 PROVIDER_DIR = REPO / "scripts" / "memory"
 SETTINGS = Path.home() / ".dsh" / "settings.yaml"
 
@@ -282,7 +283,7 @@ def discover_projects(state_repo: Path) -> list[dict]:
                     repos.append(m.group(1).strip())
                 elif line.strip() and not line.startswith(" "):
                     break
-    infra = {str(REPO).lower(), str(state_repo).lower()}
+    infra = {str(REPO).lower(), str(state_repo).lower(), "skills", "agent-tools", "personal-ai-state"}
     projects = []
     active_names = set()
     paused = False
@@ -301,7 +302,7 @@ def discover_projects(state_repo: Path) -> list[dict]:
                 else:
                     active_names.add(name)
     for r in repos:
-        if r.lower() in infra:
+        if r.lower() in infra or Path(r).name.lower() in infra:
             continue
         name = Path(r).name
         status = "ACTIVE" if name in active_names else "PAUSED"
@@ -338,6 +339,7 @@ TARGET_DEPENDENCIES = {
 }
 # personal-ai-state 私有 gateways 是 claude/switchboard 的 generated 源
 PRIVATE_GATEWAYS_PATH = "registry/gateways.yaml"
+PREFERENCES_PATH = "state/preferences.md"
 
 
 def affected_targets(agent_tools_changed: list[str],
@@ -349,6 +351,8 @@ def affected_targets(agent_tools_changed: list[str],
             targets.add(t)
     if any(f == PRIVATE_GATEWAYS_PATH for f in state_changed):
         targets |= {"claude", "switchboard"}
+    if any(f == PREFERENCES_PATH for f in state_changed):
+        targets |= {"dsh", "codex", "claude", "gemini", "switchboard"}
     return sorted(targets)
 
 
@@ -780,6 +784,11 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 step("harness diff", rt["status"] == "NO DRIFT", json.dumps(rt["drift"]))
             else:
                 step("harness diff", True, "skipped by test/embedded restore caller")
+        governance_tasks = repo / "scripts" / "governance" / "register_governance_tasks.ps1"
+        if governance_tasks.is_file() and os.name == "nt":
+            rc, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                           "-File", str(governance_tasks)], timeout=120)
+            step("governance tasks", rc == 0, out.splitlines()[-1] if out else "")
         if (state_repo / "memory").is_dir():
             v = memory_merge_verify(state_repo)
             step("memory loadable", v["ok"], f"records={v.get('records')}")

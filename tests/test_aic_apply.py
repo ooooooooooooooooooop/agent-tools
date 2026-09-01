@@ -471,6 +471,8 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
             # devB 不复制：A 的提交会通过 pull 把新 aic.py 带过去（B 工作树保持干净）
             shutil.copy2(REPO / "scripts" / "aic" / "aic.py",
                          devA / "scripts" / "aic" / "aic.py")
+            shutil.copy2(REPO / "scripts" / "aic" / "policy_projection.py",
+                         devA / "scripts" / "aic" / "policy_projection.py")
 
             # B 的 HOME：按旧 canonical 渲染的 switchboard config（制造 runtime drift）
             homeB = td / "homeB"

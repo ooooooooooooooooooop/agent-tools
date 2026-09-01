@@ -1,7 +1,7 @@
 # PersonalAI Durability Nightly — orchestrator (Windows Task Scheduler target).
 # Schedule decides WHEN; these tools decide WHAT. aic is not involved.
 $ErrorActionPreference = 'Continue'
-$repo = "C:\Users\admin\Desktop\skills"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $py = "python"
 $rc = 0
 foreach ($job in @('backup_sessions','backup_broker','backup_configs','check_repos','restore_check','rpo_check')) {
