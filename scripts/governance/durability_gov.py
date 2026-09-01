@@ -8,13 +8,16 @@ WAITING_FOR_CUSTODY_ROOT — never promoted.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "durability"))
-from common import STATE, gov_log, load_yaml  # noqa: E402
+from common import gov_log, load_yaml  # noqa: E402
+
+STATE = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
 
 
 def runs() -> list[dict]:
