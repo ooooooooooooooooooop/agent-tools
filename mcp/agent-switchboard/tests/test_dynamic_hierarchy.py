@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -330,7 +331,8 @@ class DynamicAntigravityRoleTests(unittest.TestCase):
             "allowed_files": package["allowed_files"],
             "acceptance_criteria": package["acceptance_criteria"],
         }
-        with mock.patch.object(broker, "load_config", return_value={"compact_task_contract": False}), \
+        with mock.patch.dict(os.environ, {"AGENT_BROKER_CHILD": "0"}), \
+             mock.patch.object(broker, "load_config", return_value={"compact_task_contract": False}), \
              mock.patch.object(broker, "resolve_project", return_value=broker.ProjectInfo("p", ".")), \
              mock.patch.object(broker, "consult_antigravity_cli", return_value=normalized), \
              mock.patch.object(broker, "store_consultation"):

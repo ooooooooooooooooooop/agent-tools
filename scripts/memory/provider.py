@@ -95,7 +95,11 @@ class FileMemoryProvider:
         return {"id": mid, "deduped": False}
 
     def _add_revision(self, rdir: Path, content: str, by_agent: str) -> str:
-        rev = f"r{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+        now_ms = int(time.time() * 1000)
+        if hasattr(self, "_last_rev_ms") and now_ms <= self._last_rev_ms:
+            now_ms = self._last_rev_ms + 1
+        self._last_rev_ms = now_ms
+        rev = f"r{now_ms}-{uuid.uuid4().hex[:6]}"
         (rdir / "revisions" / f"{rev}.yaml").write_text(_dump(
             {"rev": rev, "at": _now(), "device_id": self.device_id,
              "by_agent": by_agent, "content": content}), encoding="utf-8")

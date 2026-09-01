@@ -131,6 +131,22 @@ def evaluate(messages_path: str | None, selection_events_path: str | None,
 
     # 当无实时消息文件时，使用 fallback 机制（LAST_KNOWN 或 UNAVAILABLE）
     if not mp.is_file():
+        if sel.get("scope_leakage"):
+            return {
+                "status": "ACTION REQUIRED",
+                "evidence_state": "CURRENT",
+                "cause": "SCOPE_LEAKAGE",
+                "last_known_correction_rate": baseline.get("correction_rate"),
+                "reason": f"检测到 memory scope 泄漏 {len(sel['scope_leakage'])} 起（project 跨注入）",
+                "selection": sel,
+                "baseline": baseline,
+                "metrics": {
+                    "correction_rate": None,
+                    "last_known_correction_rate": baseline.get("correction_rate"),
+                    "scope_leakage": len(sel["scope_leakage"]),
+                    "over_personalization": len(sel.get("over_personalization", [])),
+                },
+            }
         if baseline.get("correction_rate") is not None:
             cr_pct = baseline["correction_rate"] * 100
             return {
