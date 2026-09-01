@@ -112,7 +112,7 @@ class WorkflowPreflightRouter:
             target_prov = explicit_provider or role_def["provider"]
             target_mod = role_def["model"]
 
-            # 楠岃瘉璇ラ€昏緫瑙掕壊瑙ｆ瀽鍑虹殑妯″瀷鏄惁鍦?DSH 澹版槑涓?            declared = self.inventory.dsh_models.get(target_prov, [])
+            declared = self.inventory.dsh_models.get(target_prov, [])
             if target_mod in declared:
                 return {
                     "status": "resolved",
