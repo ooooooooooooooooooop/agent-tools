@@ -1,6 +1,6 @@
 # PersonalAI Governance — FREQUENT (daily, cheap): drift/capability/static/secret/rpo.
 $ErrorActionPreference = 'Continue'
-$repo = "C:\Users\admin\Desktop\skills"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $rc = 0
 & python "$repo\scripts\aic\aic.py" validate | Out-Null; if ($LASTEXITCODE -ne 0) { $rc = 1 }
 foreach ($t in 'dsh','codex','claude','gemini','switchboard') {
@@ -9,8 +9,10 @@ foreach ($t in 'dsh','codex','claude','gemini','switchboard') {
 }
 foreach ($m in 'capability_gov','static_gov','routing_gov') {
   & python "$repo\scripts\governance\$m.py" | Out-Null
-  if ($LASTEXITCODE -ne 0) { Write-Host "GOV-FINDING: $m"; }
+  if ($LASTEXITCODE -ne 0) { Write-Host "GOV-FINDING: $m"; $rc = 1 }
 }
 & python "$repo\scripts\durability\rpo_check.py" | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Host "GOV-FINDING: rpo_check"; $rc = 1 }
 & python "$repo\scripts\governance\gov_status.py"
+if ($LASTEXITCODE -ne 0) { $rc = 1 }
 exit $rc

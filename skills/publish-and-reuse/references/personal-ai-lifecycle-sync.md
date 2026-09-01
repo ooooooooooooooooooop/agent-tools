@@ -167,7 +167,7 @@ dsh/* changed               → refresh DSH plugin
 registry/models.yaml        → render 受影响 Harness model 段
 routing-policy changed      → refresh routing consumers
 memory/* changed            → Memory derived index refresh
-preferences changed         → Context Builder 输入刷新
+preferences changed         → Context Builder 输入刷新；AIC static policy projection diff/apply
 project /.ai/state changed  → project context refresh
 gateway mapping changed     → 受影响 adapter refresh
 governance script changed   → governance task validation
@@ -190,12 +190,13 @@ Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 → aic discover → Discover active projects → Clone eligible projects
 → Validate canonical → Restore Skills/Plugins/MCP → Render installed Harnesses
 → Rebuild Memory index → Register Governance/Durability/Sync-check tasks (idempotent)
+→ Verify CONTINUOUS_CAPABILITY_ADOPTION generated block on installed Harnesses
 → Physical smoke test → Status
 ```
 
 - Secrets（§29）：先自动完成所有不需要 secret 的部分；只列当前 active route/Harness 真正缺失的 secret；不因 optional Harness 未登录阻塞核心恢复
 - Multi-Harness（§30）：按实际 installed 的 render→diff→apply→diff；未安装 = OPTIONAL_NOT_INSTALLED，不自动装齐
-- Governance（§31）：注册 scheduled tasks 必须 idempotent，重复 bootstrap 不产生 duplicate
+- Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate
 - Durability（§32）：不硬复制旧 `D:\ai-backup`，重新 discover disks/target/failure domains；无等价 target → DURABILITY=DEGRADED 但 PERSONAL_AI_CANONICAL_RESTORE 仍可 PASS；BACKUP_KEY_CUSTODY 继续 WAITING_FOR_CUSTODY_ROOT
 
 ## 15. 输出契约（§33-§35）

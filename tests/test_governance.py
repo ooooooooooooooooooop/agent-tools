@@ -29,6 +29,7 @@ def setUpModule():
 import aic  # noqa: E402
 import memory_gov  # noqa: E402
 import routing_gov  # noqa: E402
+import upstream_capability_review  # noqa: E402
 
 
 class TestGeneratedConfigDrift(unittest.TestCase):
@@ -70,6 +71,50 @@ class TestModelStates(unittest.TestCase):
     def test_states_independent(self):
         states = {"DISCOVERED": True, "ADMITTED": False}
         self.assertTrue(states["DISCOVERED"] and not states["ADMITTED"])
+
+
+class TestDiscoveredInventory(unittest.TestCase):
+    def test_model_state_reads_newest_valid_aic_inventory(self):
+        sys.modules.pop("common", None)
+        sys.path.insert(0, str(REPO / "scripts" / "governance"))
+        import model_state
+        with tempfile.TemporaryDirectory() as td:
+            fake_repo = Path(td)
+            inv = fake_repo / "registry" / "inventory"
+            inv.mkdir(parents=True)
+            (inv / "discovered-models-old.json").write_text("{bad json", encoding="utf-8")
+            good = inv / "discovered-models-device-2026-08-30.json"
+            good.write_text(json.dumps({"models": [{"id": "model-new"}]}), encoding="utf-8")
+            old_repo = model_state.REPO
+            model_state.REPO = fake_repo
+            try:
+                self.assertEqual(model_state.discovered(), {"model-new"})
+            finally:
+                model_state.REPO = old_repo
+
+
+class TestUpstreamCapabilityReview(unittest.TestCase):
+    def test_version_comparison_only_flags_newer(self):
+        self.assertEqual(upstream_capability_review.compare_versions("codex-cli 0.150.0", "0.149.0"), "NEWER")
+        self.assertEqual(upstream_capability_review.compare_versions("2.1.238", "2.1.239"), "OLDER")
+        self.assertEqual(upstream_capability_review.compare_versions("unknown", "2.1.239"), "UNKNOWN")
+
+    def test_weekly_runner_uses_existing_review_and_propagates_failures(self):
+        text = (REPO / "scripts" / "governance" / "run_governance_weekly.ps1").read_text(encoding="utf-8")
+        self.assertIn("$PSScriptRoot", text)
+        self.assertIn("upstream_capability_review", text)
+        self.assertIn("$rc = 1", text)
+        self.assertIn("exit $rc", text)
+        self.assertNotIn("C:\\Users\\admin", text)
+
+    def test_task_registration_reuses_windows_scheduler_and_verifies_runner(self):
+        text = (REPO / "scripts" / "governance" / "register_governance_tasks.ps1").read_text(encoding="utf-8")
+        self.assertIn("Register-ScheduledTask", text)
+        self.assertIn("Get-ScheduledTask", text)
+        self.assertIn("-Force", text)
+        self.assertIn("$PSScriptRoot", text)
+        self.assertIn("GOVERNANCE_TASKS=READY", text)
+        self.assertNotIn("C:\\Users\\admin", text)
 
 
 class TestProviderUnreachable(unittest.TestCase):

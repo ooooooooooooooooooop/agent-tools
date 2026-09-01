@@ -337,6 +337,14 @@ class TestSecretsAndCheckpoint(unittest.TestCase):
                 pas.CHECKPOINT = old
 
 
+class TestAffectedTargets(unittest.TestCase):
+    def test_preferences_refreshes_all_instruction_consumers(self):
+        self.assertEqual(
+            pas.affected_targets([], ["state/preferences.md"]),
+            ["claude", "codex", "dsh", "gemini", "switchboard"],
+        )
+
+
 class TestFreshRestoreRehearsal(unittest.TestCase):
     """§39：empty local state 恢复演练（temp destination，不碰 live）。"""
 
