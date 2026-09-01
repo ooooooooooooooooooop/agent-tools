@@ -98,6 +98,25 @@ Need → Impact → Proposal → Implementation → Verification → Regression
 示例：新增 provider/model/harness、换机器、DSH 升级、MemoryProvider 替换、KMS 上线。
 没有 Phase 8/9/10。
 
+## 11.1 DSH Managed Upgrade Lifecycle（正式入口）
+
+DSH 的 managed composition 升级收敛到版本化模型：`CURRENT_ACCEPTED / PREVIOUS_ACCEPTED / CANDIDATE`。
+用户日常启动方式不变；生产升级永远 `AUTO_PRODUCTION_UPGRADE=FORBIDDEN`，accept/switch 仅显式执行。
+
+```text
+check        → 当前/previous/candidate 状态 + 上游版本发现 + AIC 门禁
+prepare      → 在隔离 home 构建候选 composition（deterministic，hash 记录）
+validate     → 硬门禁：inspect PASS / node+base smoke / 5 插件 AVAILABLE·LOADABLE·CONFIG / 行为回归
+propose      → UPGRADE_PROPOSAL=READY（等待用户 cutover 决策）
+accept       → 显式切换：B 变 current、A 变 previous（本地，不联网）
+rollback     → previous 恢复 current（本地，不重新下载）
+observe      → post-launch 契约（10 项；--check-only 可在未启动时预检）
+```
+
+- 唯一 durable 状态：`~/.dsh/profiles/web/dsh-managed-state.json`（由 canonical contract + manifest 可重建；非平行 SSOT；`aic diff dsh` 仍为 drift 权威）。
+- launcher（dsh-launch-web.ps1）版本无关：经 state→manifest 解析 base/node/entry，切换后无需改 launcher。
+- 足迹：`~/.dsh/.dsh-lifecycle/{candidates,proposals,observations,evidence.jsonl}`（机器本地，可重建）。
+
 ## 12. Final Validation Snapshot（2026-08-28）
 
 见本文件同目录 phase7-governance-report.md §24-25 与下方 Handoff §12（会话输出）。
