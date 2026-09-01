@@ -55,7 +55,7 @@
     "research": ["claude_code", "antigravity_cli"],
     "fast": ["gemini_cli", "antigravity_cli"]
   },
-  "_comment_providers": "Declarative execution layers for the decision-layer AI. Two types: (1) official_cli = a locally-installed official CLI (cli: claude|codex|gemini); availability requires it to be logged in. (2) openai_compat = any OpenAI-compatible relay/local server (base_url + optional api_key via 'env:XXX' or literal, models). Decision layer lists them with `list_providers`, then calls route_agent_task(target_agent=<provider>, target_model=<model>).",
+  "_comment_providers": "Declarative execution layers for the decision-layer AI. Two types: (1) official_cli = a locally-installed official CLI (cli: claude|codex|gemini); availability requires it to be logged in. (2) openai_compat = any OpenAI-compatible relay/local server (base_url + optional api_key via 'env:XXX' or literal, models). api_format declares which wire protocols the relay speaks: 'auto' (default, assume all) | 'both' (anthropic+openai) | single protocol | comma list e.g. 'anthropic,openai,gemini'. Protocol map: anthropic = /v1/messages -> claude shell; openai = /v1/chat/completions + /v1/models -> codex shell; gemini = /v1beta/models/{model}:generateContent -> gemini/antigravity shell. list_providers derives compatible shells automatically. Leave models:[] empty to auto-discover from GET {base_url}/models (the relay is the source of truth). Decision layer lists them with `list_providers`, then calls route_agent_task(target_agent=<provider>, target_model=<model>).",
   "providers": {
     "deepseek": {
       "type": "openai_compat",
@@ -72,6 +72,21 @@
       "type": "openai_compat",
       "base_url": "http://localhost:11434/v1",
       "models": ["llama3"]
+    }
+  },
+  "_comment_model_combinations": "Named shell+provider+model BOOKMARKS so dispatch is one line: route_agent_task(target_combination=<name>). Shell MUST use canonical names: claude_code | codex_cli | antigravity_cli | gemini_cli (bare 'claude'/'codex' are forbidden and auto-canonicalized at parse). CRUD recipe — QUERY at runtime: list_model_combinations() / list_providers() (no file reading). ADD: copy one entry under model_combinations, set shell (canonical), provider (a key from the providers block above), model (any model the provider's interface exposes). REMOVE: delete the key; references to a deleted provider are flagged provider_available:false by list_model_combinations, never silently fail. CHANGE model: edit the model field only. NEW RELAY: add it under providers first (models:[] = auto-discover), then add bookmarks referencing it. Optional 'backend' field names an explicit cli_backends bridge for shells that cannot be env-overridden; official claude_code/codex_cli shells need no bridge (cross-cli endpoint injection is built in).",
+  "model_combinations": {
+    "claude-cpa-gemini": {
+      "shell": "claude_code",
+      "provider": "cpa",
+      "model": "gemini-3.7-flash-high",
+      "description": "Claude Code shell + CPA relay + Gemini model"
+    },
+    "codex-cpa-gemini": {
+      "shell": "codex_cli",
+      "provider": "cpa",
+      "model": "gemini-3.7-flash-high",
+      "description": "Codex CLI shell + CPA relay + Gemini model"
     }
   }
 }

@@ -378,13 +378,22 @@ class CrossCliProviderTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(out[1]["CLAUDE_CONFIG_DIR"]))
         self.assertTrue(os.path.isfile(os.path.join(out[1]["CLAUDE_CONFIG_DIR"], "settings.json")))
 
-    def test_codex_cross_returns_none(self):
+    def test_codex_cross_returns_isolated_home(self):
         import agent_broker_mcp as m
 
         cfg, reg = self._cfg_and_registry()
         with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
             out = m._resolve_cross_cli_provider("codex_cli", "kimi-for-coding", reg)
-        self.assertIsNone(out)  # codex not env-overridable yet
+        self.assertIsNotNone(out)
+        self.assertEqual(out[0], "kimi")
+        self.assertIn("CODEX_HOME", out[1])
+        self.assertIn("SWITCHBOARD_PROVIDER_API_KEY", out[1])
+        import os
+        config_toml = os.path.join(out[1]["CODEX_HOME"], "config.toml")
+        self.assertTrue(os.path.isfile(config_toml))
+        content = Path(config_toml).read_text(encoding="utf-8")
+        self.assertIn('base_url = "https://api.kimi.com/coding"', content)
+        self.assertIn('model = "kimi-for-coding"', content)
 
     def test_protocol_mismatch_returns_none(self):
         import agent_broker_mcp as m
@@ -402,6 +411,163 @@ class CrossCliProviderTests(unittest.TestCase):
         with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
             out = m._resolve_cross_cli_provider("claude_code", "not-a-model", reg)
         self.assertIsNone(out)
+
+
+class EmptyModelsInterfaceDecisionTests(unittest.TestCase):
+    """A provider with an empty ``models`` list means 'whatever the interface exposes':
+    cross-cli matching must not reject unknown model names against such providers."""
+
+    def _cfg(self):
+        return {
+            "providers": {
+                "cpa": {
+                    "type": "openai_compat",
+                    "base_url": "http://127.0.0.1:8317/v1",
+                    "api_key": "k",
+                    "models": [],
+                    "api_format": "auto",
+                },
+                "closed": {
+                    "type": "openai_compat",
+                    "base_url": "http://127.0.0.1:9999/v1",
+                    "api_key": "k",
+                    "models": ["only-this"],
+                    "api_format": "auto",
+                },
+            }
+        }
+
+    def test_empty_models_matches_any_model(self):
+        import agent_broker_mcp as m
+
+        cfg = self._cfg()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("claude_code", "anything-at-all", None, preferred_provider="cpa")
+        self.assertIsNotNone(out)
+        self.assertEqual(out[0], "cpa")
+
+    def test_closed_list_still_rejects_unknown_model(self):
+        import agent_broker_mcp as m
+
+        cfg = self._cfg()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("claude_code", "anything-at-all", None, preferred_provider="closed")
+        self.assertIsNone(out)
+
+    def test_preferred_provider_restricts_match(self):
+        import agent_broker_mcp as m
+
+        cfg = self._cfg()
+        with mock.patch.object(m, "providers_from_config_loaded", return_value=providers.providers_from_config(cfg)):
+            out = m._resolve_cross_cli_provider("claude_code", "only-this", None, preferred_provider="cpa")
+        self.assertIsNotNone(out)
+        self.assertEqual(out[0], "cpa")  # preferred wins even though 'closed' also matches
+
+
+class ProtocolSupportTests(unittest.TestCase):
+    """api_format protocol matching: single value, comma list, both, auto."""
+
+    def _p(self, api_format: str) -> ProviderConfig:
+        return ProviderConfig(
+            name="t", provider_type="openai_compat",
+            base_url="http://x", api_key="k", models=[], api_format=api_format,
+        )
+
+    def test_comma_list(self):
+        p = self._p("anthropic,openai,gemini")
+        self.assertTrue(p.supports_protocol("anthropic"))
+        self.assertTrue(p.supports_protocol("openai"))
+        self.assertTrue(p.supports_protocol("gemini"))
+        self.assertFalse(p.supports_protocol("codex"))
+
+    def test_single_value(self):
+        self.assertTrue(self._p("anthropic").supports_protocol("anthropic"))
+        self.assertFalse(self._p("anthropic").supports_protocol("openai"))
+
+    def test_both_legacy(self):
+        p = self._p("both")
+        self.assertTrue(p.supports_protocol("anthropic"))
+        self.assertTrue(p.supports_protocol("openai"))
+        self.assertFalse(p.supports_protocol("gemini"))
+
+    def test_auto_allows_everything(self):
+        self.assertTrue(self._p("auto").supports_protocol("gemini"))
+        self.assertTrue(self._p("").supports_protocol("anything"))
+
+
+class ModelCombinationParsingTests(unittest.TestCase):
+    """config.json ``model_combinations`` block parsing and named resolution."""
+
+    def _cfg(self):
+        return {
+            "model_combinations": {
+                "claude-cpa-gemini": {
+                    "shell": "claude",
+                    "provider": "cpa",
+                    "model": "gemini-3.7-flash-high",
+                    "description": "claude via cpa",
+                },
+                "codex-cpa-gemini": {
+                    "shell": "codex",
+                    "provider": "cpa",
+                    "model": "gemini-3.7-flash-high",
+                    "backend": "codex-cpa-gemini",
+                },
+                "broken-missing-model": {"shell": "claude", "provider": "cpa"},
+                "broken-missing-shell": {"provider": "cpa", "model": "x"},
+            }
+        }
+
+    def test_parses_valid_and_skips_malformed(self):
+        combos = providers.combinations_from_config(self._cfg())
+        self.assertEqual(len(combos), 2)
+        by_name = {c.name: c for c in combos}
+        self.assertEqual(by_name["claude-cpa-gemini"].shell, "claude_code")
+        self.assertIsNone(by_name["claude-cpa-gemini"].backend)
+        self.assertEqual(by_name["codex-cpa-gemini"].shell, "codex_cli")
+        self.assertEqual(by_name["codex-cpa-gemini"].backend, "codex-cpa-gemini")
+
+    def test_bare_shell_names_auto_canonicalized(self):
+        # 裸名禁止出现在配置里；即使写了也被系统层强制归一化，绕不过
+        self.assertEqual(providers.canonical_shell("claude"), "claude_code")
+        self.assertEqual(providers.canonical_shell("codex"), "codex_cli")
+        self.assertEqual(providers.canonical_shell("claude_code"), "claude_code")
+        self.assertEqual(providers.canonical_shell("codex_cli"), "codex_cli")
+        self.assertEqual(providers.canonical_shell("antigravity"), "antigravity_cli")
+
+    def test_resolve_combination_by_name(self):
+        cfg = self._cfg()
+        self.assertIsNotNone(providers.resolve_combination(cfg, "codex-cpa-gemini"))
+        self.assertIsNone(providers.resolve_combination(cfg, "nope"))
+        self.assertIsNone(providers.resolve_combination(cfg, ""))
+
+    def test_empty_block(self):
+        self.assertEqual(providers.combinations_from_config({}), [])
+        self.assertEqual(providers.combinations_from_config({"model_combinations": "junk"}), [])
+
+
+class CodexCrossCliRolloutAttestationTests(unittest.TestCase):
+    """Isolated CODEX_HOME rollouts must be attestable (cross-cli provider injection
+    puts sessions under the isolated home, not ~/.codex)."""
+
+    def test_rollout_lookup_searches_isolated_home(self):
+        import agent_broker_mcp as m
+
+        with tempfile.TemporaryDirectory() as home:
+            tid = "123e4567-e89b-42d3-a456-426614174000"
+            rollout_dir = Path(home) / "sessions" / "2026" / "08" / "27"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / f"rollout-2026-08-27T00-00-00-{tid}.jsonl"
+            rollout.write_text(
+                json.dumps({"type": "turn_context", "payload": {"model": "gemini-3.7-flash-control", "effort": "high"}}) + "\n",
+                encoding="utf-8",
+            )
+            found = m._codex_rollout_path_by_thread_id(tid, home)
+            self.assertIsNotNone(found)
+            self.assertEqual(found, rollout)
+            model, effort = m._codex_turn_context_model_effort(found)
+            self.assertEqual(model, "gemini-3.7-flash-control")
+            self.assertEqual(effort, "high")
 
 
 if __name__ == "__main__":

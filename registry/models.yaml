@@ -8,26 +8,65 @@ models:
     provider: kimi-coding
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: kimi-coding provider 可选模型；2026-08-28 前为 main_default"}
+    contextWindow: 262144
+    capacityEvidence:
+      grade: authoritative
+      source: "https://platform.moonshot.cn/docs/pricing/chat"
+      upstreamModel: k3
+      contextWindow: 262144
+      retrieved: "2026-08-31"
     roles: []
   - id: deepseek-v4-flash
     provider: bai
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared with compat/reasoning config"}
+    contextWindow: 128000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://api-docs.deepseek.com/quick_start/pricing"
+      upstreamModel: deepseek-chat
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      retrieved: "2026-08-31"
     roles: []
   - id: claude-opus-5
     provider: any
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared with 1M-context beta headers"}
+    contextWindow: 1000000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://docs.anthropic.com/en/docs/about-claude/models"
+      upstreamModel: claude-opus-5
+      contextWindow: 1000000
+      maxOutputTokens: 128000
+      retrieved: "2026-08-31"
     roles: []
   - id: gpt-5.6-luna-max
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: subagent spawn/fork default"}
+    contextWindow: 128000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+      upstreamModel: gpt-5.6-luna
+      contextWindow: 128000
+      maxOutputTokens: 16384
+      retrieved: "2026-08-31"
     roles: [subagent_default]
   - id: gemini-3.7-flash-high
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: compaction summarization model + agent-default-model (since 2026-08-28)"}
+    contextWindow: 1048576
+    capacityEvidence:
+      grade: authoritative
+      source: "https://ai.google.dev/gemini-api/docs/models/gemini-v3"
+      upstreamModel: gemini-3.7-flash
+      contextWindow: 1048576
+      maxOutputTokens: 65536
+      retrieved: "2026-08-31"
     roles: [compaction, main_default]
   - id: gpt-5.6-sol-xhigh
     provider: cpa
@@ -47,11 +86,27 @@ models:
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    contextWindow: 200000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://docs.anthropic.com/en/docs/about-claude/models"
+      upstreamModel: claude-sonnet-4-6
+      contextWindow: 200000
+      maxOutputTokens: 64000
+      retrieved: "2026-08-31"
     roles: []
   - id: claude-opus-4-6-thinking
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared on cpa"}
+    contextWindow: 200000
+    capacityEvidence:
+      grade: authoritative
+      source: "https://docs.anthropic.com/en/docs/about-claude/models"
+      upstreamModel: claude-opus-4-6
+      contextWindow: 200000
+      maxOutputTokens: 64000
+      retrieved: "2026-08-31"
     roles: []
   - id: gpt-image-2
     provider: cpa

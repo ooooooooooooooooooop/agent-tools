@@ -180,6 +180,7 @@ def _resolve_cross_cli_provider(
     target_agent: str | None,
     target_model: str | None,
     registry: cli_backend_base.CliRegistry | None = None,
+    preferred_provider: str | None = None,
 ) -> tuple[str, dict[str, str]] | None:
     """When ``target_agent`` is a CLI (claude/codex) and ``target_model`` names a model
     belonging to a configured provider, return (provider_name, env_override) so the CLI
@@ -192,8 +193,10 @@ def _resolve_cross_cli_provider(
 
     The env_override for claude uses CLAUDE_CONFIG_DIR pointing at a temporary isolated
     settings.json (claude CLI reads settings.json env with higher priority than process
-    environment; cc-switch writes there for the same reason). codex currently returns
-    None (its config.toml provider wiring is not overridable via env).
+    environment; cc-switch writes there for the same reason). For codex it uses an
+    isolated CODEX_HOME carrying a generated config.toml that registers the provider
+    inline (model_provider + model_providers.<name> with env_key), plus the provider
+    api_key exported under that env_key.
     """
     if not target_agent or not target_model:
         return None
@@ -201,26 +204,54 @@ def _resolve_cross_cli_provider(
     protocol = _CLI_PROTOCOL.get(cli_key)
     if not protocol:
         return None
-    if cli_key not in {"claude_code", "claude"}:
-        return None  # codex config.toml provider wiring is not env-overridable (for now)
+    if cli_key not in {"claude_code", "claude", "codex_cli", "codex"}:
+        return None
     registry = registry or cli_registry()
     providers_cfg = providers_from_config_loaded()
     model_lower = str(target_model).strip().lower()
+    preferred = str(preferred_provider or "").strip().lower() or None
     for p in providers_cfg:
         if p.is_official or not p.base_url:
             continue
+        if preferred and p.name.strip().lower() != preferred:
+            continue
         if not p.supports_protocol(protocol):
             continue
-        if not any(str(m).strip().lower() == model_lower for m in p.models):
+        # An empty models list means "whatever the interface exposes" — the relay is
+        # the source of truth, so it matches any requested model.
+        if p.models and not any(str(m).strip().lower() == model_lower for m in p.models):
             continue
         api_key = p.api_key or ""
         if api_key.startswith("env:"):
             import os as _os
 
             api_key = _os.environ.get(api_key[4:], "") or ""
-        # Isolated claude config dir carrying the provider's anthropic endpoint.
         import tempfile
 
+        if cli_key in {"codex_cli", "codex"}:
+            # Isolated CODEX_HOME: codex reads <CODEX_HOME>/config.toml. The generated
+            # file registers the provider inline so the user's own config.toml is
+            # untouched (mirrors the claude isolated-config pattern).
+            iso_dir = tempfile.mkdtemp(prefix="codex-provider-")
+            env_key = "SWITCHBOARD_PROVIDER_API_KEY"
+            try:
+                config_toml = (
+                    f'model = "{target_model}"\n'
+                    f'model_provider = "switchboard_provider"\n'
+                    f"\n"
+                    f"[model_providers.switchboard_provider]\n"
+                    f'name = "{p.name}"\n'
+                    f'base_url = "{p.base_url}"\n'
+                    f'env_key = "{env_key}"\n'
+                    f'wire_api = "responses"\n'
+                    f"requires_openai_auth = false\n"
+                )
+                with open(os.path.join(iso_dir, "config.toml"), "w", encoding="utf-8") as fh:
+                    fh.write(config_toml)
+            except Exception:  # noqa: BLE001
+                continue
+            return (p.name, {"CODEX_HOME": iso_dir, env_key: api_key})
+        # Isolated claude config dir carrying the provider's anthropic endpoint.
         iso_dir = tempfile.mkdtemp(prefix="claude-provider-")
         try:
             import json as _json
@@ -4718,23 +4749,31 @@ def parse_codex_stream_output(stdout: str) -> CodexStreamParseResult:
 _CODEX_THREAD_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,80}$")
 
 
-def _codex_rollout_path_by_thread_id(thread_id: str | None) -> Path | None:
-    """Resolve the exact ~/.codex/sessions rollout file for a validated thread_id
+def _codex_rollout_path_by_thread_id(thread_id: str | None, codex_home: str | None = None) -> Path | None:
+    """Resolve the exact sessions rollout file for a validated thread_id
     (rollout-*-<thread_id>.jsonl). Rejects anything that doesn't look like a real
-    thread/session id so a malformed value can't turn into a broad glob match."""
+    thread/session id so a malformed value can't turn into a broad glob match.
+    Searches <codex_home>/sessions (an isolated CODEX_HOME from cross-cli provider
+    injection puts rollouts there), falling back to ~/.codex/sessions."""
     tid = str(thread_id or "").strip()
     if not tid or not _CODEX_THREAD_ID_RE.match(tid):
         return None
-    base = Path.home() / ".codex" / "sessions"
-    if not base.exists():
-        return None
+    homes: list[Path] = []
+    if codex_home and str(codex_home).strip():
+        homes.append(Path(str(codex_home).strip()) / "sessions")
+    default_home = Path.home() / ".codex" / "sessions"
+    if default_home not in homes:
+        homes.append(default_home)
     suffix = f"-{tid}.jsonl".lower()
-    try:
-        for path in base.rglob(f"rollout-*{tid}.jsonl"):
-            if path.is_file() and path.name.lower().endswith(suffix):
-                return path
-    except OSError:
-        return None
+    for base in homes:
+        if not base.exists():
+            continue
+        try:
+            for path in base.rglob(f"rollout-*{tid}.jsonl"):
+                if path.is_file() and path.name.lower().endswith(suffix):
+                    return path
+        except OSError:
+            continue
     return None
 
 
@@ -4845,7 +4884,11 @@ def consult_codex(
     parsed = parse_codex_stream_output(stdout)
     actual_model: str | None = None
     actual_effort: str | None = None
-    rollout_path = _codex_rollout_path_by_thread_id(parsed.thread_id)
+    # An isolated CODEX_HOME (cross-cli provider injection) puts rollouts under the
+    # isolated home; attest from there first, then fall back to the default home.
+    rollout_path = _codex_rollout_path_by_thread_id(
+        parsed.thread_id, (env_override or {}).get("CODEX_HOME")
+    )
     if rollout_path:
         actual_model, actual_effort = _codex_turn_context_model_effort(rollout_path)
         # Keep the rollout: Codex's state database points at this exact file. Removing it
@@ -9260,6 +9303,42 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("prompt is required")
     project = args.get("project")
     topic = args.get("topic")
+    # Model-combination resolution: a named shell+provider+model triple from config.json
+    # model_combinations fills in target_agent/target_model (explicit args win), so the
+    # rest of routing sees ordinary fields. `backend` on the combination names an
+    # explicit cli_backends bridge for shells that cannot be env-overridden (e.g. codex).
+    combo_name = str(args.get("target_combination") or "").strip()
+    if combo_name:
+        from providers import resolve_combination
+
+        _cfg = load_config()
+        combo = resolve_combination(_cfg, combo_name)
+        if combo is None:
+            return {
+                "status": "error",
+                "error": f"model_combination_not_found: {combo_name!r}",
+                "response": (
+                    f"Model combination '{combo_name}' is not registered in config.json "
+                    "model_combinations. List registered combinations with "
+                    "list_model_combinations()."
+                ),
+                "response_is_error": True,
+            }
+        args = dict(args)
+        args["_combo_provider"] = combo.provider
+        args["_combo_shell"] = combo.shell
+        if not (args.get("target_model") or args.get("model")):
+            args["target_model"] = combo.model
+        if not (args.get("target_agent") or args.get("agent")):
+            if combo.backend:
+                args["target_agent"] = combo.backend
+            elif combo.shell.strip().lower() in ("claude", "claude_code", "codex", "codex_cli"):
+                # Official CLI shells are env-overridable: the cross-cli provider path
+                # injects the provider's endpoint into an isolated config dir/home.
+                args["target_agent"] = combo.shell
+            else:
+                # Direct provider HTTP dispatch (openai_compat backend).
+                args["target_agent"] = combo.provider
     # Pass the RAW model into resolution. normalize_model_name applies the
     # Antigravity display-name aliases (opus -> "Claude Opus 4.6 (Thinking)"),
     # which would corrupt Claude/Codex CLI resolution if applied this early.
@@ -9368,33 +9447,58 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         # names a real family hosted in that IDE. Correct it before model resolution.
         target_agent = default_target_agent_for_family(intent_family)
     # Cross-CLI × provider coupling early exit: when the caller names a CLI
-    # (claude/claude_code) and a provider model, route straight to the CLI with the
-    # provider's endpoint injected — before normal model resolution would reject the
-    # provider model as unknown.
-    if str(target_agent).strip().lower() in {"claude_code", "claude"}:
-        _cross = _resolve_cross_cli_provider(target_agent, target_model, cli_registry())
+    # (claude/claude_code/codex/codex_cli) and a provider model, route straight to the
+    # CLI with the provider's endpoint injected — before normal model resolution would
+    # reject the provider model as unknown.
+    if str(target_agent).strip().lower() in {"claude_code", "claude", "codex_cli", "codex"}:
+        _cross = _resolve_cross_cli_provider(
+            target_agent,
+            target_model,
+            cli_registry(),
+            preferred_provider=str(args.get("_combo_provider") or "") or None,
+        )
         if _cross is not None:
             _provider_name, _env = _cross
-            _result = consult(
-                "claude",
-                {
-                    "project": project,
-                    "topic": topic,
-                    "prompt": prompt,
-                    "mode": args.get("mode") or "plan",
-                    "task_kind": normalize_task_kind(args.get("task_kind") or args.get("request_type")),
-                    "token_budget": int(args.get("token_budget") or 0) or None,
-                    "target_model": target_model,
-                    "effort": args.get("effort") or args.get("reasoning_effort"),
-                    "max_response_chars": args.get("max_response_chars"),
-                    "timeout_seconds": args.get("timeout_seconds"),
-                    "new_chat": truthy(args.get("new_chat") or args.get("force_new_chat")),
-                    "async": args.get("async") or args.get("async_handoff") or args.get("use_inbox") or args.get("queue"),
-                    "force_sync": args.get("force_sync") or args.get("sync") or args.get("direct") or args.get("use_cli"),
-                    "env_override": _env,
-                },
-            )
-            _result["route"] = "claude_code_cross"
+            _is_codex = str(target_agent).strip().lower() in {"codex_cli", "codex"}
+            if _is_codex:
+                _result = consult(
+                    "codex",
+                    {
+                        "project": project,
+                        "topic": topic,
+                        "prompt": prompt,
+                        "mode": args.get("mode") or "read-only",
+                        "task_kind": normalize_task_kind(args.get("task_kind") or args.get("request_type")),
+                        "token_budget": int(args.get("token_budget") or 0) or None,
+                        "target_model": target_model,
+                        "effort": args.get("effort") or args.get("reasoning_effort"),
+                        "max_response_chars": args.get("max_response_chars"),
+                        "timeout_seconds": args.get("timeout_seconds"),
+                        "env_override": _env,
+                    },
+                )
+                _result["route"] = "codex_cli_cross"
+            else:
+                _result = consult(
+                    "claude",
+                    {
+                        "project": project,
+                        "topic": topic,
+                        "prompt": prompt,
+                        "mode": args.get("mode") or "plan",
+                        "task_kind": normalize_task_kind(args.get("task_kind") or args.get("request_type")),
+                        "token_budget": int(args.get("token_budget") or 0) or None,
+                        "target_model": target_model,
+                        "effort": args.get("effort") or args.get("reasoning_effort"),
+                        "max_response_chars": args.get("max_response_chars"),
+                        "timeout_seconds": args.get("timeout_seconds"),
+                        "new_chat": truthy(args.get("new_chat") or args.get("force_new_chat")),
+                        "async": args.get("async") or args.get("async_handoff") or args.get("use_inbox") or args.get("queue"),
+                        "force_sync": args.get("force_sync") or args.get("sync") or args.get("direct") or args.get("use_cli"),
+                        "env_override": _env,
+                    },
+                )
+                _result["route"] = "claude_code_cross"
             _result["cross_cli_provider"] = _provider_name
             _result["surface"] = "cli"
             _result["model_resolution"] = {"status": "resolved", "target_agent": target_agent, "target_model": target_model, "source": "cross_cli_provider"}
@@ -9716,7 +9820,12 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         queued["model_resolution"] = model_resolution
         return queued
     if target_agent == "codex_cli":
-        _cross = _resolve_cross_cli_provider("codex_cli", target_model, cli_registry())
+        _cross = _resolve_cross_cli_provider(
+            "codex_cli",
+            target_model,
+            cli_registry(),
+            preferred_provider=str(args.get("_combo_provider") or "") or None,
+        )
         consult_args: dict[str, Any] = {
             "project": project,
             "topic": topic,
@@ -9741,7 +9850,12 @@ def _route_agent_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         result["model_resolution"] = model_resolution
         return result
     if target_agent == "claude_code":
-        _cross = _resolve_cross_cli_provider("claude_code", target_model, cli_registry())
+        _cross = _resolve_cross_cli_provider(
+            "claude_code",
+            target_model,
+            cli_registry(),
+            preferred_provider=str(args.get("_combo_provider") or "") or None,
+        )
         consult_args = {
             "project": project,
             "topic": topic,
@@ -9971,6 +10085,10 @@ TOOLS = [
                 "project": {"type": "string"},
                 "topic": {"type": "string"},
                 "target_agent": {"type": "string"},
+                "target_combination": {
+                    "type": "string",
+                    "description": "Named shell+provider+model triple from config.json model_combinations (see list_model_combinations). Resolves to target_agent/target_model automatically; explicit target_agent/target_model args override the combination defaults.",
+                },
                 "target_model": {"type": "string", "description": "Model only (e.g. 'opus', 'gpt-5.6-sol', or 'gemini flash'). Bare Antigravity/'gemini flash' moves to the latest stable Flash High; a versioned agy slug pins exactly. Keep reasoning effort in the effort field."},
                 "effort": {"type": "string", "description": "Reasoning effort for CLI surfaces. Codex: minimal|low|medium|high|xhigh|max; Claude: low|medium|high|xhigh|max; Antigravity: low|medium|high."},
                 "target_host": {
@@ -10048,7 +10166,15 @@ TOOLS = [
     },
     {
         "name": "list_providers",
-        "description": "List configured execution-layer providers (config.json `providers`: official CLI login states and openai_compat relays) with their models and real availability. Read this to pick an execution layer, then call route_agent_task(target_agent=<provider>, target_model=<model>).",
+        "description": "List configured execution-layer providers (config.json `providers`) with models, availability, declared protocols, and compatible shells. Protocol map: anthropic=/v1/messages->claude shell; openai=/v1/chat/completions +/v1/models->codex shell; gemini=/v1beta/models/{model}:generateContent->gemini/antigravity shell. Provider models:[] = auto-discovered from the relay's /models interface (models_source='interface'); api_format: auto|both|anthropic|openai|gemini or comma list. Pick one and call route_agent_task(target_agent=<provider>, target_model=<model>) — or use a named bookmark via list_model_combinations + target_combination.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "list_model_combinations",
+        "description": "List named shell+provider+model BOOKMARKS (config.json `model_combinations`) with provider usability. Dispatch in one line: route_agent_task(target_combination=<name>). To manage bookmarks, edit config.json: ADD = copy one entry {shell: claude_code|codex_cli|antigravity_cli|gemini_cli (canonical only; bare 'claude'/'codex' are forbidden and auto-canonicalized), provider: <providers key>, model: <interface-exposed model>}; REMOVE = delete the key (dangling provider refs show provider_available:false here, never fail silently); CHANGE model = edit the model field; NEW RELAY = register under `providers` first (models:[] auto-discovers from the interface), then add bookmarks. Official claude_code/codex_cli shells need no bridge (cross-cli endpoint injection is built in).",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -14050,6 +14176,8 @@ def handle_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         )
     if name == "list_providers":
         return text_content(json.dumps(list_providers(), ensure_ascii=True))
+    if name == "list_model_combinations":
+        return text_content(json.dumps(list_model_combinations(), ensure_ascii=True))
     if name == "queue_cli_request":
         return text_content(
             queue_cli_request(
@@ -14875,17 +15003,71 @@ def list_providers() -> dict[str, Any]:
         else:
             # openai_compat: availability = configured with a base_url (reachability checked
             # at execute time). Optionally do a lightweight probe here.
+            models = list(p.models)
+            models_source: str | None = "config" if models else None
+            if not models and p.base_url:
+                # No declared list: the interface is the source of truth — discover.
+                from providers import discover_provider_models
+
+                discovered = discover_provider_models(p, timeout=3.0)
+                if discovered:
+                    models = discovered
+                    models_source = "interface"
+            # Self-describing shell compatibility: derive which built-in shells this
+            # provider can serve from its declared protocols (_CLI_PROTOCOL).
+            # Canonical names only (claude_code / codex_cli) — bare aliases never shown.
+            shells = sorted(
+                {
+                    {"claude": "claude_code", "codex": "codex_cli"}.get(cli, cli)
+                    for cli, proto in _CLI_PROTOCOL.items()
+                    if p.supports_protocol(proto)
+                }
+            )
             items.append(
                 {
                     "name": p.name,
                     "type": "openai_compat",
                     "base_url": p.base_url,
-                    "models": p.models,
+                    "protocols": p.declared_protocols,
+                    "shells": shells,
+                    "models": models,
+                    "models_source": models_source,
                     "available": bool(p.base_url),
                     "reason": ("unavailable: base_url not set" if not p.base_url else None),
                 }
             )
     return {"providers": items, "count": len(items)}
+
+
+def list_model_combinations() -> dict[str, Any]:
+    """Return every named shell+provider+model triple from config.json
+    ``model_combinations``, each annotated with whether its provider is usable.
+
+    The decision layer reads this to pick a ready-made coupling, then calls
+    ``route_agent_task(target_combination=<name>)`` — no manual shell/provider/model
+    wiring per request.
+    """
+    from providers import combinations_from_config
+
+    combos = combinations_from_config(load_config())
+    providers_cfg = {p.name: p for p in providers_from_config_loaded()}
+    items = []
+    for c in combos:
+        p = providers_cfg.get(c.provider)
+        provider_ok = bool(p and (p.base_url or p.is_official))
+        items.append(
+            {
+                "name": c.name,
+                "shell": c.shell,
+                "provider": c.provider,
+                "model": c.model,
+                "backend": c.backend,
+                "description": c.description,
+                "provider_available": provider_ok,
+                "reason": (None if provider_ok else f"provider '{c.provider}' not configured"),
+            }
+        )
+    return {"combinations": items, "count": len(items)}
 
 
 def _default_official_models(cli: str | None) -> list[str]:

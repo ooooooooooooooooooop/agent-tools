@@ -248,6 +248,36 @@ Details:    artifact://agent-A/report
 | 上下文撑爆缓存 | 169 次 inbox/spliced 注入，单步 204,869 输入 token 且 cache=0 | 结构化结果回收：只回 status/changed/validation/blocker/artifact ref |
 | 目标中途悬死 | 第三个 goal 未 complete，会话停在 open step | checkpoint 存盘 + repair contract 恢复，不从零重放 |
 | 便宜模型不等于省钱 | 执行层 309 万输入 token（luna-max），是主会话 4 倍 | 任务设计正确优先于模型省钱；模型路由排最后 |
+| Workflow 全量返回 null / 秒崩 | 凭直觉硬编码未准入模型 `model: 'gpt-5.6-luna'`，缺少 pre-flight 与结构化捕获 | 采用逻辑角色映射 + Pre-flight 验证 + 结构化返回 + 受控 Fallback 政策 |
+
+## 十三、Workflow 批量子代理编排与模型路由契约
+
+在使用 `workflow` 工具（基于 JavaScript 沙箱的多子代理并发/流水线编排）时，必须遵守以下四层防崩契约：
+
+```text
+┌────────────────────────────────────────────────────────┐
+│ 1. 逻辑角色先行（Logical Roles First）                  │
+│    - 默认使用逻辑角色：                                  │
+│      * subagent_default   -> cpa/gemini-3.7-flash-high │
+│      * cheap_executor     -> cpa/gpt-5.6-luna-max      │
+│      * strong_reviewer    -> cpa/claude-sonnet-4-6     │
+│      * frontier_architect -> cpa/gpt-5.6-sol-xhigh     │
+│    - 禁止凭自然语言猜测未经验证的具体模型 Slug           │
+├────────────────────────────────────────────────────────┤
+│ 2. Pre-flight 预检（Fast Failure Before Spawning）     │
+│    - 在启动并发子代理前，核对模型是否在 DSH settings 声明 │
+│    - 确定性配置错误必须在启动前一次性拦截，禁止生成一批 null│
+├────────────────────────────────────────────────────────┤
+│ 3. 显式受控 Fallback 政策（禁止静默换模型）              │
+│    - 仅允许 routing-policy 明确声明的 Alias 映射       │
+│    - 每次 Fallback 必须记录原请求、实际模型、reason_code│
+│    - 无声明规则时必须 Fail Closed 阻断                 │
+├────────────────────────────────────────────────────────┤
+│ 4. 聚合层校验与自愈（Aggregator Guard & Self-Healing） │
+│    - 校验结果数量、至少一个成功、必填字段非空             │
+│    - 全失败时自动诊断根因并重析重试，不把修改工作甩给用户  │
+└────────────────────────────────────────────────────────┘
+```
 
 ## 工具化支撑（P1/P2 落地物）
 

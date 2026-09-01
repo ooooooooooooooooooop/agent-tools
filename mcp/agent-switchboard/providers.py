@@ -145,15 +145,31 @@ class ProviderConfig:
         """Decision-layer-choosable model list. Empty means 'any' for that provider."""
         return list(self.models)
 
-    def supports_protocol(self, protocol: str) -> bool:
-        """Whether this provider can be driven through ``protocol`` ('anthropic'|'openai')."""
+    @property
+    def declared_protocols(self) -> list[str]:
+        """Explicit protocol list parsed from ``api_format`` ('auto' -> all known)."""
         fmt = (self.api_format or "auto").strip().lower()
+        if fmt in ("auto", ""):
+            return ["anthropic", "openai", "gemini"]
         if fmt == "both":
+            return ["anthropic", "openai"]
+        return sorted({f.strip() for f in fmt.split(",") if f.strip()})
+
+    def supports_protocol(self, protocol: str) -> bool:
+        """Whether this provider can be driven through ``protocol``.
+
+        ``api_format`` accepts a single value ("anthropic" | "openai" | "gemini"),
+        a comma-separated list ("anthropic,openai,gemini"), "both" (legacy alias for
+        anthropic+openai), or "auto" (assume everything works; a failed execution
+        reports upstream_error).
+        """
+        fmt = (self.api_format or "auto").strip().lower()
+        if fmt in ("auto", ""):
             return True
-        if fmt in ("anthropic", "openai"):
-            return fmt == protocol
-        # auto: assume the protocol works; a failed execution reports upstream_error.
-        return True
+        if fmt == "both":
+            return protocol in ("anthropic", "openai")
+        allowed = {f.strip() for f in fmt.split(",") if f.strip()}
+        return protocol in allowed
 
 
 def _parse_providers_block(block: Any) -> list[ProviderConfig]:
@@ -168,8 +184,12 @@ def _parse_providers_block(block: Any) -> list[ProviderConfig]:
             continue
         provider_type = str(spec.get("type") or "").strip().lower()
         api_format = str(spec.get("api_format") or spec.get("protocol") or "auto").strip().lower()
-        if api_format not in {"anthropic", "openai", "both", "auto"}:
-            api_format = "auto"
+        # Valid: "auto" | "both" | "anthropic" | "openai" | "gemini" | comma-separated
+        # list of protocols (e.g. "anthropic,openai,gemini"). Unknown -> auto.
+        if api_format not in {"anthropic", "openai", "gemini", "both", "auto"}:
+            parts = {f.strip() for f in api_format.split(",") if f.strip()}
+            if not parts or not parts.issubset({"anthropic", "openai", "gemini"}):
+                api_format = "auto"
         cli = str(spec.get("cli") or "").strip() or None
         if provider_type == "official_cli":
             out.append(
@@ -381,3 +401,129 @@ def write_ccswitch_env_file(key_env: dict[str, str], path: str | Path) -> Path:
     except OSError:
         pass
     return target
+
+
+# ---------------------------------------------------------------------------
+# Interface model auto-discovery
+# ---------------------------------------------------------------------------
+# When a provider declares no explicit ``models`` list, the interface itself is the
+# source of truth: GET {base_url}/models is queried on demand (TTL-cached). This keeps
+# one provider per relay — no artificial per-interface split — and whatever the relay
+# actually exposes is what any shell may use.
+
+_MODELS_DISCOVERY_CACHE: dict[str, tuple[float, list[str]]] = {}
+_MODELS_DISCOVERY_TTL = 300.0
+
+
+def discover_provider_models(provider: ProviderConfig, timeout: float = 5.0) -> list[str]:
+    """Best-effort ``GET {base_url}/models``; returns the model id list or [].
+
+    Results are cached per base_url for ``_MODELS_DISCOVERY_TTL`` seconds so repeated
+    ``list_providers`` calls do not hammer the relay.
+    """
+    base_url = (provider.base_url or "").rstrip("/")
+    if not base_url:
+        return []
+    import time as _time
+    import json as _json
+    import urllib.request as _urlreq
+
+    now = _time.monotonic()
+    hit = _MODELS_DISCOVERY_CACHE.get(base_url)
+    if hit and now - hit[0] < _MODELS_DISCOVERY_TTL:
+        return list(hit[1])
+    headers: dict[str, str] = {}
+    if provider.api_key:
+        headers["Authorization"] = f"Bearer {provider.api_key}"
+        headers["x-api-key"] = provider.api_key
+    try:
+        req = _urlreq.Request(base_url + "/models", headers=headers)
+        with _urlreq.urlopen(req, timeout=timeout) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 - discovery is best-effort
+        return []
+    models: list[str] = []
+    for item in (data.get("data") if isinstance(data, dict) else None) or []:
+        if isinstance(item, dict) and item.get("id"):
+            models.append(str(item["id"]))
+    _MODELS_DISCOVERY_CACHE[base_url] = (now, models)
+    return list(models)
+
+
+# ---------------------------------------------------------------------------
+# model_combinations: named shell+provider+model triples
+# ---------------------------------------------------------------------------
+# Canonical shell names. Bare aliases are NOT allowed in config; they are
+# auto-canonicalized at parse time so the rule cannot be bypassed.
+_CANONICAL_SHELLS: dict[str, str] = {
+    "claude_code": "claude_code",
+    "claude": "claude_code",
+    "codex_cli": "codex_cli",
+    "codex": "codex_cli",
+    "antigravity_cli": "antigravity_cli",
+    "antigravity": "antigravity_cli",
+    "gemini_cli": "gemini_cli",
+    "gemini": "gemini_cli",
+}
+
+
+def canonical_shell(shell: str | None) -> str:
+    """Return the canonical shell name (bare aliases auto-corrected)."""
+    return _CANONICAL_SHELLS.get(str(shell or "").strip().lower(), str(shell or "").strip().lower())
+
+
+@dataclass
+class ModelCombination:
+    """One routable ``shell`` + ``provider`` + ``model`` triple from config.json.
+
+    ``shell``  = execution carrier, canonical name only (claude_code / codex_cli /
+                 antigravity_cli / gemini_cli); bare aliases are auto-canonicalized.
+    ``provider`` = auth channel from the ``providers`` block (carries api_key).
+    ``model``  = concrete model; availability is whatever the provider's interface
+                 actually exposes (no artificial per-interface restriction).
+    """
+
+    name: str
+    shell: str
+    provider: str
+    model: str
+    backend: str | None = None  # optional explicit cli_backends bridge for the shell
+    description: str = ""
+
+
+def combinations_from_config(config: dict[str, Any]) -> list[ModelCombination]:
+    """Parse the ``model_combinations`` config block (malformed entries skipped)."""
+    block = config.get("model_combinations") or {}
+    out: list[ModelCombination] = []
+    if not isinstance(block, dict):
+        return out
+    for name, spec in block.items():
+        if not isinstance(name, str) or not isinstance(spec, dict):
+            continue
+        shell = canonical_shell(spec.get("shell"))
+        provider = str(spec.get("provider") or "").strip()
+        model = str(spec.get("model") or "").strip()
+        if not (shell and provider and model):
+            continue
+        out.append(
+            ModelCombination(
+                name=name.strip(),
+                shell=shell,
+                provider=provider,
+                model=model,
+                backend=str(spec.get("backend") or "").strip() or None,
+                description=str(spec.get("description") or ""),
+            )
+        )
+    return out
+
+
+def resolve_combination(config: dict[str, Any], name: str) -> ModelCombination | None:
+    """Return the named combination, or None."""
+    want = str(name or "").strip().lower()
+    if not want:
+        return None
+    for c in combinations_from_config(config):
+        if c.name.lower() == want:
+            return c
+    return None
