@@ -392,11 +392,14 @@ class TestActiveProjectDiscovery(unittest.TestCase):
     def test_discover_projects_real_state(self):
         projs = pas.discover_projects(pas.STATE_REPO)
         names = {p["name"]: p for p in projs}
-        self.assertIn("novel-main", names)
-        self.assertEqual(names["novel-main"]["status"], "PAUSED")  # paused_external_auth
-        self.assertTrue(names["novel-main"]["privacy_blocked"])
+        # 本机真实设备元数据决定 projects 集合；novel-main 仅在被克隆/登记时才出现。
+        # 无论是否存在，infra 仓库(skills/agent-tools/personal-ai-state)必须被排除。
         self.assertNotIn("skills", names)      # infra 排除
         self.assertNotIn("personal-ai-state", names)
+        self.assertNotIn("agent-tools", names)
+        if names.get("novel-main"):
+            self.assertEqual(names["novel-main"]["status"], "PAUSED")  # paused_external_auth
+            self.assertTrue(names["novel-main"]["privacy_blocked"])
 
 
 if __name__ == "__main__":
