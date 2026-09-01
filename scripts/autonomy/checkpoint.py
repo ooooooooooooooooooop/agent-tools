@@ -125,8 +125,22 @@ def cmd_new(args) -> int:
     if ckpt_path(task_id).is_file():
         print(f"EXISTS: {ckpt_path(task_id)} (use save to continue)")
         return 2
+    profile = args.profile
+    if not profile and args.auto_admit:
+        # Automatic Profile Admission：用户无感知；classifier 是 Personal AI 资产
+        sys.path.insert(0, str(ROOT / "scripts" / "autonomy"))
+        import profile_admission
+        decision = profile_admission.classify(args.objective)
+        profile = decision["profile"]
+        profile_admission.write_admission(task_id, project_id, decision, args.harness)
+        print(f"[auto-admit] {task_id} → {profile} "
+              f"(confidence={decision['confidence']}, bulk_workload={decision['bulk_workload']}) "
+              f"reasons={decision['reasons']}")
+    if not profile:
+        print("INVALID: --profile 或 --auto-admit 必须提供其一")
+        return 1
     try:
-        limits = profile_budget(args.profile)
+        limits = profile_budget(profile)
     except ValueError as exc:
         print(f"INVALID: {exc}")
         return 1
@@ -138,7 +152,7 @@ def cmd_new(args) -> int:
         "campaign_id": args.campaign,
         "objective": args.objective,
         "harness": args.harness,
-        "execution_profile": args.profile,
+        "execution_profile": profile,
         "completed_actions": [],
         "current_state": {},
         "durable_artifacts": [],
@@ -163,7 +177,7 @@ def cmd_new(args) -> int:
     path = write_checkpoint(data)
     if not args.no_ledger:
         _ledger_append("checkpoint", task_id, project_id, harness=args.harness,
-                       execution_profile=args.profile)
+                       execution_profile=profile)
     print(f"checkpoint created -> {path}")
     return 0
 
@@ -313,7 +327,9 @@ def main() -> int:
     pn.add_argument("--campaign")
     pn.add_argument("--objective", required=True)
     pn.add_argument("--harness", required=True, choices=["dsh", "codex", "claude", "gemini", "switchboard"])
-    pn.add_argument("--profile", required=True)
+    pn.add_argument("--profile")
+    pn.add_argument("--auto-admit", action="store_true",
+                    help="无 --profile 时自动 profile admission（classifier）")
     pn.add_argument("--next-action")
     pn.add_argument("--no-ledger", action="store_true")
     pn.set_defaults(func=cmd_new)

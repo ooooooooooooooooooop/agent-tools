@@ -9,22 +9,28 @@
 #   aic apply dsh  →  ~/.dsh/governance/execution-profiles.generated.json
 #   未生成时插件退化为观察模式（只写 audit，不拒绝任何调用）。
 #
-# 强制指定任务的 execution_profile 才能启用硬门禁：
-#   config.taskId / config.profile（或环境变量 AE_GOV_TASK_ID / AE_GOV_PROFILE）。
-#   缺省 = observation mode（安全态，不阻断任何工具调用）。
-#   checkpointScript：scripts/autonomy/checkpoint.py 的绝对路径（部署时配置；
+# 强制指定任务才能启用硬门禁（profile 可省略 → 自动 admission）：
+#   config.taskId + 可选 config.objective / config.profile
+#   （或环境变量 AE_GOV_TASK_ID / AE_GOV_OBJECTIVE / AE_GOV_PROFILE）。
+#   - taskId 声明 = "这是 autonomous task"：profile 自动确定（UNKNOWN → safe default
+#     AUTONOMOUS_STANDARD），绝不进入无约束观察模式。
+#   - 无 taskId（普通会话）= 零副作用观察（非 autonomous 义务）。
+#   checkpointScript：scripts/autonomy/checkpoint.py 绝对路径。
+#   admissionScript：scripts/autonomy/profile_admission.py 绝对路径（部署时配置；
 #   发布包本身不含本机路径）。
 #
-# 依据：registry/autonomous-execution-governance.yaml（canonical）+ harnesses/dsh.yaml
-#   governance_hooks 矩阵（BEFORE_MODEL_CALL / AFTER_AGENT_ACTION / ON_BUDGET_LIMIT /
-#   ON_NO_PROGRESS / ON_CHECKPOINT → guard 层）。
+# 依据：registry/autonomous-execution-governance.yaml#profile_admission（canonical）
+#   + harnesses/dsh.yaml governance_hooks 矩阵。
 # ============================================================================
 
 - insert:
   - id: autonomous-execution-governor
     name: './plugins/autonomous-execution-governor.mjs'
     config:
-      taskId: null            # 显式指定才启用硬门禁（缺省观察）
-      profile: null
+      taskId: null            # 声明 = autonomous task；缺省 = 零副作用观察
+      profile: null           # 可省略：自动 admission（UNKNOWN → AUTONOMOUS_STANDARD）
+      objective: null         # 任务目标（供 classifier；缺省 = safe default）
       projectId: null
+      autoAdmit: true
       checkpointScript: null  # 部署时填 scripts/autonomy/checkpoint.py 绝对路径
+      admissionScript: null   # 部署时填 scripts/autonomy/profile_admission.py 绝对路径
