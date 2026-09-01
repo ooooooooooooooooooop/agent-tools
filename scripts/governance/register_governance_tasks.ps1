@@ -57,7 +57,10 @@ foreach ($spec in $specs) {
   }
 
   if (-not $CheckOnly -and -not $matches) {
-    $taskAction = New-ScheduledTaskAction -Execute $execute -Argument $arguments -WorkingDirectory $repo
+    # 不设置 WorkingDirectory：Task Scheduler 在本机(UnifiedSchedulingEngine)
+    # 对 C:\Desktop\skills 的 cwd 解析会返回 ERROR_INVALID_NAME(0x8007010B)。
+    # runners 一律用 $PSScriptRoot 自解析，不依赖 cwd。
+    $taskAction = New-ScheduledTaskAction -Execute $execute -Argument $arguments
     Register-ScheduledTask -TaskName $spec.Name -Action $taskAction -Trigger $spec.Trigger `
       -Settings $settings -Description $spec.Description -Force | Out-Null
     $existing = Get-ScheduledTask -TaskName $spec.Name -ErrorAction Stop
