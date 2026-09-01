@@ -32,7 +32,7 @@ $specs = @(
   @{
     Name = 'PersonalAI-Sync-Check'
     Runner = Join-Path $repo 'scripts\personal_ai_sync.py'
-    Trigger = New-ScheduledTaskTrigger -AtLogOn
+    Trigger = New-ScheduledTaskTrigger -Daily -At '09:00'
     Description = 'Check-only Personal AI sync classification (never pull/push/merge canonical).'
   }
 )
