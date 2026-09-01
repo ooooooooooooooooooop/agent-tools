@@ -41,6 +41,71 @@ consumers:
     - turn_limit_values
     - checkpoint_path_override     # checkpoint 只能落 Personal AI durable state
 
+# ---------------------------------------------------------------- Automatic Profile Admission
+# 用户只描述任务目标；profile 名由 Personal AI 自动确定（UNKNOWN ≠ UNBOUNDED）。
+# 各项目/各 Harness 禁止复制 classifier；classifier = 本节的确定性投影。
+profile_admission:
+  flow: "TASK → admission → profile → budget → model_tier_policy → first expensive call"
+  admission_before_first_call: true
+  safe_default: AUTONOMOUS_STANDARD        # 任何明确 autonomous task 无法分类时进入 bounded default
+  unknown_not_unbounded: true              # 绝不因 UNKNOWN 进入无约束观察模式
+  classifier: scripts/autonomy/profile_admission.py   # Personal AI 资产（harness 中立）
+  durable_record: "personal-ai-state/checkpoints/<task_id>.admission.json"
+  ledger_kinds: [admission, escalation]
+  classification_signals:
+    - id: bulk_repetition
+      weight: 3
+      note: "数量/重复结构（N 个/对/组/份/条/批/轮/×N/每[个篇条]）或 declare.batch_size"
+    - id: bulk_verb
+      weight: 2
+      note: "同构动词（judge/generate/transform/extract/compare/评估/评审/打分/生成/翻译/改写/抽取/对比/转换）"
+    - id: campaign
+      weight: 3
+      note: "阶段/phase/里程碑/长期/持续/跨会话/多阶段/多轮/resume/campaign 或 declare.campaign"
+    - id: research
+      weight: 2
+      note: "调查/研究/分析/调研/对比实验/审计/报告/explore/investigate/review"
+    - id: reasoning_critical
+      weight: 2
+      note: "架构/设计/裁决/决策/权衡/高风险/trade-off/schema"
+    - id: interactive
+      weight: 2
+      note: "逐步/每步确认/等我确认/询问我（用户持续参与）"
+    - id: scope_small
+      weight: 1
+      note: "declare.expected_provider_calls <= 24 或未声明且目标文本短（<= 200 字）"
+  decision_rules:                            # 确定性，优先级自上而下
+    - "interactive 强（>=2）且无 bulk/campaign 结构 → INTERACTIVE"
+    - "campaign >= 2 或 declare.campaign → LONG_RUNNING_CAMPAIGN（可含 batch 子任务：batch_default=true）"
+    - "bulk_repetition >= 5 或 (bulk_repetition >= 2 且 bulk_verb >= 1) 或 declare.batch_size >= 10 → BULK_EVALUATION + bulk_workload=true"
+    - "reasoning_critical >= 2 且 scope_small → CRITICAL_REASONING"
+    - "research >= 1 且非 bulk 非 campaign → AUTONOMOUS_RESEARCH"
+    - "否则 → AUTONOMOUS_STANDARD（safe default；UNKNOWN 亦落入此处）"
+  bulk_detection:
+    bulk_workload_flag: "admission record.bulk_workload=true ⇒ 强制 batch execution（manifest→workers→artifacts→aggregate）"
+    rule: "bulk_workload=true 时禁止主 Agent 逐 item reasoning（违反 = loop breaker 信号）"
+  escalation:
+    graph:
+      AUTONOMOUS_STANDARD: [AUTONOMOUS_RESEARCH, LONG_RUNNING_CAMPAIGN]
+      AUTONOMOUS_RESEARCH: [LONG_RUNNING_CAMPAIGN]
+      LONG_RUNNING_CAMPAIGN: [BULK_EVALUATION]      # narrowing 允许（批量子任务识别后收紧）
+      BULK_EVALUATION: [LONG_RUNNING_CAMPAIGN]      # 批量化上下游扩大（campaign 语义出现时）
+      INTERACTIVE: [AUTONOMOUS_STANDARD]
+      CRITICAL_REASONING: []
+    constraints:
+      - "不重置累计 usage（budget_consumed 原样保留）"
+      - "不自动提高已经消耗的预算（已消耗部分固定为事实）"
+      - "不绕过原有 hard cap（新 profile 的 cap 生效后，remaining = cap - consumed）"
+      - "必须记录 reason（evidence-based）"
+      - "必须写 task receipt / checkpoint（durable admission record + checkpoint execution_profile 更新）"
+      - "禁止 Agent 为继续运行自行选择更宽松 profile（widening 只能由 admission 工具在 evidence 驱动下或人工批准执行）"
+      - "消耗比例 >= 90% 时拒绝 widening（剩余预算不足以支撑新 profile 语义）"
+  cross_harness:
+    - "admission 结果是 Personal AI durable state（checkpoints/<task_id>.admission.json），任意 Harness / supervisor 可读"
+    - "switchboard：task receipt / Context Package 携带 execution_profile（复用现有 receipt / ledger 通道）"
+    - "codex / claude / gemini：指令文件 projection 提供稳定规则；运行时由各自 wrapper / 原生 hook 读 admission 记录执行"
+    - "无法完整 runtime enforcement 的 Harness 至少获得正确 profile projection"
+
 # ---------------------------------------------------------------- Budget Governor
 # 所有预算必须：hard enforceable / observable / resumable / 按 execution profile 配置。
 # 不得仅依赖 prompt 自觉 —— enforcement 在 Harness hook（gate/wrapper）层，fail closed。
@@ -264,9 +329,9 @@ generated_instructions: |
   + execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml），
   由 `aic render/diff` 管理；手改即 drift，会被 `aic diff` 检出并回滚。
 
-  - 项目（novel 等）不得自带 autonomous governance 实现；只声明 `execution_profile`
-    与白名单内的任务级有限 override。具体模型 / 预算 / turn 上限 / checkpoint 节奏 /
-    loop breaker 由 Personal AI 决定。
+  - 项目（novel 等）不得自带 autonomous governance 实现；**用户无需声明或手写
+    execution_profile**——任务的 profile 由 Personal AI 自动 admission（分类依据行为特征：
+    批量/重复、campaign、研究、推理关键性、交互），项目只消费 admission 结果。
   - 硬规则（稳定）：
     1. 无界自主执行被禁止：任何自主运行必须处于一个 execution_profile，预算 hard
        enforceable（Harness hook 层 fail closed），超限保存 durable checkpoint
@@ -287,6 +352,10 @@ generated_instructions: |
        checkpoint；repeated repair 有界（≤3）。
     7. 所有模型调用计入 Usage Ledger（task/project/harness/model/calls/input/
        cached/output/cost/progress），支持 COST_PER_PROGRESS 与 runaway 检测。
+    8. **profile admission 自动且先于首次昂贵调用**：UNKNOWN ≠ UNBOUNDED——无法分类的
+       autonomous task 进入安全默认 AUTONOMOUS_STANDARD，绝不落入无约束观察模式；
+       profile widening 受 canonical 规则约束（evidences + reason + receipt，禁止
+       Agent 自行选更宽松 profile；不重置累计 usage、不绕过 hard cap）。
   - Policy pointer（本机全文）：agent-tools 仓库 registry/autonomous-execution-governance.yaml
     （含 harness_hook_matrix）、registry/execution-profiles.yaml、registry/checkpoint-schema.yaml、
     registry/usage-ledger-schema.yaml。

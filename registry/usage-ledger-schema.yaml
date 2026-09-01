@@ -11,7 +11,7 @@ location: "~/.personal-ai/ledger/usage.jsonl"
 
 record_fields:
   schema_version: {type: integer, note: 1}
-  kind: {type: string, enum: [usage, progress, checkpoint, budget_stop, circuit_break, completion, exemption]}
+  kind: {type: string, enum: [usage, progress, checkpoint, admission, escalation, budget_stop, circuit_break, completion, exemption]}
   ts: {type: string, note: "ISO-8601 UTC"}
   task_id: {type: string, required: true}
   project_id: {type: string, required: true}

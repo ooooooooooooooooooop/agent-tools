@@ -156,10 +156,16 @@ export function apply(ctx, config = {}) {
   const auditPath = config.auditPath || DEFAULT_AUDIT;
   const checkpointScript = config.checkpointScript
     || process.env.AE_GOV_CHECKPOINT_SCRIPT || null;
+  const admissionScript = config.admissionScript
+    || process.env.AE_GOV_ADMISSION_SCRIPT || null;
   const enforcedTaskId = config.taskId || process.env.AE_GOV_TASK_ID || null;
   const enforcedProfile = config.profile || process.env.AE_GOV_PROFILE || null;
+  const enforcedObjective = config.objective || process.env.AE_GOV_OBJECTIVE || '';
   const enforcedProject = config.projectId || process.env.AE_GOV_PROJECT || 'unknown';
+  const autoAdmit = config.autoAdmit !== false;   // 缺省自动 admission
   const harness = 'dsh';
+  let admittedProfile = null;
+  let admitAttempted = false;
 
   const audit = (record) => {
     try {
@@ -167,6 +173,30 @@ export function apply(ctx, config = {}) {
       appendFileSync(auditPath, JSON.stringify({ time: new Date().toISOString(), ...record }) + '\n', 'utf8');
     } catch (error) {
       ctx.logger?.warn?.(`autonomous-execution-governor: audit write failed: ${String(error)}`);
+    }
+  };
+
+  // Automatic Profile Admission：taskId 已声明但 profile 未声明时，首次 guard 前自动
+  // 调用 Personal AI classifier（profile_admission.py）。objective 缺失 → UNKNOWN →
+  // safe default AUTONOMOUS_STANDARD（UNKNOWN ≠ UNBOUNDED，admission 先于任务首个执行动作）。
+  const admitProfile = (taskId, projectId) => {
+    if (!autoAdmit || !admissionScript) return null;
+    try {
+      const res = spawnSync(process.env.AE_GOV_PYTHON || 'python',
+        [admissionScript, 'run', '--task', taskId, '--project', projectId,
+         '--objective', enforcedObjective || '(unknown — safe default)', '--harness', harness],
+        { encoding: 'utf8', timeout: 20000 });
+      if (res.status !== 0) {
+        audit({ event: 'admission_error', rc: res.status, out: String(res.stdout || res.stderr || '').slice(-300) });
+        return null;
+      }
+      const out = JSON.parse(res.stdout);
+      audit({ event: 'admission', profile: out.profile, confidence: out.confidence,
+              bulk_workload: out.bulk_workload, reasons: (out.reasons || []).slice(0, 3) });
+      return out.profile || null;
+    } catch (error) {
+      audit({ event: 'admission_error', error: String(error) });
+      return null;
     }
   };
 
@@ -224,21 +254,32 @@ export function apply(ctx, config = {}) {
       const name = execution?.name;
       if (!name) return undefined;
 
-      // —— observation mode：没有显式任务/预算（缺省安全态）——
-      // 零副作用：不读写文件、不审计（保持既有会话纯无感）。
-      if (!enforcedTaskId || !enforcedProfile || !profilesCache) {
+      // —— 无任务声明（普通会话）：零副作用观察（非 autonomous task，无 autonomous 义务）
+      if (!enforcedTaskId || !profilesCache) {
         return undefined;
       }
-      const profile = profilesCache.profiles?.[enforcedProfile];
+      // —— Automatic Profile Admission：profile 未声明 → 自动分类（UNKNOWN → safe default）
+      let profileName = enforcedProfile;
+      if (!profileName) {
+        if (!admittedProfile && !admitAttempted) {
+          admitAttempted = true;
+          admittedProfile = admitProfile(enforcedTaskId, enforcedProject) || 'AUTONOMOUS_STANDARD';
+        }
+        profileName = admittedProfile;
+      }
+      const profile = profilesCache.profiles?.[profileName]
+        || profilesCache.profiles?.['AUTONOMOUS_STANDARD']   // runtime safe default 兜底
+        || null;
       if (!profile) {
-        audit({ event: 'observed_no_profile', tool: name, profile: enforcedProfile });
-        return undefined;
+        audit({ event: 'canonical_broken_no_profile', task: enforcedTaskId });
+        return undefined;   // canonical 破损：fail-open + 留痕（不应发生；aic diff 会暴露）
       }
 
       const stateFile = join(stateDir, `task-${enforcedTaskId}.json`);
       let state = loadStateFile(stateFile)
         || emptyState({ taskId: enforcedTaskId, projectId: enforcedProject,
-                        profile: enforcedProfile, harness, sessionId: String(execution?.agent?.session?.id || '') });
+                        profile: profileName, harness, sessionId: String(execution?.agent?.session?.id || '') });
+      if (state.profile !== profileName) state.profile = profileName;   // admission 后绑定
       const evt = { key: actionKey(name, execution?.arguments ?? execution?.args),
                     isMutating: MUTATING_TOOLS.has(name) };
       const { violations, stop, nextState } = evaluateGuards(state, evt, profile);

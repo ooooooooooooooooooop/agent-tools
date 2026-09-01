@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 REG = ROOT / "registry"
 SCHEMA_VERSION = 1
 
-RECORD_KINDS = {"usage", "progress", "checkpoint", "budget_stop",
-                "circuit_break", "completion", "exemption"}
+RECORD_KINDS = {"usage", "progress", "checkpoint", "admission", "escalation",
+                "budget_stop", "circuit_break", "completion", "exemption"}
 REQUIRED = ("kind", "task_id", "project_id")
 
 
