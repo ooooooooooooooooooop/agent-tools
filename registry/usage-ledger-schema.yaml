@@ -1,0 +1,49 @@
+# usage-ledger-schema.yaml — Personal AI Usage Ledger（canonical · v1）
+#
+# 统一记录跨 harness 的模型用量/进度，支持 COST_PER_PROGRESS 与 runaway session 检测。
+# 存储：JSONL（append-only），~/.personal-ai/ledger/usage.jsonl（设备 durable runtime，
+#   随既有 durability 备份；不进入 git canonical，避免高频写污染版本库）。
+# 读取：scripts/usage/usage_ledger.py（CLI）或各 harness adapter/治理脚本。
+
+schema_version: 1
+format: jsonl
+location: "~/.personal-ai/ledger/usage.jsonl"
+
+record_fields:
+  schema_version: {type: integer, note: 1}
+  kind: {type: string, enum: [usage, progress, checkpoint, budget_stop, circuit_break, completion, exemption]}
+  ts: {type: string, note: "ISO-8601 UTC"}
+  task_id: {type: string, required: true}
+  project_id: {type: string, required: true}
+  campaign_id: {type: [string, "null"]}
+  harness: {type: string, enum: [dsh, codex, claude, gemini, switchboard, personal_ai]}
+  session_id: {type: string}
+  execution_profile: {type: string}
+  model: {type: string, note: "provider/model"}
+  provider: {type: string}
+  calls_delta: {type: integer, note: "本记录覆盖的调用数增量"}
+  input_tokens: {type: integer}
+  cached_input_tokens: {type: integer, note: "cache-read 必须独立记账（0d07ae22 病灶）"}
+  output_tokens: {type: integer}
+  cost_usd_est: {type: [number, "null"], note: "estimated 标记见 flags"}
+  artifacts_produced: {type: array, items: {type: string}}
+  progress_events: {type: integer, note: "本记录窗口内 PROGRESS_DELTA 计数"}
+  flags: {type: array, items: {type: string}, note: "如 estimated_cost / budget_warning / compacted / checkpointed"}
+  event_context: {type: [object, "null"]}
+
+detectors:
+  cost_per_progress:
+    formula: "COST_PER_PROGRESS(task) = Σ cost_usd_est / Σ progress_events（按 task_id 累计）"
+    alarm: "COST_PER_PROGRESS 连续 3 个窗口上升 且 progress_events=0 → runaway 候选"
+  runaway:
+    rules:
+      - "Σ cost_usd_est > profile task.cost_usd"
+      - "Σ calls_delta > profile task.provider_calls"
+      - "Σ cached_input_tokens / (Σ input_tokens + Σ cached_input_tokens) > 0.85 且最近窗口无 compacted flag"
+      - "resume_count（见 checkpoint）超过 profile 限制"
+    action: "命中任一 → 生成 runaway 记录 + 对应 Harness ON_BUDGET_LIMIT / ON_NO_PROGRESS 接线"
+
+ledger_contract:
+  writers: ["scripts/usage/usage_ledger.py", "harness adapters（dsh governor 插件等）", "scripts/checkpoint/checkpoint.py"]
+  rule: "budget stop / loop breaker / 完成 / checkpoint 至少写一条记录；金额标记 estimated 时不得当 actual"
+  query: "usage_ledger.py query --task <id> / --project <id> / --runaway / --cost-per-progress"

@@ -18,16 +18,24 @@ render_targets:
       - {path: "providers.CPA.base_url", source: "gateways.cpa.listen_url", mode: exact}
     note: "codex_path/claude_path/claude_model/gemini_model/cdp_ports/app_* = OVERLAY/MACHINE_LOCAL；api_key='123456' 为本地 relay 占位（SECRET 位，校验存在即可）；cli_backends.cpa.models / providers.CPA.models = OVERLAY 暴露清单（约束应 ⊆ admitted，但 gpt-5.6-luna 等在用模型尚未准入 — 见 ADMISSION_GAP 技术债，#5 禁止扩大 catalog）"
 
+  - file: AGENT_GROUND_RULES.md
+    kind: instruction
+    owner: shared-managed-blocks
+    check: {mode: managed_block_marker, marker: "aic:continuous-capability-adoption:begin"}
+    generated_blocks:
+      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
+      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
+
 overlay:
   - "config.json: *_path（MACHINE_LOCAL；codex_path 当前漂移过期，见报告）"
   - "config.json: claude_model / gemini_model / app_autopaste / app_autosubmit / *_cdp_*"
-  - "AGENT_GROUND_RULES.md（switchboard 自有静态规则）"
+  - "AGENT_GROUND_RULES.md 中 switchboard 自有规则（aic 仅拥有登记的 managed blocks）"
   - "harness 指令文件 cost-routing managed block（渲染到 codex/claude/gemini 的 AGENTS|CLAUDE|GEMINI.md）"
 
 static_instructions:
   file: AGENT_GROUND_RULES.md
-  owner: agent-switchboard
-  legality: "编排治理规则 — 无动态状态（2026-08-28 审计）"
+  owner: shared-managed-blocks
+  legality: "switchboard 编排治理规则 + aic long-term capability-adoption projection；无动态状态"
 
 runtime_context_hook:
   mechanism: "prompt frame injection（route_agent_task/queue 的 prompt 首帧携带 Context Package）"
@@ -36,3 +44,17 @@ runtime_context_hook:
 health_check: "MCP 工具面可达（本会话即证据）"
 runtime_state: "state.sqlite topics/ supervisors/ *-inbox/ routing-gate/ agent-broker.log"
 secret: "config.json api_key 占位符；真实上游凭据由 cpa 网关持有 — 永不入 canonical"
+
+# AUTONOMOUS_EXECUTION_GOVERNANCE — switchboard hook 矩阵（canonical；原生能力复用为主）
+governance_hooks:
+  BEFORE_MODEL_CALL: {impl: native, detail: "route/queue gate（token_budget / max_response_chars / effort 已存在）"}
+  AFTER_MODEL_CALL: {impl: native, detail: "request_result / get_request_ledger（per-topic ledger 已存在，复用）"}
+  AFTER_AGENT_ACTION: {impl: native, detail: "managed supervisor material events（turn_completed 等）"}
+  ON_PROGRESS: {impl: native, detail: "supervisor events + work memory"}
+  ON_CHECKPOINT: {impl: native, detail: "task receipt 协议（wait_task_receipt）—— 复用"}
+  ON_BUDGET_LIMIT: {impl: native, detail: "max_autonomous_actions / token_budget / effort（已存在，策略值来自 canonical）"}
+  ON_NO_PROGRESS: {impl: native, detail: "stall_timeout + decision_mode"}
+  ON_RESUME: {impl: native, detail: "supervisor resume + receipt"}
+  native_reuse:
+    - "chain_key 有界 retry（≤3）= repeated_repair_max 复用，不重复建设"
+    - "request ledger（get_request_ledger）→ usage ledger 的 switchboard 侧数据源"

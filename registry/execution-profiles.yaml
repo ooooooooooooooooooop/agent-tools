@@ -1,0 +1,148 @@
+# execution-profiles.yaml — Personal AI 执行配置（canonical · SSOT）
+#
+# 项目不复制预算策略；项目只声明 execution_profile（及白名单 override）。
+# 所有边界数字 = 初始值（按 session-0d07ae22 事故校准），可经 SSOT 调整；禁止 Harness/项目手改。
+#
+# 校准依据（反例）：session-0d07ae22 = 534 turns / 674 calls / ~171M tokens
+#   （cached ≈168.1M / new ≈2.57M / output ≈307K）/ ~$106。
+#   目标：任何 profile 下单 conversation turns 上限 < 534；LONG_RUNNING_CAMPAIGN 累计
+#   预算将其 provider_calls / cost 压在事故值的 30% 以下；cached token 显式计入。
+
+schema_version: 1
+generated_by: "personal-ai canonical (aic render)"
+source_pointer: "registry/autonomous-execution-governance.yaml"
+
+profiles:
+  INTERACTIVE:
+    intent: "人工逐轮驱动；无硬性会话 turn 预算，但仍防 runaway"
+    budgets:
+      task:        {provider_calls: 200, input_tokens: 1000000, cached_input_tokens: 20000000, output_tokens: 300000, cost_usd: 15, runtime_min: 480}
+      session:     {agent_turns: null}          # null = 不硬限（交互由人控制）
+      provider_calls: 200
+      agent_turns: null
+      input_tokens: 1000000
+      cached_input_tokens: 20000000
+      output_tokens: 300000
+      cost_usd: 15
+      runtime_min: 480
+    model_tier_default: STANDARD_REASONING
+    checkpoint_cadence_turns: 32
+    loop_breaker: {soft_window: 6, hard_window: 12}
+    retard: {repeated_repair_max: 3, repeated_error_max: 5}
+    batch_default: false
+    context_budget_tokens: 200000              # 超限提示 compact（cached 占比 > 0.85 触发）
+    note: "INCIDENT 校准：即使交互失控，task 累计 provider_calls=200 < 674，cost=$15 < $106"
+
+  AUTONOMOUS_STANDARD:
+    intent: "标准自主执行（单会话内完成）"
+    budgets:
+      task:        {provider_calls: 64, input_tokens: 1000000, cached_input_tokens: 30000000, output_tokens: 200000, cost_usd: 12, runtime_min: 240}
+      session:     {agent_turns: 32}
+      provider_calls: 64
+      agent_turns: 32
+      input_tokens: 1000000
+      cached_input_tokens: 30000000
+      output_tokens: 200000
+      cost_usd: 12
+      runtime_min: 240
+    model_tier_default: STANDARD_REASONING
+    checkpoint_cadence_turns: 16
+    loop_breaker: {soft_window: 5, hard_window: 10}
+    retard: {repeated_repair_max: 3, repeated_error_max: 5}
+    batch_default: false
+    context_budget_tokens: 150000
+
+  AUTONOMOUS_RESEARCH:
+    intent: "自主研究/审计（多源读取、证据收集）"
+    budgets:
+      task:        {provider_calls: 96, input_tokens: 2000000, cached_input_tokens: 60000000, output_tokens: 300000, cost_usd: 25, runtime_min: 480}
+      session:     {agent_turns: 40}
+      provider_calls: 96
+      agent_turns: 40
+      input_tokens: 2000000
+      cached_input_tokens: 60000000
+      output_tokens: 300000
+      cost_usd: 25
+      runtime_min: 480
+    model_tier_default: STANDARD_REASONING
+    checkpoint_cadence_turns: 12
+    loop_breaker: {soft_window: 5, hard_window: 10}
+    retard: {repeated_repair_max: 3, repeated_error_max: 5}
+    batch_default: false
+    context_budget_tokens: 150000
+
+  BULK_EVALUATION:
+    intent: "批量评审/生成/抽取——manifest → workers → artifacts → 确定性聚合"
+    budgets:
+      task:        {provider_calls: 96, input_tokens: 3000000, cached_input_tokens: 40000000, output_tokens: 300000, cost_usd: 10, runtime_min: 360}
+      session:     {agent_turns: 16}            # 主 Agent 只编排，不做逐 item 推理
+      provider_calls: 96
+      agent_turns: 16
+      input_tokens: 3000000
+      cached_input_tokens: 40000000
+      output_tokens: 300000
+      cost_usd: 10
+      runtime_min: 360
+    model_tier_default: BULK_JUDGE
+    bulk_worker_tier_default: BULK_GENERATION   # cheap tier；禁止昂贵模型作默认 worker
+    checkpoint_cadence_turns: 8
+    loop_breaker: {soft_window: 4, hard_window: 8}
+    retard: {repeated_repair_max: 3, repeated_error_max: 4}
+    batch_default: true
+    context_budget_tokens: 100000
+    rules:
+      - "主 Agent 逐 item 模型调用 = loop breaker 信号（repeated similar calls）"
+      - "worker 独立 bounded 预算（manifest 均分/声明），无无限 worker"
+
+  LONG_RUNNING_CAMPAIGN:
+    intent: "跨会话/跨 checkpoint 长任务（session-0d07ae22 事故类型的目标 profile）"
+    budgets:
+      task:        {provider_calls: 200, input_tokens: 4000000, cached_input_tokens: 120000000, output_tokens: 400000, cost_usd: 40, runtime_min: 720}
+      session:     {agent_turns: 64}
+      provider_calls: 200
+      agent_turns: 64
+      input_tokens: 4000000
+      cached_input_tokens: 120000000
+      output_tokens: 400000
+      cost_usd: 40
+      runtime_min: 720
+    model_tier_default: STANDARD_REASONING
+    checkpoint_cadence_turns: 16                 # 每 16 轮 CHECKPOINT→COMPACT→RESUME
+    loop_breaker: {soft_window: 6, hard_window: 12}
+    retard: {repeated_repair_max: 3, repeated_error_max: 5}
+    batch_default: true                          # 重复结构化子任务走 batch
+    context_budget_tokens: 120000
+    rules:
+      - "累计预算跨 resume 不重置（随 durable checkpoint 持久化）——杜绝 64 turns × N 次 resume 变相无界"
+      - "cached_input_tokens 计入预算；>85% 且无 COMPACT → 强制 checkpoint+compact"
+      - "INCIDENT 校准：provider_calls 200 < 674；cost $40 < $106；session turns 64 < 534"
+    incident_guard:
+      - "534 turns 不可能：单 conversation 上限 64"
+      - "674 calls 不可能：task 累计上限 200（跨 resume 累计）"
+      - "$106 不可能：cost 上限 $40"
+      - "171M tokens 不可能：cached 上限 120M + 强制紧凑；cache 占比持续 >0.85 触发 circuit"
+
+  CRITICAL_REASONING:
+    intent: "高难度推理/一次性关键决策（昂贵 tier 允许，但 tight）"
+    budgets:
+      task:        {provider_calls: 24, input_tokens: 500000, cached_input_tokens: 20000000, output_tokens: 150000, cost_usd: 30, runtime_min: 180}
+      session:     {agent_turns: 12}
+      provider_calls: 24
+      agent_turns: 12
+      input_tokens: 500000
+      cached_input_tokens: 20000000
+      output_tokens: 150000
+      cost_usd: 30
+      runtime_min: 180
+    model_tier_default: FRONTIER_REASONING
+    checkpoint_cadence_turns: 8
+    loop_breaker: {soft_window: 3, hard_window: 6}
+    retard: {repeated_repair_max: 2, repeated_error_max: 3}
+    batch_default: false
+    context_budget_tokens: 100000
+
+# 任务级有限 override 白名单（与 autonomous-execution-governance.yaml bounded_overrides 一致）
+override_whitelist:
+  - checkpoint_cadence_turns        # 仅可收紧
+  - batch                           # 仅 BULK 类 profile
+  - labeled_subtask_model_tier      # 局部 tier，需理由；FRONTIER 需人工批准

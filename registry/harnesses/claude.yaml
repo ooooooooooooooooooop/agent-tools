@@ -6,6 +6,7 @@ version_observed: "2.1.239"
 consumes:
   - personal-ai-state:registry/gateways.yaml   # cc-switch alias_map 唯一 SSOT（私有）
   - personal-ai-state:static                    # 静态指令
+  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
   - registry/models.yaml                        # 准入校验
 
 render_targets:
@@ -28,8 +29,11 @@ render_targets:
     note: "hooks = OVERLAY（switchboard 安装拥有）；CLAUDE_CODE_*_WINDOW/TOKENS = OVERLAY"
   - file: CLAUDE.md
     kind: instruction
-    owner: agent-switchboard
+    owner: shared-managed-blocks
     check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
+    generated_blocks:
+      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
+      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
 
 harness_defaults:
   model_alias: opus                   # 显示档别名；真实模型经 alias_map 解析
@@ -42,8 +46,8 @@ overlay:
 
 static_instructions:
   file: CLAUDE.md
-  owner: agent-switchboard
-  legality: "execution policy — 无动态状态（2026-08-28 审计）"
+  owner: shared-managed-blocks
+  legality: "switchboard execution policy + aic long-term capability-adoption projection；无动态状态"
 
 runtime_context_hook:
   mechanism: "原生 UserPromptSubmit hook（已由 switchboard 安装）— 可作为动态注入点"
@@ -52,3 +56,18 @@ runtime_context_hook:
 health_check: "claude.EXE --version（~/.local/bin/claude.EXE）"
 runtime_state: "projects/ sessions/ history.jsonl tasks/ plans/ — 永不入 canonical"
 secret: "ANTHROPIC_AUTH_TOKEN 实为代理占位引用；oauth/凭据由 cc-switch 管理 — 永不入 canonical"
+
+# AUTONOMOUS_EXECUTION_GOVERNANCE — Claude Code hook 矩阵（canonical；原生 hooks 复用）
+governance_hooks:
+  BEFORE_MODEL_CALL: {impl: native, detail: "PreToolUse hook（可 deny）"}
+  AFTER_MODEL_CALL: {impl: native, detail: "PostToolUse / Stop"}
+  AFTER_AGENT_ACTION: {impl: native, detail: "PostToolUse"}
+  ON_PROGRESS: {impl: native, detail: "PostToolUse artifact delta"}
+  ON_CHECKPOINT: {impl: native, detail: "Stop/SubagentStop hook → checkpoint.py"}
+  ON_BUDGET_LIMIT: {impl: native+wrapper, detail: "--max-turns / hook deny / managed supervisor max_autonomous_actions"}
+  ON_NO_PROGRESS: {impl: native, detail: "PostToolUse 统计 → 警告/停止"}
+  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+  native_reuse:
+    - "hooks（PreToolUse/PostToolUse/Stop/SessionStart/SubagentStop）已由 switchboard 安装（OVERLAY）"
+    - "--max-turns（CLI 原生 turn 上限）"
+    - "CLAUDE_CODE_MAX_CONTEXT_TOKENS / CLAUDE_CODE_AUTO_COMPACT_WINDOW（OVERLAY，已登记）"

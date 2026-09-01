@@ -5,6 +5,7 @@ home: ".gemini"
 consumes:
   - registry/capabilities.yaml
   - personal-ai-state:static
+  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
 
 render_targets:
   - file: settings.json
@@ -14,8 +15,11 @@ render_targets:
     note: "security.auth.selectedType=oauth-personal = OVERLAY"
   - file: GEMINI.md
     kind: instruction
-    owner: agent-switchboard
+    owner: shared-managed-blocks
     check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
+    generated_blocks:
+      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
+      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
   - file: .env
     kind: secret-container
     check: {mode: exists}           # 只查存在性；secret 值永不入 canonical
@@ -25,8 +29,8 @@ overlay:
 
 static_instructions:
   file: GEMINI.md
-  owner: agent-switchboard
-  legality: "execution policy — 无动态状态（2026-08-28 审计）"
+  owner: shared-managed-blocks
+  legality: "switchboard execution policy + aic long-term capability-adoption projection；无动态状态"
 
 runtime_context_hook:
   mechanism: "session-start injection（未发现原生动态 hook；编排方首帧注入）"
@@ -35,3 +39,14 @@ runtime_context_hook:
 health_check: "gemini CLI 可用性由调用方探测（adapter 不硬编码路径）"
 runtime_state: "（oauth 凭据由 CLI 自管，不在 ~/.gemini 明文目录）"
 secret: ".env — 值永不入 canonical（当前为空文件）"
+
+# AUTONOMOUS_EXECUTION_GOVERNANCE — Gemini hook 矩阵（canonical；wrapper/sidecar）
+governance_hooks:
+  BEFORE_MODEL_CALL: {impl: wrapper, detail: "gemini CLI wrapper（无原生 hook）"}
+  AFTER_MODEL_CALL: {impl: wrapper, detail: "usage 解析"}
+  AFTER_AGENT_ACTION: {impl: wrapper, detail: "stream 扫描"}
+  ON_PROGRESS: {impl: wrapper, detail: "artifact delta"}
+  ON_CHECKPOINT: {impl: wrapper, detail: "→ checkpoint.py"}
+  ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + checkpoint"}
+  ON_NO_PROGRESS: {impl: wrapper, detail: "→ checkpoint + 退出"}
+  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}

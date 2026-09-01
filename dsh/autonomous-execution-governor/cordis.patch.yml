@@ -1,0 +1,30 @@
+# ============================================================================
+# autonomous-execution-governor：DSH 侧 AUTONOMOUS_EXECUTION_GOVERNANCE 运行时 adapter
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   autonomous-execution-governor.mjs 复制到同 profile 的 plugins/ 目录。
+#
+# 前提：预算投影由 AIC 生成（generated state，禁手改）：
+#   aic apply dsh  →  ~/.dsh/governance/execution-profiles.generated.json
+#   未生成时插件退化为观察模式（只写 audit，不拒绝任何调用）。
+#
+# 强制指定任务的 execution_profile 才能启用硬门禁：
+#   config.taskId / config.profile（或环境变量 AE_GOV_TASK_ID / AE_GOV_PROFILE）。
+#   缺省 = observation mode（安全态，不阻断任何工具调用）。
+#   checkpointScript：scripts/autonomy/checkpoint.py 的绝对路径（部署时配置；
+#   发布包本身不含本机路径）。
+#
+# 依据：registry/autonomous-execution-governance.yaml（canonical）+ harnesses/dsh.yaml
+#   governance_hooks 矩阵（BEFORE_MODEL_CALL / AFTER_AGENT_ACTION / ON_BUDGET_LIMIT /
+#   ON_NO_PROGRESS / ON_CHECKPOINT → guard 层）。
+# ============================================================================
+
+- insert:
+  - id: autonomous-execution-governor
+    name: './plugins/autonomous-execution-governor.mjs'
+    config:
+      taskId: null            # 显式指定才启用硬门禁（缺省观察）
+      profile: null
+      projectId: null
+      checkpointScript: null  # 部署时填 scripts/autonomy/checkpoint.py 绝对路径

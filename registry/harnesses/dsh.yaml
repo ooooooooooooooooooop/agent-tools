@@ -2,6 +2,8 @@
 # 边界：本文件只声明"哪些配置的哪些字段由 canonical 生成/校验"；其余内容属 overlay 或 harness 自有。
 harness: dsh
 schema_version: 3
+consumes:
+  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
 render_targets:
   - id: settings
     path: "{{DSH_HOME}}/settings.yaml"
@@ -11,6 +13,24 @@ render_targets:
       "agent-default-model": "registry/routing-policy.yaml#rules.main_default (keys provider/model/reasoningEffort)"
       "agent-presets": "overlay"
       "ui-onboarding": "overlay"
+  - id: continuous-capability-adoption
+    path: "{{DSH_HOME}}/AGENTS.md"
+    mode: managed-instruction-block
+    source: "personal-ai-state/state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION"
+    owner: aic
+    note: "GENERATED projection；preferences.md 是唯一 canonical；只改带 checksum marker 的块"
+  - id: autonomous-execution-governance
+    path: "{{DSH_HOME}}/AGENTS.md"
+    mode: managed-instruction-block
+    source: "registry/autonomous-execution-governance.yaml#generated_instructions"
+    owner: aic
+    note: "AUTONOMOUS_EXECUTION_GOVERNANCE 硬规则投影（同一 AGENTS.md，第二块）；只改带 checksum marker 的块"
+  - id: governance-profiles
+    path: "{{DSH_HOME}}/governance/execution-profiles.generated.json"
+    mode: full-file-json
+    source: "registry/execution-profiles.yaml#profiles (projected deterministic subset)"
+    owner: aic
+    note: "DSH runtime governor 插件消费的预算投影（generated，禁手改）；diff/apply 全文件"
   - id: agent-preset-cc
     path: "{{DSH_HOME}}/.agent-presets/cc/agent.cordis.yml"
     mode: field-projection
@@ -131,3 +151,20 @@ runtime_composition:
     status: READ_ONLY_CONTEXT_EXHAUSTED
     operational_label: READ_ONLY_ARCHIVED
     artifact_sha256: 17d0b5c91c7f0f76adfad658daddfa8e3980ea6913d81fb29eafce1e6fd5f64f
+
+# AUTONOMOUS_EXECUTION_GOVERNANCE — DSH hook 矩阵（canonical；实现见 dsh/autonomous-execution-governor）
+governance_hooks:
+  BEFORE_MODEL_CALL: {impl: plugin, detail: "cordis tools.guard（dispatch 前，可 fail closed）"}
+  AFTER_MODEL_CALL: {impl: plugin, detail: "token-meter / session telemetry 读取（cacheRead 可读）"}
+  AFTER_AGENT_ACTION: {impl: plugin, detail: "guard 记录 tool+args hash"}
+  ON_PROGRESS: {impl: plugin, detail: "mutation/artifact delta"}
+  ON_CHECKPOINT: {impl: plugin, detail: "autonomous-execution-governor → checkpoint.py"}
+  ON_BUDGET_LIMIT: {impl: plugin, detail: "guard FAIL CLOSED + checkpoint"}
+  ON_NO_PROGRESS: {impl: plugin, detail: "loop breaker 警告 → circuit break"}
+  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+  native_reuse:
+    - "goal 工具 max_goal_rounds（agent turn 上限，原生）"
+    - "compaction + compaction-convergence guard（原生）"
+    - "tool-call-timeout-policy（原生）"
+    - "session checkpoint policy / persistence（原生）"
+    - "subagent-usage-observer（cacheRead 记账，已有插件，复用）"
