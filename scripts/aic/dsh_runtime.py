@@ -530,7 +530,8 @@ def _copy_ui(base_root: Path, client: Path, web_dist: Path) -> tuple[Path, Path,
     for package_root in client_roots:
         package_root.mkdir(parents=True, exist_ok=True)
         shutil.copy2(client.parent.parent / "package.json", package_root / "package.json")
-        shutil.copytree(client.parent, package_root / "lib", dirs_exist_ok=True)
+        _remove(package_root / "lib")
+        shutil.copytree(client.parent, package_root / "lib")
     client_dest = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-client-ui-conversation") / "lib" / "client.js"
     if sha256_file(client_dest) != sha256_file(client):
         raise DshCompositionError("UI client bundle copy hash mismatch")
@@ -544,7 +545,8 @@ def _copy_ui(base_root: Path, client: Path, web_dist: Path) -> tuple[Path, Path,
         frontend.mkdir(parents=True, exist_ok=True)
         if source_package.is_file():
             shutil.copy2(source_package, frontend / "package.json")
-        shutil.copytree(web_dist, frontend / "dist", dirs_exist_ok=True)
+        _remove(frontend / "dist")
+        shutil.copytree(web_dist, frontend / "dist")
     frontend_dest = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-web-frontend") / "dist"
     return client_dest, frontend_dest, sha256_tree(frontend_dest)
 
