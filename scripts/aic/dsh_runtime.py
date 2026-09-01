@@ -434,8 +434,9 @@ def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str
     baseline = ui_cfg["baseline_commit"]
     fix = ui_cfg["fix_commit"]
     patch = ROOT / ui_cfg["patch_file"]
+    apply_patch = bool(ui_cfg.get("apply_patch", True))
     fix_is_recoverable = ui_cfg.get("fix_commit_remote") not in (None, "", "unavailable-at-audit")
-    if _git_has(source, fix) and fix_is_recoverable:
+    if _git_has(source, fix) and fix_is_recoverable and apply_patch:
         # Always build from a clean detached worktree. The configured checkout
         # may carry unrelated user changes (including staged build tooling);
         # those must never leak into the released UI bundle.
@@ -445,15 +446,17 @@ def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str
         if not _git_has(source, baseline):
             _run(["git", "fetch", "--depth", "1", "origin", baseline], cwd=source, timeout=900)
         ref = baseline
-        source_state = f"{baseline}+patch:{ui_cfg['patch_sha256']}"
+        source_state = str(baseline)
+        if apply_patch:
+            source_state = f"{baseline}+patch:{ui_cfg['patch_sha256']}"
     worktree = Path(tempfile.mkdtemp(prefix="dsh-ui-", dir=str(cache)))
     _remove(worktree)
     _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=source, timeout=180)
-    if ref != fix:
+    if ref != fix and apply_patch:
         _run(["git", "apply", "--check", str(patch)], cwd=worktree, timeout=30)
         _run(["git", "apply", str(patch)], cwd=worktree, timeout=30)
     build_patch_name = ui_cfg.get("build_patch_file")
-    if build_patch_name:
+    if build_patch_name and apply_patch:
         build_patch = ROOT / build_patch_name
         _run(["git", "apply", "--check", str(build_patch)], cwd=worktree, timeout=30)
         _run(["git", "apply", str(build_patch)], cwd=worktree, timeout=30)
@@ -769,9 +772,12 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
                 finding("SOURCE_DRIFT", "ui.source", ui_cfg["fix_commit"], str(exc))
         build_patch_sha = ui_cfg.get("build_patch_sha256")
         source_state = str(manifest.get("ui", {}).get("sourceState", ""))
-        expected_source_state = f"{ui_cfg['baseline_commit']}+patch:{ui_cfg['patch_sha256']}"
-        if build_patch_sha:
-            expected_source_state += f"+build-patch:{build_patch_sha}"
+        if ui_cfg.get("apply_patch", True):
+            expected_source_state = f"{ui_cfg['baseline_commit']}+patch:{ui_cfg['patch_sha256']}"
+            if build_patch_sha:
+                expected_source_state += f"+build-patch:{build_patch_sha}"
+        else:
+            expected_source_state = str(ui_cfg["baseline_commit"])
         if source_state != expected_source_state:
             finding("CONFIG_DRIFT", "ui.source-state", expected_source_state, source_state or "missing")
         payload = {k: v for k, v in manifest.items() if k != "profileCombinationHash"}
