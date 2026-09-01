@@ -18,6 +18,19 @@ from common import backup_root, ledger_append, now_iso, sha256_file, write_manif
 HOME = Path.home()
 CPA = Path(r"D:\Download\EasyCLIProxyAPI-v0.2.23-Windows-amd64\EasyCLIProxyAPI-v0.2.23-Windows-amd64\cpa-core")
 
+
+def _cpa_core_dir() -> Path:
+    """Resolve the local CPA gateway cpa-core dir dynamically (Downloads layout)."""
+    candidates = [
+        CPA,
+        *sorted(Path.home().glob(r"Downloads\EasyCLIProxyAPI-*\*\cpa-core")),
+        *sorted(Path.home().glob(r"Download\EasyCLIProxyAPI-*\*\cpa-core")),
+    ]
+    for c in candidates:
+        if (c / "cli-proxy-api.exe").is_file():
+            return c
+    return CPA
+
 # (source, irreplaceable?, secret?)
 CONFIGS = [
     (HOME / ".dsh" / "settings.yaml", False, False),          # generated (aic render dsh)
@@ -30,7 +43,7 @@ CONFIGS = [
     (HOME / ".codex" / "config.toml", True, False),           # machine-local overlay
     (HOME / ".gemini" / "settings.json", True, False),
     (HOME / ".cc-switch" / "settings.json", True, False),
-    (CPA / "config.yaml", True, True),                        # gateway local config (secret-adjacent)
+    (_cpa_core_dir() / "config.yaml", True, True),        # gateway local config (secret-adjacent)
 ]
 
 
