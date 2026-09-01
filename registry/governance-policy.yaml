@@ -13,6 +13,13 @@ auto_allowed:
   - drift_detection
   - derived_index_rebuild
   - generated_artifact_refresh   # 仅限已有 deterministic contract 的 generated 态
+  - upstream_capability_discovery
+  - upstream_capability_review_proposal
+  # AUTONOMOUS_EXECUTION_GOVERNANCE（Migration #8）—— deterministic 强制执行与派生记录
+  - budget_enforcement      # 预算上限判定/拒绝 = 确定性强制（不改 canonical）
+  - checkpoint_write        # 写 personal-ai-state/checkpoints/（durable state，非 canonical 变更）
+  - usage_ledger_append     # 追加 usage.jsonl（derived runtime record）
+  - compact_context         # 触发 Harness 原生 compaction
 auto_forbidden:
   - admit_model
   - routing_enable_model
@@ -25,6 +32,13 @@ auto_forbidden:
   - change_default_model
   - change_fallback_policy
   - rewrite_git_history
+  - auto_adopt_discovered_capability
+  - auto_replace_local_implementation
+  # AUTONOMOUS_EXECUTION_GOVERNANCE（Migration #8）
+  - raise_execution_budget   # agent 自动提高自身预算 = 禁止；唯一路径 = 人工批准 + ledger 豁免
+  - bypass_budget_limit      # 绕过/覆盖预算上限 = 禁止
+  - disable_loop_breaker     # 关闭 no-progress circuit break = 禁止
+  - unbounded_resume         # 无限 resume 绕过会话上限 = 禁止（resume_count 有界）
 identity_assessment_values: [consistent, suspicious, unknown]   # 禁止 verified_model / verification_confidence
 staleness_states: [HEALTHY, REVIEW, SUPERSEDE_CANDIDATE, ARCHIVE_CANDIDATE, UNKNOWN]
 dead_config_states: [ACTIVE, INACTIVE_KNOWN, DEAD_CANDIDATE, BROKEN, UNKNOWN]

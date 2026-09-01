@@ -1,0 +1,99 @@
+# checkpoint-schema.yaml — Personal AI cross-harness Checkpoint Contract（canonical · v1）
+#
+# 目的：一个 Harness 中断后，其他支持本协议的 Harness 可仅凭 durable state 理解并继续任务。
+# 存储：Checkpoint 实例 = JSON（<task_id>.json），落 personal-ai-state/checkpoints/（Personal AI
+#   durable state，随 git 传输，跨设备可恢复）。JSON 而非 YAML 是为了让无 YAML 依赖的
+#   Harness adapter（DSH 插件等在 profile 环境）可直接读写 —— 本文件是 schema 的 YAML 描述。
+# 写入方：scripts/checkpoint/checkpoint.py（harness 中立）或各 harness adapter（同一 schema）。
+# 协议哈希：protocol_hash = sha256(本文件内容 + autonomous-execution-governance.yaml 的
+#   schema_version)，任何一边变化 = 协议不兼容，resume 必须校验一致。
+
+schema_version: 1
+format: json
+location: "personal-ai-state/checkpoints/<task_id>.json"
+
+fields:
+  schema_version:            # int，固定 1
+    required: true
+    type: integer
+  protocol_hash:             # sha256(checkpoint-schema.yaml + governance schema_version)
+    required: true
+    type: string
+    note: "resume 方校验；不一致 = 拒绝恢复并报告 PROTOCOL_MISMATCH"
+  task_id:                   # 任务唯一 id（项目内部唯一；建议 <project>_<slug>）
+    required: true
+    type: string
+  project_id:                # 项目 id（如 novel-main）
+    required: true
+    type: string
+  campaign_id:               # 可选：长任务 campaign 分组
+    required: false
+    type: [string, "null"]
+  objective:                 # 任务目标（人类可读）
+    required: true
+    type: string
+  harness:                   # 写入方 harness：dsh|codex|claude|gemini|switchboard
+    required: true
+    type: string
+    enum: [dsh, codex, claude, gemini, switchboard]
+  execution_profile:         # 必须 ∈ execution-profiles.yaml profiles
+    required: true
+    type: string
+  completed_actions:         # 已完成动作列表（append-only 语义）
+    required: true
+    type: array
+    items: {type: string}
+  current_state:             # 当前状态（自由 map，放入恢复所需的最小状态）
+    required: true
+    type: object
+  durable_artifacts:         # 已落盘 artifact 路径（相对/绝对均可，注明 harness）
+    required: true
+    type: array
+    items: {type: string}
+  evidence:                  # 证据链（验收/门禁结果等）
+    required: true
+    type: array
+    items: {type: string}
+  unresolved_blockers:       # 未解决阻塞（含外部 blocker 描述）
+    required: true
+    type: array
+    items: {type: string}
+  next_executable_action:    # 下一步可执行动作（resume 的第一指令）
+    required: true
+    type: string
+  model_usage:               # 累计模型用量（跨 resume 累计）
+    required: true
+    type: object
+    note: "keys: calls_by_model: {provider/model: count}, input_tokens, cached_input_tokens, output_tokens"
+  budget_consumed:           # 累计消耗（必须与 ledger 一致）
+    required: true
+    type: object
+    note: "keys: provider_calls, agent_turns, input_tokens, cached_input_tokens, output_tokens, cost_usd, runtime_min"
+  budget_remaining:          # 剩余（remaining = profile 预算 - consumed）
+    required: true
+    type: object
+  stop_reason:               # 停止原因（enum）
+    required: true
+    type: string
+    enum: [completed, checkpoint, budget_limit, loop_breaker, error, human_interrupt, local_shutdown]
+  resume_count:              # 恢复次数（防"无限 resume 变相无界"）
+    required: true
+    type: integer
+    note: "task 累计预算跨 resume 不重置；resume_count 超限（profile 定义）亦须终止"
+  timestamp:                 # ISO-8601 UTC
+    required: true
+    type: string
+
+validation_rules:
+  - "task_id + project_id 必须非空"
+  - "execution_profile 必须存在于 registry/execution-profiles.yaml"
+  - "stop_reason 必须 ∈ enum"
+  - "budget_consumed.cost_usd ≤ profile task.cost_usd（含 resume 累计）——超限 = 校验失败"
+  - "protocol_hash 必须等于当前 canonical 计算值"
+  - "resume 方只能使用 completed_actions + current_state + durable_artifacts + next_executable_action 恢复；严禁回放原 conversation"
+
+resume_contract:
+  read: "读 checkpoint（next_executable_action / current_state / budget_remaining）"
+  verify: "protocol_hash + schema_version + 预算一致性"
+  continue: "从 next_executable_action 开始；completed_actions 继续累计；budget 继续累计（不重置）"
+  prohibited: "用原 conversation history 代替 checkpoint；用 checkpoint 复制预算数字回项目"

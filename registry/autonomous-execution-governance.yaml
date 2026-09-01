@@ -1,0 +1,292 @@
+# autonomous-execution-governance.yaml — Personal AI 生态级能力（canonical · SSOT）
+#
+# 能力名：AUTONOMOUS_EXECUTION_GOVERNANCE（BOUNDED AUTONOMOUS EXECUTION）
+# 归属：Personal AI 自身（跨 project / cross-harness 基础能力），不属于任何项目或 Harness。
+# 实例化：本文件 + execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml
+#   （同目录）构成该能力的 canonical policy；各 Harness 与项目只作为 consumers。
+#
+# 触发事故（真实反例）：另一设备的 novel-main 会话 session-0d07ae22 ——
+#   534 Agent turns / 674 API requests / ≈171M tokens（cached ≈168.1M / new ≈2.57M /
+#   output ≈307K）/ 估算成本 ≈$106；长上下文被数百次重复 cache-read。
+#   本 policy 的所有初始边界以此反例校准：同等类型任务在新的 governance 下不可能再运行到该规模。
+#
+# 变更纪律：本文件的边界数字可经 SSOT 调整（走既有 change management），
+#   但禁止任何项目复制预算数字；禁止 Harness 端手改 generated 投影。
+
+schema_version: 1
+capability: AUTONOMOUS_EXECUTION_GOVERNANCE
+belongs_to: personal_ai
+scope: [dsh, codex, claude, gemini, switchboard]
+calibration_incident: "novel-main session-0d07ae22 (534 turns / 674 calls / ~171M tokens / ~$106, unbounded)"
+
+# ---------------------------------------------------------------- 消费契约
+# 项目（novel 等）只声明 execution_profile 与任务级有限 override；
+# 具体模型/预算/turn 上限/checkpoint 节奏/loop breaker 由 Personal AI 决定。
+consumers:
+  rule: "project declares: execution_profile + optional task-level bounded override (see below)"
+  allowed_declarations:
+    - execution_profile            # 必须引用 execution-profiles.yaml 中定义的名字
+    - task_requirements:           # 只描述任务需求，不指定具体模型/价格
+        - high_reasoning
+        - bulk_judge
+        - batch_generation
+        - extraction
+  bounded_overrides:               # 任务级有限 override（白名单，超出即 INVALID）
+    - checkpoint_cadence_turns     # 仅可收紧（smaller）
+    - batch                       # true/false（仅 BULK 类 profile）
+    - labeled_subtask_model_tier   # 仅带理由的局部 tier 提升（FRONTIER_REASONING 需 human approve）
+  forbidden_declarations:
+    - budget_numbers               # 预算数字只能来自 canonical
+    - model_price                  # 禁止把具体昂贵模型硬编码为默认 bulk worker
+    - turn_limit_values
+    - checkpoint_path_override     # checkpoint 只能落 Personal AI durable state
+
+# ---------------------------------------------------------------- Budget Governor
+# 所有预算必须：hard enforceable / observable / resumable / 按 execution profile 配置。
+# 不得仅依赖 prompt 自觉 —— enforcement 在 Harness hook（gate/wrapper）层，fail closed。
+budget_governor:
+  kinds:
+    - id: task_budget              # 单任务累计（跨 resume 不重置，随 checkpoint 持久化）
+      enforce: hard
+    - id: session_budget           # 单 conversation 累计（resume 新会话后读 checkpoint 续算 task 累计）
+      enforce: hard
+    - id: provider_call_budget     # API request 计数
+      enforce: hard
+    - id: agent_turn_budget        # Agent turn（模型收到上下文并产出动作的轮）计数
+      enforce: hard
+    - id: model_tier_budget        # 每 tier 允许的调用/成本配额（昂贵 tier 受限）
+      enforce: hard
+    - id: input_token_budget       # new input tokens
+      enforce: hard
+    - id: cached_input_token_budget  # cache-read tokens —— 必须计入（session-0d07ae22 主病灶）
+      enforce: hard
+    - id: output_token_budget      # completion tokens
+      enforce: hard
+    - id: cost_budget              # 估算成本 USD（有可靠实时成本时；否则用模型单价×用量估算）
+      enforce: hard
+    - id: runtime_budget           # 墙钟时长（跨 resume 累计）
+      enforce: hard
+  semantics:
+    hard_enforce: "超限 = FAIL CLOSED：Harness hook 拒绝下一次模型调用/工具派发，并保存 durable checkpoint（stop_reason=BUDGET_LIMIT）"
+    observable: "每次 checkpoint / 每 N 轮，预算消耗写入 Usage Ledger（usage-ledger-schema.yaml）"
+    resumable: "budget_consumed / budget_remaining 随 checkpoint 持久化；resume 继续同一累计计数"
+    no_self_raise: "禁止 agent 自动提高自身预算（auto_forbidden，见 governance-policy.yaml）；提额唯一路径 = 人工批准并在 ledger 记录豁免"
+    estimation: "cost = Σ(model 单价 × billed tokens)；无实时单价时以 provider 公开价估算并标记 estimated"
+
+# ---------------------------------------------------------------- Loop Breaker
+loop_breaker:
+  progress_delta: |
+    PROGRESS_DELTA(t) = 在滑动窗口 [t-Δ_window, t] 内产生的 progress event 数量。
+    合法 progress event（明确枚举）：
+      NEW_ARTIFACT      文件创建/内容变化（含 write/edit/commit）
+      STATE_CHANGE      durable state（checkpoint / project state / memory record）hash 变化
+      COMPLETED_ACTION  todo/checklist/阶段验收项完成
+      ACCEPTED_EVIDENCE 测试通过 / 门禁 green / 验证成功
+      DURABLE_CHECKPOINT checkpoint 落盘
+    以下不算 progress：读文件、检索、重新推理、重复探测、重复 judge、审计日志追加。
+  detection_patterns:
+    - id: repeated_identical_tool_call     # 同一 tool + 参数 hash 连续/窗口内出现
+      window: 6
+      threshold: 3
+    - id: repeated_error                   # 同一错误签名
+      window: 8
+      threshold: 3
+    - id: repeated_repair                  # 同一 artifact 反复修复
+      window: 10
+      threshold: 3
+    - id: repeated_judge                   # 同一 judge run 反复执行无新证据
+      window: 8
+      threshold: 3
+    - id: repeated_provider_probing        # 同一 provider/model 探测反复发起
+      window: 6
+      threshold: 3
+    - id: no_new_artifact_loop             # 窗口内 0 个 NEW_ARTIFACT
+      window: 8
+      threshold: 6
+    - id: no_state_change_loop             # 窗口内 0 个 STATE_CHANGE / COMPLETED_ACTION
+      window: 8
+      threshold: 6
+    - id: reasoning_without_progress       # 连续模型轮均无 mutation/progress
+      window: 8
+      threshold: 6
+  circuit_break:
+    soft: "首达阈值：注入可见警告 + 写 checkpoint（stop_reason 暂不设），要求策略重置或换路线"
+    hard: "soft 后仍无进展（连续窗口仍 0 progress）：拒绝后续模型调用 + durable checkpoint（stop_reason=LOOP_BREAKER）+ circuit_broken 标记；恢复需人工/任务 owner 或显式换 profile"
+  bounded_retry:
+    repeated_repair_max: 3                # 与 switchboard chain_key 上限一致（复用，不重复建设）
+    repeated_error_max: 5                 # 之后降 tier 或 checkpoint 退出
+    default_retry: 2
+
+# ---------------------------------------------------------------- Model Tier Governance
+# 定义任务类型（不绑定具体项目模型）；具体模型选择仍由 Personal AI Model/Routing SSOT
+# （registry/models.yaml + routing-policy.yaml + 私有 gateways）决定。
+model_tier_governance:
+  task_types:
+    - id: FRONTIER_REASONING      # 高难度推理、关键决策；昂贵 tier
+      default_cost_dominant: true
+      admitted_profiles: [CRITICAL_REASONING]
+      rule: "仅 CRITICAL_REASONING 默认使用；其他 profile 需 labeled_subtask_model_tier override + 理由"
+    - id: STANDARD_REASONING      # 常规实现/推理
+      admitted_profiles: [INTERACTIVE, AUTONOMOUS_STANDARD, AUTONOMOUS_RESEARCH, LONG_RUNNING_CAMPAIGN]
+    - id: BULK_GENERATION         # 批量产出（文章/代码片段/列表）
+      bulk_default: true
+      rule: "bulk worker 默认 = 已准入的 cheapest tier；禁止昂贵模型作默认"
+    - id: BULK_JUDGE              # 批量评审/评分
+      bulk_default: true
+      rule: "judge 走 batch，单条 item 不占用主 Agent 推理；judge 结果 deterministic aggregate"
+    - id: EXTRACTION             # 抽取/结构化
+      cheap_default: true
+    - id: DETERMINISTIC          # 无需 LLM（脚本/规则）
+      llm_not_required: true
+  hard_rules:
+    - "昂贵模型（FRONTIER_REASONING tier）禁止被硬编码为默认 bulk worker"
+    - "项目禁止书写具体模型价格/名称到 bulk 默认；模型选择以 routing-policy SSOT 为准"
+    - "bulk worker 每次调用计入 Usage Ledger（model/provider/calls/tokens）"
+
+# ---------------------------------------------------------------- Batch Execution
+batch_execution:
+  default_for_profiles: [BULK_EVALUATION, LONG_RUNNING_CAMPAIGN(重复结构化子任务)]
+  contract: |
+    manifest (输入清单 + worker 规格 + judge 规格)
+      → workers（独立、cheap tier、每 worker 有自己 bounded 预算）
+      → result artifacts（每 worker 输出落盘）
+      → deterministic aggregate（脚本聚合，无 LLM）
+  rules:
+    - "BULK 类 profile：主 Agent 禁止逐 item reasoning（每 item 一次模型调用 = loop breaker 信号）"
+    - "worker 预算：继承 profile 预算按 worker 均分或按 manifest 声明，不得为 0 预算的无限 worker"
+    - "DSH 复用原生 workflow 工具 + workflow-model-preflight-gate 现有模型准入校验"
+
+# ---------------------------------------------------------------- Context Governor
+context_governor:
+  cycle: CHECKPOINT → DURABLE_STATE → COMPACT → RESUME
+  principles:
+    - "任务连续 ≠ conversation history 连续：resume 读 checkpoint（next_executable_action），不重放巨大 conversation"
+    - "cache-read 计入预算：cached_input_token_budget 超限即触发 COMPACT（对症 session-0d07ae22 数百次重复 cache-read）"
+    - "长时间任务按 checkpoint_cadence 落盘 durable checkpoint（personal-ai-state/checkpoints/）"
+  compaction:
+    harness_native: "DSH compaction（含 compaction-convergence guard）/ Claude /compact / AGENTS 块外部压缩由各 harness adapter 映射"
+    rule: "compaction 摘要模型档由 routing-policy compaction_summary SSOT 决定（已存在，复用）"
+
+# ---------------------------------------------------------------- Checkpoint Contract
+checkpoint_contract:
+  schema: registry/checkpoint-schema.yaml   # 唯一 schema（v1）
+  durable_state: personal-ai-state/checkpoints/<task_id>.json   # Personal AI durable state
+  rule: "checkpoint 不得只存在于某 Harness session history；任何支持本协议的 Harness 可从中恢复"
+  protocol_hash: "sha256(checkpoint-schema.yaml + autonomous-execution-governance.yaml schema_version)"
+  adapters:
+    dsh: "dsh/autonomous-execution-governor 插件（guard 层）+ scripts/checkpoint/checkpoint.py"
+    codex: "wrapper/sidecar（codex exec --json 包装）→ checkpoint.py"
+    claude: "原生 hooks（PostToolUse/Stop）→ checkpoint.py"
+    gemini: "wrapper/sidecar → checkpoint.py"
+    switchboard: "task receipt 协议（wait_task_receipt）+ managed supervisor（已存在，复用）"
+
+# ---------------------------------------------------------------- Usage Ledger
+usage_ledger:
+  schema: registry/usage-ledger-schema.yaml
+  location: "~/.personal-ai/ledger/usage.jsonl（设备 durable runtime；随既有 durability 备份）"
+  detectors:
+    cost_per_progress: "COST_PER_PROGRESS = 任务累计估算成本 / 累计 progress events；持续上升且 progress=0 的窗口 = runaway 信号"
+    runaway: "任一命中：cost 超 profile cost_budget / provider_calls 超限 / cached_input 占比 > 0.85 且无 compact / COST_PER_PROGRESS 连续 3 窗口上升"
+  rule: "每个 budget stop / loop breaker / 完成 / checkpoint 至少写一条 ledger 记录"
+
+# ---------------------------------------------------------------- Harness Hook Matrix (capability matrix)
+# 优先级：复用 Harness 原生能力 → adapter → wrapper/sidecar → 最后才考虑改上游源码。
+# 本矩阵记录"哪个 hook 在哪个 harness 用哪个机制实现"；实现细节在各 harnesses/<name>.yaml 的
+# governance_hooks 段（canonical），drift 由 aic diff 校验。
+harness_hook_matrix:
+  hooks: [BEFORE_MODEL_CALL, AFTER_MODEL_CALL, AFTER_AGENT_ACTION, ON_PROGRESS,
+          ON_CHECKPOINT, ON_BUDGET_LIMIT, ON_NO_PROGRESS, ON_RESUME]
+  rows:
+    - harness: dsh
+      mechanisms:
+        BEFORE_MODEL_CALL: {impl: plugin, detail: "cordis tools.guard（dispatch 前单调守卫层，可 fail closed）"}
+        AFTER_MODEL_CALL: {impl: plugin, detail: "token-meter / session telemetry 读取（subagent-usage-observer 已证明 cacheRead 可读）"}
+        AFTER_AGENT_ACTION: {impl: plugin, detail: "tools.guard 记录 tool 调用（tool+args hash）"}
+        ON_PROGRESS: {impl: plugin, detail: "mutation/artifact delta 检测（write-like tool 结果）"}
+        ON_CHECKPOINT: {impl: plugin, detail: "autonomous-execution-governor → checkpoint.py 落 durable state"}
+        ON_BUDGET_LIMIT: {impl: plugin, detail: "guard 拒绝（FAIL CLOSED）→ checkpoint stop_reason=BUDGET_LIMIT"}
+        ON_NO_PROGRESS: {impl: plugin, detail: "loop breaker 注入警告 → hard circuit break"}
+        ON_RESUME: {impl: tool, detail: "checkpoint.py resume（读 checkpoint，不重放 conversation）"}
+      notes: "DSH 原生已有：goal max_rounds（agent turn 上限）、compaction、tool timeout、session checkpoint policy —— 复用"
+    - harness: codex
+      mechanisms:
+        BEFORE_MODEL_CALL: {impl: wrapper, detail: "codex exec wrapper（sidecar 计数 + gate）"}
+        AFTER_MODEL_CALL: {impl: wrapper, detail: "解析 --json 输出的 usage 字段"}
+        AFTER_AGENT_ACTION: {impl: wrapper, detail: "thread JSONL 扫描 tool 调用"}
+        ON_PROGRESS: {impl: wrapper, detail: "artifact/git delta"}
+        ON_CHECKPOINT: {impl: wrapper, detail: "→ checkpoint.py"}
+        ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + checkpoint；侧车杀死进程"}
+        ON_NO_PROGRESS: {impl: wrapper, detail: "→ checkpoint + 退出"}
+        ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+      notes: "无原生 hook；wrapper/sidecar 为最小外围控制（不改上游源码）"
+    - harness: claude
+      mechanisms:
+        BEFORE_MODEL_CALL: {impl: native, detail: "PreToolUse hook（且 hook 可返回 deny）"}
+        AFTER_MODEL_CALL: {impl: native, detail: "PostToolUse / Stop hook（usage 可由 hook 读取）"}
+        AFTER_AGENT_ACTION: {impl: native, detail: "PostToolUse"}
+        ON_PROGRESS: {impl: native, detail: "PostToolUse（artifact delta）"}
+        ON_CHECKPOINT: {impl: native, detail: "Stop/SubagentStop hook → checkpoint.py 脚本"}
+        ON_BUDGET_LIMIT: {impl: native+wrapper, detail: "--max-turns + hook deny；managed supervisor max_autonomous_actions（switchboard 已复用）"}
+        ON_NO_PROGRESS: {impl: native, detail: "PostToolUse 统计 → 注入可见警告/停止"}
+        ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+      notes: "CLAUDE_CODE_MAX_CONTEXT_TOKENS / auto-compact 为 OVERLAY（已登记）"
+    - harness: gemini
+      mechanisms:
+        BEFORE_MODEL_CALL: {impl: wrapper, detail: "gemini CLI wrapper（无原生 hook）"}
+        AFTER_MODEL_CALL: {impl: wrapper, detail: "usage 解析"}
+        AFTER_AGENT_ACTION: {impl: wrapper, detail: "stream 扫描"}
+        ON_PROGRESS: {impl: wrapper, detail: "artifact delta"}
+        ON_CHECKPOINT: {impl: wrapper, detail: "→ checkpoint.py"}
+        ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + checkpoint"}
+        ON_NO_PROGRESS: {impl: wrapper, detail: "→ checkpoint + 退出"}
+        ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+      notes: "最小外围控制；Gemini CLI 原生无 hook"
+    - harness: switchboard
+      mechanisms:
+        BEFORE_MODEL_CALL: {impl: native, detail: "routing/queue gate（route_agent_task / queue_cli_request，token_budget/max_response_chars 已存在）"}
+        AFTER_MODEL_CALL: {impl: native, detail: "request_result / get_request_ledger（每 topic request ledger 已存在，复用）"}
+        AFTER_AGENT_ACTION: {impl: native, detail: "managed supervisor material events（turn_completed 等）"}
+        ON_PROGRESS: {impl: native, detail: "supervisor events + work memory"}
+        ON_CHECKPOINT: {impl: native, detail: "task receipt 协议（wait_task_receipt）—— 复用，不重建"}
+        ON_BUDGET_LIMIT: {impl: native, detail: "max_autonomous_actions / token_budget / effort 档位（已存在）"}
+        ON_NO_PROGRESS: {impl: native, detail: "stall_timeout + decision_mode（codex 决策兜底）"}
+        ON_RESUME: {impl: native, detail: "supervisor resume + receipt 恢复"}
+      notes: "本 harness 原生覆盖最强：请求预算 / 受管监督 / ledger / receipt 全部已存在，只做策略接线（预算值来自 canonical）"
+
+# ---------------------------------------------------------------- generated instruction block
+# 以下块由 aic render 投影到各 Harness 指令文件（AGENTS.md / CLAUDE.md / GEMINI.md /
+# AGENT_GROUND_RULES.md）——generated state，禁止手改；只放稳定硬规则 + policy pointer，
+# 不复制预算数字与 Personal State。
+generated_instructions: |
+  ## AUTONOMOUS_EXECUTION_GOVERNANCE (PERSONAL AI · generated — do not edit)
+
+  本块由 Personal AI canonical SSOT 生成（registry/autonomous-execution-governance.yaml
+  + execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml），
+  由 `aic render/diff` 管理；手改即 drift，会被 `aic diff` 检出并回滚。
+
+  - 项目（novel 等）不得自带 autonomous governance 实现；只声明 `execution_profile`
+    与白名单内的任务级有限 override。具体模型 / 预算 / turn 上限 / checkpoint 节奏 /
+    loop breaker 由 Personal AI 决定。
+  - 硬规则（稳定）：
+    1. 无界自主执行被禁止：任何自主运行必须处于一个 execution_profile，预算 hard
+       enforceable（Harness hook 层 fail closed），超限保存 durable checkpoint
+       （stop_reason=BUDGET_LIMIT），并计入 Usage Ledger。
+    2. 预算数字来自 Personal AI canonical（execution-profiles.yaml）；项目不得复制或
+       修改预算，agent 禁止自动提高自身预算（唯一路径 = 人工批准 + ledger 豁免记录）。
+    3. 重复结构化工作（bulk / 批处理）默认走 batch：manifest → workers → result
+       artifacts → deterministic aggregate；BULK 类 profile 中主 Agent 禁止逐 item
+       reasoning。
+    4. 昂贵模型（FRONTIER_REASONING tier）禁止被硬编码为默认 bulk worker；模型选择
+       由 Personal AI Model/Routing SSOT（registry/models.yaml + routing-policy.yaml）
+       决定。
+    5. 长时间任务必须 CHECKPOINT → COMPACT → RESUME；Checkpoint 写入 Personal AI
+       durable state（personal-ai-state/checkpoints/），resume 读 checkpoint 而非原
+       conversation；cache-read token 计入预算，超限即触发 COMPACT。
+    6. 无进展循环（PROGRESS_DELTA = 0 持续 N 轮；重复相同工具调用 / 错误 / 修复 /
+       judge / provider probe）自动 circuit break，stop_reason=LOOP_BREAKER 落
+       checkpoint；repeated repair 有界（≤3）。
+    7. 所有模型调用计入 Usage Ledger（task/project/harness/model/calls/input/
+       cached/output/cost/progress），支持 COST_PER_PROGRESS 与 runaway 检测。
+  - Policy pointer（本机全文）：agent-tools 仓库 registry/autonomous-execution-governance.yaml
+    （含 harness_hook_matrix）、registry/execution-profiles.yaml、registry/checkpoint-schema.yaml、
+    registry/usage-ledger-schema.yaml。

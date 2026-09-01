@@ -7,6 +7,7 @@ consumes:
   - registry/capabilities.yaml        # 标准 MCP 能力集
   - registry/models.yaml              # 准入校验（default model 须在 admitted catalog）
   - personal-ai-state:static          # 静态指令（见 static_instructions）
+  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
 
 render_targets:
   - file: config.toml
@@ -17,8 +18,11 @@ render_targets:
     note: "node_repl / agent_switchboard / plugins / desktop / windows / marketplaces / projects / notify = OVERLAY/MACHINE_LOCAL，render 保留、不生成"
   - file: AGENTS.md
     kind: instruction
-    owner: agent-switchboard          # GENERATED，但由 switchboard 管理（cost-routing managed block），aic 不渲染
+    owner: shared-managed-blocks      # switchboard owns cost-routing block；aic owns capability-adoption + governance blocks
     check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
+    generated_blocks:
+      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
+      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
 
 harness_defaults:
   model: gpt-5.6-luna                 # 须在 models.yaml admitted catalog（validate 校验）
@@ -30,8 +34,8 @@ overlay:
 
 static_instructions:
   file: AGENTS.md
-  owner: agent-switchboard
-  legality: "execution policy / cost routing 硬约束 — 无动态状态（2026-08-28 审计）"
+  owner: shared-managed-blocks
+  legality: "switchboard cost routing + aic long-term capability-adoption projection；无动态状态"
 
 runtime_context_hook:
   mechanism: "session-start injection（无原生动态 hook；由编排方在 prompt 首帧注入 Context Package）"
@@ -41,3 +45,14 @@ health_check: "codex.exe --version 可执行（bin 路径为 MACHINE_LOCAL，当
 
 runtime_state: "sessions/ *.sqlite logs/ models_cache.json thread-writer-locks/ — 永不入 canonical"
 secret: "auth.json（ChatGPT OAuth）— 永不入 canonical"
+
+# AUTONOMOUS_EXECUTION_GOVERNANCE — Codex hook 矩阵（canonical；wrapper/sidecar，不改上游源码）
+governance_hooks:
+  BEFORE_MODEL_CALL: {impl: wrapper, detail: "codex exec wrapper（sidecar 计数 + gate，dispatch 前）"}
+  AFTER_MODEL_CALL: {impl: wrapper, detail: "解析 --json 输出 usage"}
+  AFTER_AGENT_ACTION: {impl: wrapper, detail: "thread JSONL 扫描 tool 调用"}
+  ON_PROGRESS: {impl: wrapper, detail: "artifact/git delta"}
+  ON_CHECKPOINT: {impl: wrapper, detail: "→ scripts/checkpoint/checkpoint.py"}
+  ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + durable checkpoint（stop_reason=BUDGET_LIMIT）"}
+  ON_NO_PROGRESS: {impl: wrapper, detail: "loop breaker → checkpoint + 退出"}
+  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}

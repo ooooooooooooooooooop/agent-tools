@@ -29,6 +29,7 @@ from dsh_runtime import DshCompositionError, apply as apply_dsh_runtime
 from dsh_runtime import inspect as inspect_dsh_runtime
 from dsh_runtime import rollback as rollback_dsh_runtime
 from dsh_runtime import validate_contract as validate_dsh_contract
+import policy_projection
 
 ROOT = Path(__file__).resolve().parents[2]          # repo root (scripts/aic/aic.py)
 REG = ROOT / "registry"
@@ -125,6 +126,65 @@ def adapter_overlay() -> dict:
     return load_yaml(REG / "harnesses" / "dsh-overlay.yaml")
 
 
+# ---------------------------------------------------------------- autonomous execution governance
+
+GOV_BLOCK_ID = "AUTONOMOUS_EXECUTION_GOVERNANCE"
+GOV_BLOCK_SLUG = "autonomous-execution-governance"
+MANAGED_BLOCK_FIELDS = {"<continuous-capability-adoption>", f"<{GOV_BLOCK_SLUG}>"}
+
+
+def load_governance_policy() -> dict:
+    return load_yaml(REG / "autonomous-execution-governance.yaml")
+
+
+def load_execution_profiles() -> dict:
+    return load_yaml(REG / "execution-profiles.yaml")
+
+
+def governance_block_text() -> str:
+    """The exact canonical text AIC projects into harness instruction files."""
+    gov = load_governance_policy()
+    text = gov["generated_instructions"]
+    return text.strip() + "\n"
+
+
+def render_governance_profiles() -> dict:
+    """Deterministic JSON projection of execution-profiles.yaml (generated state).
+
+    Consumed by the DSH runtime governor plugin; full-file diff/apply managed by
+    the dsh harness contract target `governance-profiles`.
+    """
+    eps = load_execution_profiles()
+    out = {
+        "schema_version": 1,
+        "generated_by": "aic render dsh",
+        "source": "registry/execution-profiles.yaml",
+        "policy_ref": "registry/autonomous-execution-governance.yaml",
+        "profiles": {},
+    }
+    for name, p in eps.get("profiles", {}).items():
+        b = p.get("budgets", {})
+        out["profiles"][name] = {
+            "session_limits": b.get("session", {}),
+            "task_limits": b.get("task", {}),
+            "agent_turns": b.get("agent_turns"),
+            "provider_calls": b.get("provider_calls"),
+            "input_tokens": b.get("input_tokens"),
+            "cached_input_tokens": b.get("cached_input_tokens"),
+            "output_tokens": b.get("output_tokens"),
+            "cost_usd": b.get("cost_usd"),
+            "runtime_min": b.get("runtime_min"),
+            "model_tier_default": p.get("model_tier_default"),
+            "bulk_worker_tier_default": p.get("bulk_worker_tier_default"),
+            "checkpoint_cadence_turns": p.get("checkpoint_cadence_turns"),
+            "loop_breaker": p.get("loop_breaker"),
+            "retry_bounds": p.get("retard"),
+            "batch_default": p.get("batch_default"),
+            "context_budget_tokens": p.get("context_budget_tokens"),
+        }
+    return out
+
+
 def find_row(rows: list, row_id: str):
     """Find a cordis row by id, recursing into cordis:group config lists."""
     for row in rows or []:
@@ -184,14 +244,31 @@ def cmd_render(args) -> int:
     canonical = load_canonical()
     overlay = adapter_overlay()
     expected = render_settings(canonical, overlay)
+    policy_target = _policy_render_target("dsh")
+    gov_target = _governance_render_target("dsh")
     if args.out:
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)
         with (outdir / "settings.yaml").open("w", encoding="utf-8") as fh:
             yaml.safe_dump(expected, fh, allow_unicode=True, sort_keys=False)
+        if policy_target and policy_target.get("generated_instruction"):
+            (outdir / "AGENTS.md.generated").write_text(
+                policy_target["generated_instruction"] + "\n", encoding="utf-8")
+        if gov_target and gov_target.get("generated_instruction"):
+            (outdir / "AGENTS.md.autonomous-execution-governance.generated").write_text(
+                gov_target["generated_instruction"] + "\n", encoding="utf-8")
+        govdir = outdir / "governance"
+        govdir.mkdir(parents=True, exist_ok=True)
+        (govdir / "execution-profiles.generated.json").write_text(
+            json.dumps(render_governance_profiles(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
         print(f"rendered -> {outdir / 'settings.yaml'}")
     else:
-        print(yaml.safe_dump(expected, allow_unicode=True, sort_keys=False))
+        print(yaml.safe_dump({"settings": expected,
+                              "policy_projection": policy_target,
+                              "governance_projection": gov_target,
+                              "governance_profiles": render_governance_profiles()},
+                             allow_unicode=True, sort_keys=False))
     return 0
 
 
@@ -235,7 +312,23 @@ def cmd_diff(args) -> int:
     findings: list[tuple[str, str, object, object]] = []
 
     for target in contract["render_targets"]:
+        if target["mode"] == "managed-instruction-block":
+            continue
         actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
+        if target["id"] == "governance-profiles":
+            if not actual_path.is_file():
+                findings.append((target["path"], "<file>", "present", "missing"))
+                continue
+            try:
+                actual_json = json.loads(actual_path.read_text(encoding="utf-8-sig"))
+            except Exception as exc:  # noqa: BLE001
+                findings.append((target["path"], "<json>", "valid json", f"INVALID: {exc}"))
+                continue
+            raw = []
+            deep_diff(render_governance_profiles(), actual_json, "", raw)
+            for field, exp, act in raw:
+                findings.append((target["path"], field, exp, act))
+            continue
         if not actual_path.is_file():
             findings.append((target["path"], "<file>", "present", "missing"))
             continue
@@ -272,6 +365,15 @@ def cmd_diff(args) -> int:
     print(f"[metadata] opaque_paths ({len(opaque_found)}): "
           + (", ".join(sorted(opaque_found)) if opaque_found else "none"))
 
+    policy_row = _policy_diff_row("dsh")
+    if policy_row and not policy_row["ok"]:
+        findings.append((str(_policy_target_path("dsh")), policy_row["field"],
+                         policy_row["expected"], policy_row["actual"]))
+    gov_row = _governance_diff_row("dsh")
+    if gov_row and not gov_row["ok"]:
+        findings.append((str(_policy_target_path("dsh")), gov_row["field"],
+                         gov_row["expected"], gov_row["actual"]))
+
     if not findings and not runtime_findings:
         print("NO DRIFT")
         return 0
@@ -282,6 +384,89 @@ def cmd_diff(args) -> int:
 
 
 # ---------------------------------------------------------------- validate
+
+def _validate_governance() -> list[str]:
+    """AUTONOMOUS_EXECUTION_GOVERNANCE canonical consistency checks."""
+    errors: list[str] = []
+    try:
+        gov = load_governance_policy()
+    except Exception as exc:  # noqa: BLE001
+        return [f"autonomous-execution-governance.yaml: unreadable: {exc}"]
+    if gov.get("schema_version") != 1:
+        errors.append("autonomous-execution-governance.yaml: schema_version != 1")
+    if "generated_instructions" not in gov:
+        errors.append("autonomous-execution-governance.yaml: missing generated_instructions")
+    hooks = gov.get("harness_hook_matrix", {}).get("hooks", [])
+    if len(hooks) != 8:
+        errors.append(f"autonomous-execution-governance.yaml: hook list != 8 ({len(hooks)})")
+    rows = gov.get("harness_hook_matrix", {}).get("rows", [])
+    names = {r.get("harness") for r in rows}
+    if names != {"dsh", "codex", "claude", "gemini", "switchboard"}:
+        errors.append(f"autonomous-execution-governance.yaml: matrix harness set "
+                      f"mismatch: {sorted(names)}")
+    for row in rows:
+        mech = row.get("mechanisms", {})
+        missing = [h for h in hooks if h not in mech]
+        if missing:
+            errors.append(f"autonomous-execution-governance.yaml: harness "
+                          f"{row.get('harness')} missing hook rows {missing}")
+    try:
+        eps = load_execution_profiles()
+    except Exception as exc:  # noqa: BLE001
+        return errors + [f"execution-profiles.yaml: unreadable: {exc}"]
+    profs = eps.get("profiles", {})
+    if len(profs) != 6:
+        errors.append(f"execution-profiles.yaml: expected 6 profiles, got {len(profs)}")
+    for name, p in profs.items():
+        b = p.get("budgets", {})
+        for key in ("intent", "budgets", "model_tier_default",
+                    "checkpoint_cadence_turns", "loop_breaker", "retard"):
+            if key not in p:
+                errors.append(f"execution-profiles.yaml[{name}]: missing {key}")
+        if "task" not in b or "session" not in b:
+            errors.append(f"execution-profiles.yaml[{name}]: budgets.task/session missing")
+        for bk in ("provider_calls", "agent_turns", "input_tokens",
+                   "cached_input_tokens", "output_tokens", "cost_usd", "runtime_min"):
+            if bk not in b:
+                errors.append(f"execution-profiles.yaml[{name}]: budgets.{bk} missing")
+        for bk in ("provider_calls", "input_tokens", "cached_input_tokens",
+                   "output_tokens", "cost_usd", "runtime_min"):
+            v = b.get(bk)
+            if not isinstance(v, (int, float)) or v < 0:
+                errors.append(f"execution-profiles.yaml[{name}]: bad budgets.{bk}={v!r}")
+        t = b.get("agent_turns")
+        if t is not None and (not isinstance(t, int) or t <= 0):
+            errors.append(f"execution-profiles.yaml[{name}]: budgets.agent_turns invalid")
+        session_t = b.get("session", {}).get("agent_turns")
+        if session_t is not None and (not isinstance(session_t, int) or session_t <= 0):
+            errors.append(f"execution-profiles.yaml[{name}]: session.agent_turns invalid")
+        lb = p.get("loop_breaker", {})
+        if not (isinstance(lb.get("soft_window"), int) and
+                isinstance(lb.get("hard_window"), int)):
+            errors.append(f"execution-profiles.yaml[{name}]: loop_breaker windows invalid")
+    try:
+        ck = load_yaml(REG / "checkpoint-schema.yaml")
+        if ck.get("schema_version") != 1 or "fields" not in ck:
+            errors.append("checkpoint-schema.yaml: invalid (schema_version/fields)")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"checkpoint-schema.yaml: unreadable: {exc}")
+    try:
+        ul = load_yaml(REG / "usage-ledger-schema.yaml")
+        if ul.get("schema_version") != 1 or "record_fields" not in ul:
+            errors.append("usage-ledger-schema.yaml: invalid")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"usage-ledger-schema.yaml: unreadable: {exc}")
+    for hname in ("dsh", "codex", "claude", "gemini", "switchboard"):
+        try:
+            hc = harness_contract(hname)
+        except Exception:  # noqa: BLE001
+            continue
+        gh = hc.get("governance_hooks", {})
+        missing = [h for h in hooks if h not in gh]
+        if missing:
+            errors.append(f"harnesses/{hname}.yaml: governance_hooks missing {missing}")
+    return errors
+
 
 def cmd_validate(_args) -> int:
     errors: list[str] = []
@@ -332,6 +517,11 @@ def cmd_validate(_args) -> int:
     # Migration #5: multi-harness contract validation
     admitted_ids = {m["id"] for m in models}
     pgw = load_private_gateways()
+    try:
+        policy_projection.load_policy(PRIVATE_STATE)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"personal-ai-state/state/preferences.md: {exc}")
+
     for hname in ("codex", "claude", "gemini", "switchboard"):
         try:
             hc = harness_contract(hname)
@@ -348,6 +538,8 @@ def cmd_validate(_args) -> int:
                     resolve_expected(fspec, canonical, hc, pgw)
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"harnesses/{hname}.yaml: unresolvable {fspec.get('path')}: {exc}")
+
+    errors += _validate_governance()
 
     if errors:
         print("INVALID:")
@@ -484,6 +676,13 @@ def cmd_discover(_args) -> int:
 
 PRIVATE_STATE = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
 INSTRUCTION_SYNC_GROUP = ("codex", "claude", "gemini")
+POLICY_TARGETS = {
+    "dsh": (".dsh", "AGENTS.md"),
+    "codex": (".codex", "AGENTS.md"),
+    "claude": (".claude", "CLAUDE.md"),
+    "gemini": (".gemini", "GEMINI.md"),
+    "switchboard": (".agent-broker", "AGENT_GROUND_RULES.md"),
+}
 
 
 def load_private_gateways() -> dict:
@@ -493,6 +692,76 @@ def load_private_gateways() -> dict:
 
 def harness_contract(name: str) -> dict:
     return load_yaml(REG / "harnesses" / f"{name}.yaml")
+
+
+def _policy_target_path(name: str) -> Path | None:
+    target = POLICY_TARGETS.get(name)
+    return Path.home() / target[0] / target[1] if target else None
+
+
+def _policy_diff_row(name: str) -> dict | None:
+    path = _policy_target_path(name)
+    if path is None:
+        return None
+    try:
+        policy_text = policy_projection.load_policy(PRIVATE_STATE)
+    except Exception as exc:  # noqa: BLE001
+        return {"file": path.name, "field": "<continuous-capability-adoption>",
+                "expected": policy_projection.POLICY_ID,
+                "actual": f"CANONICAL_UNAVAILABLE: {type(exc).__name__}: {exc}", "ok": False}
+    text = path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+    ok, observed = policy_projection.inspect_managed_block(text, policy_text)
+    return {"file": path.name, "field": "<continuous-capability-adoption>",
+            "expected": "generated projection of personal-ai-state/state/preferences.md",
+            "actual": observed, "ok": ok}
+
+
+def _policy_render_target(name: str) -> dict | None:
+    path = _policy_target_path(name)
+    if path is None:
+        return None
+    try:
+        policy_text = policy_projection.load_policy(PRIVATE_STATE)
+        return {"file": path.name, "generated_instruction": policy_projection.render_managed_block(policy_text),
+                "source": "personal-ai-state/state/preferences.md",
+                "owner": "aic"}
+    except Exception as exc:  # noqa: BLE001
+        return {"file": path.name, "generated_instruction": None,
+                "source": "personal-ai-state/state/preferences.md",
+                "owner": "aic", "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _governance_diff_row(name: str) -> dict | None:
+    path = _policy_target_path(name)
+    if path is None:
+        return None
+    try:
+        expected = governance_block_text()
+    except Exception as exc:  # noqa: BLE001
+        return {"file": path.name, "field": f"<{GOV_BLOCK_SLUG}>",
+                "expected": GOV_BLOCK_ID,
+                "actual": f"CANONICAL_UNAVAILABLE: {type(exc).__name__}: {exc}", "ok": False}
+    text = path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+    ok, observed = policy_projection.inspect_managed_block_for(GOV_BLOCK_SLUG, text, expected)
+    return {"file": path.name, "field": f"<{GOV_BLOCK_SLUG}>",
+            "expected": "generated projection of registry/autonomous-execution-governance.yaml",
+            "actual": observed, "ok": ok}
+
+
+def _governance_render_target(name: str) -> dict | None:
+    path = _policy_target_path(name)
+    if path is None:
+        return None
+    try:
+        expected = governance_block_text()
+        return {"file": path.name,
+                "generated_instruction": policy_projection.render_managed_block_for(GOV_BLOCK_SLUG, expected),
+                "source": "registry/autonomous-execution-governance.yaml",
+                "owner": "aic"}
+    except Exception as exc:  # noqa: BLE001
+        return {"file": path.name, "generated_instruction": None,
+                "source": "registry/autonomous-execution-governance.yaml",
+                "owner": "aic", "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _dig(node, dotted: str):
@@ -603,6 +872,12 @@ def diff_harness(name: str) -> list:
         rows.append({"file": "instructions", "field": "<sync-group>",
                      "expected": "identical across codex/claude/gemini",
                      "actual": json.dumps(hashes), "ok": ok})
+    policy_row = _policy_diff_row(name)
+    if policy_row:
+        rows.append(policy_row)
+    gov_row = _governance_diff_row(name)
+    if gov_row:
+        rows.append(gov_row)
     return rows
 
 
@@ -622,6 +897,12 @@ def render_harness(name: str) -> dict:
                 for f in target.get("generated_fields", [])}
             entry["overlay"] = "preserved (not rendered)"
         projection["targets"].append(entry)
+    policy_target = _policy_render_target(name)
+    if policy_target:
+        projection["targets"].append(policy_target)
+    gov_target = _governance_render_target(name)
+    if gov_target:
+        projection["targets"].append(gov_target)
     return projection
 
 
@@ -801,9 +1082,45 @@ def _classify_drift(name: str, harness: dict, drift: list) -> tuple[dict, set, l
             continue
         if r["file"] in check_files or r["field"] == "<sync-group>":
             soft.append(r)
+        elif r["field"] in MANAGED_BLOCK_FIELDS:
+            continue  # separately applied from canonical managed blocks
         else:
             hard.append(r)
     return writable, creatable, hard, soft
+
+
+def _apply_policy_projection(name: str) -> tuple[int, str | None]:
+    """Apply all aic-owned managed instruction blocks (capability-adoption +
+    autonomous-execution-governance) into the target instruction file.
+
+    Both blocks are rendered from canonical (preferences.md / registry YAML);
+    hand edits anywhere inside a block are rejected (CHECKSUM_MISMATCH).
+    """
+    path = _policy_target_path(name)
+    if path is None:
+        return 0, None
+    try:
+        cap_text = policy_projection.load_policy(PRIVATE_STATE)
+        gov_text = governance_block_text()
+        existing = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+        updated = existing
+        applied: list[str] = []
+        for slug, canon in (("continuous-capability-adoption", cap_text),
+                            (GOV_BLOCK_SLUG, gov_text)):
+            updated, status = policy_projection.update_managed_block_for(slug, updated, canon)
+            if status == "updated":
+                applied.append(slug)
+    except Exception as exc:  # noqa: BLE001
+        print(f"APPLY {name}: REVIEW_REQUIRED — managed blocks: {exc}")
+        return 1, None
+    if not applied:
+        return 0, None
+    if not path.parent.is_dir():
+        print(f"APPLY {name}: OPTIONAL_NOT_INSTALLED（{path.parent} 不存在，跳过 managed projection）")
+        return 4, None
+    _apply_backup(name, path)
+    _atomic_write_text(path, updated)
+    return 0, f"applied {path.name}: {', '.join(applied)}"
 
 
 def _apply_generic(name: str) -> tuple[int, list[str]]:
@@ -824,6 +1141,7 @@ def _apply_generic(name: str) -> tuple[int, list[str]]:
         print(f"APPLY {name}: NO DRIFT")
         return 0, []
 
+    policy_drift = any(r["field"] in MANAGED_BLOCK_FIELDS for r in drift)
     writable, creatable, hard, soft = _classify_drift(name, harness, drift)
     msgs: list[str] = []
     for r in soft:
@@ -834,6 +1152,12 @@ def _apply_generic(name: str) -> tuple[int, list[str]]:
             print(f"APPLY {name}: REVIEW_REQUIRED — 非 generated drift "
                   f"file={r['file']} field={r['field']}（OVERLAY/UNKNOWN 不写）")
         return 1, msgs
+    if policy_drift:
+        prc, pmsg = _apply_policy_projection(name)
+        if prc not in (0, 4):
+            return prc, msgs
+        if pmsg:
+            msgs.append(pmsg)
     # 只处理 writable drift（soft 已报告、hard 已拦截）
     by_file: dict[str, list] = {}
     for r in drift:
@@ -841,7 +1165,15 @@ def _apply_generic(name: str) -> tuple[int, list[str]]:
                 (r["field"] == "<file>" and r["file"] in creatable):
             by_file.setdefault(r["file"], []).append(r)
     if not by_file:
-        print(f"APPLY {name}: 无可写 generated drift（仅 owner-owned 余项）")
+        bad = [r for r in diff_harness(name) if not r["ok"]]
+        policy_left = [r for r in bad if r["field"] in MANAGED_BLOCK_FIELDS]
+        if policy_left:
+            print(f"APPLY {name}: FAIL_ROLLED_BACK — policy projection 仍有 drift")
+            return 3, msgs
+        if msgs:
+            print(f"APPLY {name}: OK (policy projection, post-diff current)")
+        else:
+            print(f"APPLY {name}: 无可写 generated drift（仅 owner-owned 余项）")
         return 0, msgs
     changed_files = []
     for fname, fdrift in by_file.items():
@@ -916,14 +1248,15 @@ def _apply_generic(name: str) -> tuple[int, list[str]]:
     _, _, hard_post, _soft_post = _classify_drift(name, harness, bad)
     writable_left = [r for r in bad
                      if f"{r['file']}::{r['field']}" in writable]
-    if writable_left or hard_post:
+    policy_left = [r for r in bad if r["field"] in MANAGED_BLOCK_FIELDS]
+    if writable_left or hard_post or policy_left:
         for fname, backup in changed_files:
             if backup:
                 shutil.copy2(backup, home / fname)
             else:
                 (home / fname).unlink(missing_ok=True)   # apply 新建的文件回滚即删除
         print(f"APPLY {name}: FAIL_ROLLED_BACK — post-diff 仍有 drift "
-              f"{[r['field'] for r in writable_left + hard_post]}，before snapshot 已恢复")
+              f"{[r['field'] for r in writable_left + hard_post + policy_left]}，before snapshot 已恢复")
         return 3, msgs
     print(f"APPLY {name}: OK ({sum(len(v) for v in by_file.values())} field(s), "
           f"post-diff NO DRIFT)")
@@ -936,9 +1269,25 @@ def _dsh_structured_drift() -> dict:
     overlay = adapter_overlay()
     contract = adapter_contract()
     out = {"full_file": [], "cordis": [], "cordis_missing": False,
-           "opaque_undeclared": [], "settings_missing": False}
+           "opaque_undeclared": [], "settings_missing": False,
+           "gov_profiles": [], "gov_profiles_missing": False}
     for target in contract["render_targets"]:
+        if target["mode"] == "managed-instruction-block":
+            continue
         actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
+        if target["id"] == "governance-profiles":
+            if not actual_path.is_file():
+                out["gov_profiles_missing"] = True
+                continue
+            try:
+                actual = json.loads(actual_path.read_text(encoding="utf-8-sig"))
+            except Exception as exc:  # noqa: BLE001
+                out["gov_profiles"].append(("<json>", "valid json", f"INVALID: {exc}"))
+                continue
+            raw = []
+            deep_diff(render_governance_profiles(), actual, "", raw)
+            out["gov_profiles"].extend(raw)
+            continue
         if not actual_path.is_file():
             if target["mode"] == "full-file":
                 out["settings_missing"] = True
@@ -967,7 +1316,8 @@ def _apply_dsh() -> tuple[int, list[str]]:
     contract = adapter_contract()
     d = _dsh_structured_drift()
     if not any([d["full_file"], d["cordis"], d["cordis_missing"],
-                d["opaque_undeclared"], d["settings_missing"]]):
+                d["opaque_undeclared"], d["settings_missing"],
+                d["gov_profiles"], d["gov_profiles_missing"]]):
         print("APPLY dsh: NO DRIFT")
         return 0, []
     msgs: list[str] = []
@@ -980,6 +1330,8 @@ def _apply_dsh() -> tuple[int, list[str]]:
               "不自动重建；不阻塞 settings 修复）")
     written: list[tuple[Path, Path | None]] = []
     for target in contract["render_targets"]:
+        if target["mode"] == "managed-instruction-block":
+            continue
         actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
         if target["mode"] == "full-file" and (d["full_file"] or d["settings_missing"]):
             if d["settings_missing"] and not dsh_home().is_dir():
@@ -995,6 +1347,17 @@ def _apply_dsh() -> tuple[int, list[str]]:
                 render_settings(canonical, overlay), allow_unicode=True, sort_keys=False))
             written.append((actual_path, backup))
             msgs.append(f"applied settings: {[f for f, _, _ in d['full_file']] or ['<file>']}")
+        elif target["mode"] == "full-file-json" and (d["gov_profiles"] or d["gov_profiles_missing"]):
+            if d["gov_profiles_missing"] and not dsh_home().is_dir():
+                print("APPLY dsh: OPTIONAL_NOT_INSTALLED")
+                return 4, msgs
+            actual_path.parent.mkdir(parents=True, exist_ok=True)
+            backup = _apply_backup("dsh", actual_path)
+            _atomic_write_text(actual_path, json.dumps(
+                render_governance_profiles(), ensure_ascii=False, indent=2) + "\n")
+            written.append((actual_path, backup))
+            msgs.append(f"applied governance-profiles: "
+                        f"{[f for f, _, _ in d['gov_profiles']] or ['<file>']}")
         elif target["mode"] == "field-projection" and d["cordis"]:
             text = actual_path.read_text(encoding="utf-8-sig")
             new_text = text
@@ -1014,9 +1377,9 @@ def _apply_dsh() -> tuple[int, list[str]]:
     if not written:
         print("APPLY dsh: 无可写 generated drift")
         return 0, msgs
-    # post-apply：full_file/cordis 必须清零；cordis_missing 属 soft 余项允许存在
+    # post-apply：full_file/cordis/gov_profiles 必须清零；cordis_missing 属 soft 余项允许存在
     post = _dsh_structured_drift()
-    if post["full_file"] or post["cordis"] or post["opaque_undeclared"]:
+    if post["full_file"] or post["cordis"] or post["opaque_undeclared"] or post["gov_profiles"]:
         for live, backup in written:
             if backup:
                 shutil.copy2(backup, live)
@@ -1053,10 +1416,10 @@ def cmd_apply(args) -> int:
     if not dev.is_file():
         cmd_discover(args)
     if target == "dsh":
-        # Existing callers that construct the small unit-test Args object do
-        # not carry CLI-only options. Keep their settings projection explicit;
-        # the real CLI defaults to the complete runtime composition.
-        if not hasattr(args, "settings_only"):
+        prc, _ = _apply_policy_projection("dsh")
+        if prc not in (0, 4):
+            rc = prc
+        elif not hasattr(args, "settings_only"):
             rc, _ = _apply_dsh()
         elif args.settings_only:
             rc, _ = _apply_dsh()
