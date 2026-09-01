@@ -1,0 +1,20 @@
+# ============================================================================
+# workflow-model-preflight-gate：workflow 工具模型准入门禁 —— cordis.patch.yml 片段
+#
+# 用法：把下面的条目合并进 <你的DSH profile>/cordis.patch.yml
+#   （如 ~/.dsh/profiles/web/cordis.patch.yml），并把插件文件
+#   workflow-model-preflight-gate.mjs 复制到同 profile 的 plugins/ 目录。
+#
+# 效果：workflow 工具执行前（ctx.tools.guard 单调守卫层，dispatch 之前）检查脚本中
+#   所有 model/provider 字面量是否在 ~/.dsh/settings.yaml 已准入；
+#   未准入但有显式 fallback 规则 → 拒绝并在反馈中给出解析后的替代模型；
+#   未准入且无规则 → fail closed 阻断。决策写入 workflow-preflight-audit.jsonl。
+#
+# 依据：dsh-workflow-worker-thread 对 agent(...,{model}) 仅做类型检查并透传，
+#   未准入模型在子代理首次 LLM 请求时才抛 UNKNOWN_MODEL（dsh-llm-pi-ai），
+#   造成 N-started/N-null 事故。本门禁在 dispatch 前拦截，不改上游源码。
+# ============================================================================
+
+- insert:
+  - id: workflow-model-preflight-gate
+    name: './plugins/workflow-model-preflight-gate.mjs'
