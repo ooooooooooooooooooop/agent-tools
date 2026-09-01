@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Unit and Regression Test Suite for Workflow Subagent Governance (Scenarios A through M)
 """
@@ -136,7 +136,8 @@ class TestWorkflowGovernanceScenarios(unittest.TestCase):
 
     # K. policy 鏈０鏄?fallback 鏃跺繀椤?fail closed
     def test_scenario_K_policy_undeclared_fallback_fails_closed(self):
-        # 鍏抽棴 fallback 鎴栬姹傛棤 fallback 瑙勫垯鐨勬ā鍨?        res = self.router.resolve_target("unmapped-model-x", "cpa", allow_fallback=True)
+        # 鍏抽棴 fallback 鎴栬姹傛棤 fallback 瑙勫垯鐨勬ā鍨?
+        res = self.router.resolve_target("unmapped-model-x", "cpa", allow_fallback=True)
         self.assertEqual(res["status"], "unresolved")
 
         # 鍗充娇鏄?luna锛屽鏋滄樉寮忕姝?fallback 涔熷繀椤?fail closed
@@ -158,7 +159,7 @@ class TestWorkflowGovernanceScenarios(unittest.TestCase):
 
     # M. 鐪熷疄澶氬瓙浠ｇ悊 workflow 娴佺▼锛歅re-flight 楠岃瘉 + 閫昏緫瑙掕壊瑙ｆ瀽锛屽叏绋嬫棤闇€鐢ㄦ埛浠嬪叆
     def test_scenario_M_end_to_end_workflow_preflight_and_execution(self):
-        # 瀹氫箟鍖呭惈 10 涓瓙浠诲姟鐨?workflow 瑙勮寖锛堜娇鐢ㄩ€昏緫瑙掕壊锛岄伩鍏嶇‖缂栫爜骞昏锛?        workflow_spec = [
+        workflow_spec = [
             {"label": f"cluster-{i+1}", "phase": "Cluster designs", "model": "cheap_executor"}
             for i in range(6)
         ] + [
