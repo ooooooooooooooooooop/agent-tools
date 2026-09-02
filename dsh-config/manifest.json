@@ -1,13 +1,26 @@
 {
   "dsh_home_src": "C:\\Users\\admin\\.dsh",
   "digests": {
-    "AGENTS.md": "89946c3caa6696db78cd2205b76685ab54d9b7622813b12b913bba8f5969e500",
-    "profiles/web/cordis.patch.yml": "3756e39a381600304ce2afc6fd8cbf8b8a2ce49fc673d749c7ee1fe2e8f56157",
+    "AGENTS.md": "751576a5e2f4ae7d5554f3f3a2197d5319981ff54806b43511757efc02308c53",
+    "profiles/web/base-distribution.json": "cf30d141fd42b99797d4ee18dcf833138be8418cfd722cc1c5de082791136611",
+    "profiles/web/cordis.patch.yml": "b60fe9618316320848ba6b822b79dedf84d5e0b4323c752c97d20bca3a6f421d",
     "profiles/web/cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
-    "profiles/web/package.json": "b92d12de806b043428fb54d1c774515b10b5880e250a54004ddec89582d8050a",
-    "profiles/web/pnpm-lock.yaml": "64d61d6da3afba1a26c17e68a782eb7baa30a41f6a1bce7f587857829fe31f58",
+    "profiles/web/dsh-launch-web.ps1": "111865555440d6181f18cc5ac379bb29cb5cd87a1496fa7be7f3d1732e169b95",
+    "profiles/web/dsh-runtime-composition.json": "45d9d5f519525735702d8ca32694cc422e1fda679094d93e2e30effda9f8f543",
+    "profiles/web/package.json": "9a8261ead399e2c3c407223251b77c1372faec11e8311f1da2ddc2472d3ff002",
+    "profiles/web/pnpm-lock.yaml": "7ea70c288a34d16ab0713097036b571d164cd34e198e288adcece6ff9332e035",
     "profiles/web/pnpm-workspace.yaml": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba",
+    "profiles/web/.dsh-context-lifecycle/11d2e3752da1694a005f5072a5af42d2.json": "5a4dc81da1d59e0e0ed84185edcf12ccc699e87471002e9e01b87c61cc46a563",
+    "profiles/web/.dsh-context-lifecycle/5644c579d3fd8c4d80bdd2ad0c881c53.json": "f820b23ebcd7f073dd05b05cf630226efebe90f7519986e01452d9f41641f06c",
+    "profiles/web/.dsh-context-lifecycle/92d569a28ad28f89c5b1568671d25034.json": "57bae1dee3cfddb7fa66302f53d09e2df43f96a14927bd7b92b54b75dd9c55d6",
+    "profiles/web/.dsh-context-lifecycle/restart-25780.json": "19e92c8f40ef7f4be687ecd7d580f767df196ed40318daa3693499ecf4199934",
+    "profiles/web/.dsh-context-lifecycle/restart-38676.json": "3232a3ef728bb617ab2eb54ff03c4dc8f6f6056e51c10f1a15a3d2d804555aa9",
+    "profiles/web/.dsh-context-lifecycle/restart-40220.json": "71a77af2a62dbb40cfd29c4c8f65c3de642c3bd295c3d941d59934ad991c125f",
+    "profiles/web/.dsh-context-lifecycle/restart-40580.json": "c78318eb055389e0f9969b72048f36f97cfc0872cd68c2896476f72866b1fea3",
+    "profiles/web/.dsh-context-lifecycle/restart-46012.json": "9a3129605f533ba40543de5aee1b0d7ab3258e96f44a3689694fb645025f915c",
+    "profiles/web/.dsh-context-lifecycle/restart-7000.json": "0e39cbfbbd6a294571bdb45cf739c46be68493208527522e786773d398b669df",
     "profiles/web/.dsh-market/state.json": "ddfaa6d183263701072d5de40be0abe00e7d9abc68e70081782cd08f4a5bb8f1",
+    "profiles/web/base-dsh-0.1.1-rc.2/package.json": "d4e641140b58ef9568f087a6ba3f49c850754de3c5effe7bbcaf15a0bfc6bd75",
     "profiles/web/plugins/compaction-summarization-fallback.mjs": "7d5478a079fb343466dcc00f5c55fddeda17ef63559cbde9aa76d06e9cf7e834",
     "profiles/web/plugins/dsh-subagent-context-summary.js": "0f45aa4b8327adc0f0eba70c6ec3a7a33661e9abd793dc3d7bc3bc3bf87d39d6",
     "profiles/web/plugins/model-persona.js": "e88be2bc3d303a9e78f2efb560583623bffec0d0f6aaea9f35f3d88fa4fb2fd1",
@@ -17,6 +30,22 @@
     "profiles/web/plugins/subagent-splice-summarizer-v1.mjs": "082d70487c9dfed603df9fee5a5aa08ea65960262dc01e674b20718e02d8e946",
     "profiles/web/plugins/subagent-usage-observer-v1.mjs": "51df6e46ed47314ea756f00525863cffd64eb762a3e5c4fdc3411f4761b64fd6",
     "profiles/web/plugins/web-search-adapter.js": "701dd4266789a51128d18387c3df2b00e79352d6bff2a49ae7c32c5216e5fae0",
+    "profiles/web/plugins/dsh-agent-loop-pressure-guard/package.json": "db9ce51169de39cc51c2c341612286ed31f991423eea7a23471012ddd24d7b60",
+    "profiles/web/plugins/dsh-agent-loop-pressure-guard/lib/index.js": "2b0edda65e3ac8a807b6f45d77ba1ea8c7686b0235b47300f717b84ee4f44e4c",
+    "profiles/web/plugins/dsh-autonomous-execution-governor/autonomous-execution-governor.mjs": "c7a41db942f99cd57a52b6905363df7cd56acc92d1a3bfb1a75726ab36d502a1",
+    "profiles/web/plugins/dsh-autonomous-execution-governor/cordis.patch.yml": "e30bdf367f1f7b90be9fe9d294bd33bdcb90283d15247f4511e510296286f653",
+    "profiles/web/plugins/dsh-autonomous-execution-governor/README.md": "2997ab8498dc4c611dda3b473d9d991e97c6b05b6e9d0ada000e76b4880eca2e",
+    "profiles/web/plugins/dsh-autonomous-execution-governor/test-governor-run.mjs": "e6b9059097292875884de88a37c58f22d2af10a70309c22f9f5bf9f4d2afb711",
+    "profiles/web/plugins/dsh-autonomous-execution-governor/test-governor.mjs": "5efdd7cfd8d768a4503462a335a2343704cdde91f176de014db1e968cca7c41f",
+    "profiles/web/plugins/dsh-compaction-convergence/package.json": "c6321cb9363302214a06c7b3fb1641b42361a62be734e8f3f18b641a6bba9a79",
+    "profiles/web/plugins/dsh-compaction-convergence/lib/.dsh-convergence.json": "bfb5efef9b4c9ed35aede8b1e6f3ce7d6e8642c222a3456e5a09dc3cc095cb76",
+    "profiles/web/plugins/dsh-compaction-convergence/lib/index.js": "b0fb29b66b9c57342067dd7dd445b65e0f8c0f30d3d601b1859bc81b305cf5d7",
+    "profiles/web/plugins/dsh-context-lifecycle/package.json": "bf89d76e11955e66c0cb797c0a2106103dd4b02d7d1f857b41e2463a8e2df7e0",
+    "profiles/web/plugins/dsh-context-lifecycle/lib/index.js": "cfeaa33032ee35b7001623e5531a8d96d5544ca23b5cb077bccb28645278f39c",
+    "profiles/web/plugins/dsh-token-meter-pressure-guard/package.json": "c15bb7c7b0e3f3aabf0df12b1b4523c873c3e21640ee4c3055e0ea6ec75979ed",
+    "profiles/web/plugins/dsh-token-meter-pressure-guard/lib/index.js": "37c168e2d6e286dae71ebc74631f65b28037dfe277eb73461fc284bfbb86497a",
+    "profiles/web/plugins/dsh-tool-result-pruner-pressure-guard/package.json": "c36b095c7f950ffd698998ab8ec40d8f5332c5b4575ae3506535c73d1dfa2215",
+    "profiles/web/plugins/dsh-tool-result-pruner-pressure-guard/lib/index.js": "5f3f12e852d4f9bdf4b461a6007ae074d6feaa3965e2d78a04755a021421b9ea",
     ".agent-presets/cc/agent.cordis.yml": "75e161b4ee67b7ffccffa9c0e9c794db2c2223d65c4ece62904e50c445d4681e",
     ".agent-presets/cc/preset.yml": "84a9accf72e27e9ae7d351a403b88355841f784aaaab9b931b3e1e03598ba48a",
     "patches/README.md": "c420d36907751424d941b3ecab0c624cb6eca0dda8cc4c0e9c0aca6549ca94f1"
@@ -26,6 +55,11 @@
       "profiles/web/cordis.patch.yml": {
         "{{DESKTOP}}": {
           "export_value": "C:\\Users\\admin\\Desktop"
+        }
+      },
+      "profiles/web/.dsh-context-lifecycle/11d2e3752da1694a005f5072a5af42d2.json": {
+        "{{DSH_HOME}}": {
+          "export_value": "C:\\Users\\admin\\.dsh"
         }
       }
     }

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@research-lab/dsh-adapter": "file:C:/Users/admin/Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz",
     "dsh-remote-web-gateway": "^0.2.1",
     "dshmarket": "^1.29.2"
   },

@@ -126,6 +126,45 @@ class TestDshApply(unittest.TestCase):
             after["llm-pi-ai"]["providers"]["bai"]["models"][0]["contextWindow"],
             128000)
 
+    def test_agent_default_model_overlay_preserved_while_provider_drift_repairs(self):
+        import yaml
+        data = json.loads(json.dumps(self.expected))
+        data["agent-default-model"] = {"provider": "cpa", "model": "gemini-3.7-flash-high",
+                                       "reasoningEffort": "user-choice"}
+        data["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"] = "__DRIFT__"
+        (self.dsh / "settings.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        with mock.patch.dict(os.environ, self.env):
+            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
+        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(back["agent-default-model"], data["agent-default-model"])
+        self.assertNotEqual(back["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"],
+                            "__DRIFT__")
+
+    def test_agent_default_model_luna_max_selection_preserved(self):
+        import yaml
+        data = json.loads(json.dumps(self.expected))
+        data["agent-default-model"] = {"provider": "cpa", "model": "gpt-5.6-luna-max"}
+        data["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"] = "__DRIFT__"
+        (self.dsh / "settings.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        with mock.patch.dict(os.environ, self.env):
+            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
+        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(back["agent-default-model"], data["agent-default-model"])
+
+    def test_agent_default_model_invalid_falls_back_to_main_default(self):
+        import yaml
+        data = dict(self.expected)
+        data["agent-default-model"] = {"provider": "not-admitted", "model": "missing"}
+        (self.dsh / "settings.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        with mock.patch.dict(os.environ, self.env):
+            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
+        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(back["agent-default-model"],
+                         {"provider": "cpa", "model": "gpt-5.6-sol-xhigh"})
+
     def test_unknown_section_drift_review(self):
         import yaml
         f = self.home / ".dsh" / "settings.yaml"

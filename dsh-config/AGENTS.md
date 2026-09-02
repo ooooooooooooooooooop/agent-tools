@@ -51,3 +51,57 @@
 - 三连全部做完且确认无路可走（无可用工具、无替代路径、无新增证据、预算耗尽）之前，**禁止**使用 `update_goal action=blocked` 或报告 BLOCKED；
 - "难度大 / 不确定 / 还有可用工作"不是阻塞理由；
 - 方案不依赖人工确认/人工介入：能落到系统层（代码强制、无法绕过）就不写"应当"类建议；需要人工的只有确实不可自行裁决的方向分歧（一次问完）。
+
+<!-- aic:continuous-capability-adoption:begin sha256=6450caf9e8571afbb484771ee6eca06b6e5e8857818d715ef9947cac9cb846db -->
+## CONTINUOUS_CAPABILITY_ADOPTION
+
+- **Policy version**: 1
+- **Owner**: Personal AI
+- **Review cadence**: weekly discovery/evaluation + event-driven review after material Harness/AI-infrastructure changes
+- **Scope**: Harness native capabilities; Agent/Subagent/Workflow orchestration; model invocation and routing; Memory/Long-term Memory; context management/compaction; MCP/Plugin/Tool ecosystems; Browser/Computer Use; multi-agent collaboration; evaluation/observability/provenance; reliability, safety, and cost optimization; and future equivalent foundational AI capabilities.
+
+Personal AI must continuously discover and evaluate mature upstream-native capabilities that may solve real current problems or improve capability, efficiency, quality, stability, safety, auditability, or cost. Prefer established upstream capabilities from DSH, Codex, Claude, Gemini, and other formal dependencies over duplicating equivalent functionality inside Personal AI, unless a documented gap remains.
+
+Discovery is not adoption. A candidate must have explicit user or governance value, evidence, compatibility and cost/risk assessment, and a reversible verification path before admission. “New” alone is never an adoption reason; a currently working system is never a reason to freeze permanently on an obsolete capability set.
+
+After approval, adoption must use the existing capability inventory/registry, AIC render/apply/diff path, deployment/recovery path, drift/governance checks, provenance, and necessary compatibility tests. Discovery output stays generated/proposal-only and must not mutate canonical registries or routing automatically. The target state is continuous use of the best mature and valuable AI/Harness ecosystem capabilities while remaining stable, compatible, rollbackable, and auditable.
+<!-- aic:continuous-capability-adoption:end -->
+
+<!-- aic:autonomous-execution-governance:begin sha256=de5e44d15c5eee9c99c539850f2c299f6f4b4fed1b21ebdb289bf0195a63346d -->
+## AUTONOMOUS_EXECUTION_GOVERNANCE (PERSONAL AI · generated — do not edit)
+
+本块由 Personal AI canonical SSOT 生成（registry/autonomous-execution-governance.yaml
++ execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml），
+由 `aic render/diff` 管理；手改即 drift，会被 `aic diff` 检出并回滚。
+
+- 项目（novel 等）不得自带 autonomous governance 实现；**用户无需声明或手写
+  execution_profile**——任务的 profile 由 Personal AI 自动 admission（分类依据行为特征：
+  批量/重复、campaign、研究、推理关键性、交互），项目只消费 admission 结果。
+- 硬规则（稳定）：
+  1. 无界自主执行被禁止：任何自主运行必须处于一个 execution_profile，预算 hard
+     enforceable（Harness hook 层 fail closed），超限保存 durable checkpoint
+     （stop_reason=BUDGET_LIMIT），并计入 Usage Ledger。
+  2. 预算数字来自 Personal AI canonical（execution-profiles.yaml）；项目不得复制或
+     修改预算，agent 禁止自动提高自身预算（唯一路径 = 人工批准 + ledger 豁免记录）。
+  3. 重复结构化工作（bulk / 批处理）默认走 batch：manifest → workers → result
+     artifacts → deterministic aggregate；BULK 类 profile 中主 Agent 禁止逐 item
+     reasoning。
+  4. 昂贵模型（FRONTIER_REASONING tier）禁止被硬编码为默认 bulk worker；模型选择
+     由 Personal AI Model/Routing SSOT（registry/models.yaml + routing-policy.yaml）
+     决定。
+  5. 长时间任务必须 CHECKPOINT → COMPACT → RESUME；Checkpoint 写入 Personal AI
+     durable state（personal-ai-state/checkpoints/），resume 读 checkpoint 而非原
+     conversation；cache-read token 计入预算，超限即触发 COMPACT。
+  6. 无进展循环（PROGRESS_DELTA = 0 持续 N 轮；重复相同工具调用 / 错误 / 修复 /
+     judge / provider probe）自动 circuit break，stop_reason=LOOP_BREAKER 落
+     checkpoint；repeated repair 有界（≤3）。
+  7. 所有模型调用计入 Usage Ledger（task/project/harness/model/calls/input/
+     cached/output/cost/progress），支持 COST_PER_PROGRESS 与 runaway 检测。
+  8. **profile admission 自动且先于首次昂贵调用**：UNKNOWN ≠ UNBOUNDED——无法分类的
+     autonomous task 进入安全默认 AUTONOMOUS_STANDARD，绝不落入无约束观察模式；
+     profile widening 受 canonical 规则约束（evidences + reason + receipt，禁止
+     Agent 自行选更宽松 profile；不重置累计 usage、不绕过 hard cap）。
+- Policy pointer（本机全文）：agent-tools 仓库 registry/autonomous-execution-governance.yaml
+  （含 harness_hook_matrix）、registry/execution-profiles.yaml、registry/checkpoint-schema.yaml、
+  registry/usage-ledger-schema.yaml。
+<!-- aic:autonomous-execution-governance:end -->

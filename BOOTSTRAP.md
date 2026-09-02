@@ -93,7 +93,7 @@ Result: PASS
 `dsh-session-history` 状态 = `PASS`（备份与 live 会话数匹配、锚点与 schema 探针通过）/ `NOT_APPLICABLE`（从未配置备份的 fresh 设备，不阻塞）/ `PARTIAL` / `FAIL`。**不得用一个总体 PASS 混合各 plane**；历史缺失时总体 `Result` 一律降为 REVIEW。
 
 
-## 4.1 Harness compatibility overlay（自动恢复）
+## 4.1 Harness compatibility overlay 与外部 Harness 原生化
 
 DSH 的固定 Base、Node、UI bundle、五个 overlay、Profile patch、组合 manifest
 和原子回滚统一由：
@@ -101,6 +101,17 @@ DSH 的固定 Base、Node、UI bundle、五个 overlay、Profile patch、组合 
     DSH_HOME=<HOME>/.dsh python <REPO>/scripts/aic/aic.py apply dsh
 
 负责。不得再直接调用旧的测试安装器；旧安装器仅作为历史取证材料保留。
+
+### 4.2 外部 Harness（Claude Code / Codex）历史残留清理（如需）
+
+Personal AI 管理与治理已收敛为 DSH 独占，外部 Harness 恢复原生独立（`native_independent`）。
+若旧设备上的 Claude Code 或 Codex 曾被注入过历史配置，可按需执行一次性原生化清理：
+- **Claude Code**：
+  - 移除 Switchboard 工具：`claude mcp remove agent-switchboard`
+  - 删除历史注入文件：`~/.claude/CLAUDE.md`、`~/.claude/agents/Explore.md`、`~/.claude/agents/economy-worker.md`
+- **Codex**：
+  - 删除历史注入文件：`~/.codex/AGENTS.md`、`~/.codex/hooks.json`、`~/.codex/agents/*`
+新设备执行 BOOTSTRAP 时默认不会向外部 Harness 写入任何注入文件。
 ## 5. 只有这些情况才报告用户
 
 其余一切问题（含拉取、合并、安装、refresh、重跑）必须自主解决，禁止抛回用户、禁止把门禁输出当交付物。

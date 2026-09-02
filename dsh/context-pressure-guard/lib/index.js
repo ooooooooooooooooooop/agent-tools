@@ -939,7 +939,7 @@ function admissionDecision({ configuredLimit, providerAttestedLimit, estimatedIn
 	const conservativeInput = conservativeInputUpperBound(estimatedInput, inputMultiplier);
 	const outputCap = requestedMaxTokens === void 0 ? operationalMaxOutput : Math.min(requestedMaxTokens, operationalMaxOutput);
 	const availableOutput = limit - conservativeInput - safetyMargin;
-	const allowedOutput = Math.min(outputCap, availableOutput);
+	const allowedOutput = Math.max(0, Math.min(outputCap, availableOutput));
 	return deepFreeze({
 		effectiveLimit: limit,
 		estimatedInput: Math.ceil(estimatedInput),

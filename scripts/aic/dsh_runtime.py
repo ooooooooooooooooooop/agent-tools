@@ -280,6 +280,14 @@ def render_patch(existing: Path | None, cfg: dict[str, Any]) -> tuple[str, str]:
     return ((base + "\n\n" if base else "") + block, sha256_text(block))
 
 
+def _managed_block(text: str) -> str | None:
+    match = re.search(
+        rf"(?ms)^{re.escape(MANAGED_BEGIN)}\n.*?^{re.escape(MANAGED_END)}\n?",
+        text,
+    )
+    return match.group(0) if match else None
+
+
 def _safe_extract_zip(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
@@ -502,20 +510,124 @@ def _resolve_harness_root(home: Path, ui_cfg: dict[str, Any]) -> tuple[Path, str
     return worktree, source_state, cleanup
 
 
-def _verify_ui_source_state(source: Path, ui_cfg: dict[str, Any]) -> None:
-    """Reject a manifest that was built from an unpinned or dirty UI source."""
-    fix = ui_cfg["fix_commit"]
-    if _git_has(source, fix):
-        # AIC builds from a clean detached worktree at this commit, so dirty
-        # unrelated files in the configured checkout do not create runtime
-        # drift. The commit's presence is the recoverable source anchor.
-        return
-    expected = ui_cfg["baseline_commit"]
-    head = _git(source, "rev-parse", "HEAD", timeout=20).strip()
-    if head != expected:
-        raise DshCompositionError(
-            f"UI source baseline drift: expected {expected}, got {head}"
+_SOURCE_STATE_RE = re.compile(
+    r"^(?P<commit>[0-9a-f]{40})"
+    r"(?P<suffix>(?:\+(?:patch|build-patch):[0-9a-f]{64})*)$"
+)
+
+
+def _expected_ui_source_states(ui_cfg: dict[str, Any]) -> list[str]:
+    """Return source provenance strings that the current contract can build."""
+    baseline = str(ui_cfg["baseline_commit"])
+    if not ui_cfg.get("apply_patch", True):
+        return [baseline]
+    patched = f"{baseline}+patch:{ui_cfg['patch_sha256']}"
+    if ui_cfg.get("build_patch_sha256"):
+        patched += f"+build-patch:{ui_cfg['build_patch_sha256']}"
+    states = [patched]
+    if ui_cfg.get("fix_commit_remote") not in (None, "", "unavailable-at-audit"):
+        # A recoverable fix commit is a second valid build input. Which one is
+        # selected is determined by the source checkout's available objects.
+        fix_state = str(ui_cfg["fix_commit"])
+        if ui_cfg.get("build_patch_sha256"):
+            fix_state += f"+build-patch:{ui_cfg['build_patch_sha256']}"
+        states.insert(0, fix_state)
+    return states
+
+
+def _parse_ui_source_state(source_state: str) -> dict[str, str] | None:
+    match = _SOURCE_STATE_RE.fullmatch(source_state)
+    if not match:
+        return None
+    return {"commit": match.group("commit"), "suffix": match.group("suffix")}
+
+
+def _classify_ui_source_state(manifest_ui: dict[str, Any],
+                              ui_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Classify build provenance independently from artifact/runtime drift.
+
+    `sourceState` is an immutable record of the effective UI build input. A
+    changed canonical baseline therefore requires reconciliation, but is not
+    the same thing as a generated/runtime artifact mismatch.
+    """
+    actual = str(manifest_ui.get("sourceState", "") or "")
+    expected = _expected_ui_source_states(ui_cfg)
+    parsed = _parse_ui_source_state(actual)
+    recorded_baseline = str(manifest_ui.get("baselineCommit", "") or "")
+    if (parsed is not None and recorded_baseline and
+            recorded_baseline != parsed["commit"]):
+        kind = "SOURCE_CONTRACT_GAP"
+    elif actual in expected:
+        kind = "CURRENT"
+    elif parsed is None:
+        kind = "SOURCE_CONTRACT_GAP"
+    elif (recorded_baseline == parsed["commit"] and
+          recorded_baseline != str(ui_cfg["baseline_commit"])):
+        # The canonical baseline is current; the deployed manifest is the
+        # stale object. Keep that distinction explicit for incident triage.
+        kind = "STALE_DEPLOYED_RECIPE"
+    elif parsed["commit"] != str(ui_cfg["baseline_commit"]):
+        kind = "SOURCE_ADVANCED"
+    else:
+        # The commit is current but its transformation suffix is not one the
+        # contract can reproduce. This is provenance corruption, not advance.
+        kind = "SOURCE_CONTRACT_GAP"
+    return {
+        "kind": kind,
+        "expected": expected[0] if len(expected) == 1 else expected,
+        "actual": actual or "missing",
+        "sourceCommit": parsed["commit"] if parsed else None,
+        "reconciliationRequired": kind != "CURRENT",
+    }
+
+
+def _git_is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True, text=True, timeout=20,
+            encoding="utf-8", errors="replace",
         )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def _classify_ui_source_checkout(source: Path, ui_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Describe checkout movement without treating dirty work as deployment drift."""
+    head = _git(source, "rev-parse", "HEAD", timeout=20).strip()
+    dirty = bool(_git(source, "status", "--porcelain=v1", "--untracked-files=all", timeout=20).strip())
+    baseline = str(ui_cfg["baseline_commit"])
+    accepted = {baseline}
+    if (ui_cfg.get("apply_patch", True) and
+            ui_cfg.get("fix_commit_remote") not in (None, "", "unavailable-at-audit")):
+        accepted.add(str(ui_cfg["fix_commit"]))
+    if head in accepted:
+        relation = "CURRENT"
+    elif any(_git_is_ancestor(source, ref, head) for ref in accepted):
+        relation = "SOURCE_ADVANCED"
+    elif any(_git_is_ancestor(source, head, ref) for ref in accepted):
+        relation = "SOURCE_ROLLBACK"
+    else:
+        relation = "SOURCE_DIVERGED"
+    return {
+        "kind": relation,
+        "head": head,
+        "dirty": dirty,
+        "dirtyState": "DIRTY_KNOWN" if dirty else "CLEAN",
+        "acceptedRefs": sorted(accepted),
+        "reconciliationRequired": relation in {"SOURCE_ROLLBACK", "SOURCE_DIVERGED"},
+    }
+
+
+def _verify_ui_source_state(source: Path, ui_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return checkout provenance; dirty work is safe because builds detach."""
+    report = _classify_ui_source_checkout(source, ui_cfg)
+    if report["kind"] in {"SOURCE_ROLLBACK", "SOURCE_DIVERGED"}:
+        raise DshCompositionError(
+            f"UI source checkout {report['kind'].lower()}: HEAD={report['head']}"
+        )
+    return report
 
 
 def _pnpm_command() -> str:
@@ -709,6 +821,8 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
     manifest_path = profile / cfg["profile"]["manifest_file"]
     findings: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    source_state_report: dict[str, Any] | None = None
+    source_checkout_report: dict[str, Any] | None = None
 
     def finding(category: str, component: str, expected: Any, actual: Any) -> None:
         findings.append({"category": category, "component": component,
@@ -775,16 +889,22 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             finding("DEPLOYMENT_DRIFT", "ui.web.dist", manifest["ui"]["webDistSha256"], actual_hash)
 
     patch_path = profile / cfg["profile"]["patch_file"]
-    _, managed_hash = render_patch(patch_path if patch_path.is_file() else None, cfg)
+    _, managed_hash = render_patch(None, cfg)
     if not patch_path.is_file():
         finding("CONFIG_DRIFT", "cordis.patch.yml", "present", "missing")
     else:
         actual_patch = patch_path.read_text(encoding="utf-8-sig")
         if MANAGED_BEGIN not in actual_patch or MANAGED_END not in actual_patch:
             finding("CONFIG_DRIFT", "cordis.patch.yml.managed-block", "present", "missing")
-        elif managed_hash != str(manifest.get("cordisPatch", {}).get("managedBlockSha256", "")):
-            finding("CONFIG_DRIFT", "cordis.patch.yml.managed-block", managed_hash,
-                    manifest.get("cordisPatch", {}).get("managedBlockSha256", "missing"))
+        else:
+            actual_block = _managed_block(actual_patch)
+            actual_block_hash = sha256_text(actual_block) if actual_block is not None else "missing"
+            if actual_block_hash != managed_hash:
+                finding("GENERATED_DRIFT", "cordis.patch.yml.managed-block",
+                        managed_hash, actual_block_hash)
+            elif managed_hash != str(manifest.get("cordisPatch", {}).get("managedBlockSha256", "")):
+                finding("CONFIG_DRIFT", "cordis.patch.yml.managed-block", managed_hash,
+                        manifest.get("cordisPatch", {}).get("managedBlockSha256", "missing"))
 
     launcher = profile / cfg["profile"]["launcher_file"]
     if not launcher.is_file():
@@ -845,19 +965,22 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         configured_source = os.environ.get(ui_cfg["source_root_env"])
         if configured_source and (Path(configured_source) / ".git").exists():
             try:
-                _verify_ui_source_state(Path(configured_source), ui_cfg)
+                source_checkout_report = _classify_ui_source_checkout(Path(configured_source), ui_cfg)
+                if source_checkout_report["kind"] in {"SOURCE_ROLLBACK", "SOURCE_DIVERGED"}:
+                    finding(source_checkout_report["kind"], "ui.source-checkout",
+                            source_checkout_report["acceptedRefs"], source_checkout_report["head"])
             except DshCompositionError as exc:
-                finding("SOURCE_DRIFT", "ui.source", ui_cfg["fix_commit"], str(exc))
-        build_patch_sha = ui_cfg.get("build_patch_sha256")
-        source_state = str(manifest.get("ui", {}).get("sourceState", ""))
-        if ui_cfg.get("apply_patch", True):
-            expected_source_state = f"{ui_cfg['baseline_commit']}+patch:{ui_cfg['patch_sha256']}"
-            if build_patch_sha:
-                expected_source_state += f"+build-patch:{build_patch_sha}"
-        else:
-            expected_source_state = str(ui_cfg["baseline_commit"])
-        if source_state != expected_source_state:
-            finding("CONFIG_DRIFT", "ui.source-state", expected_source_state, source_state or "missing")
+                source_checkout_report = {
+                    "kind": "SOURCE_CHECKOUT_ERROR",
+                    "actual": str(exc),
+                    "reconciliationRequired": True,
+                }
+                finding("SOURCE_CHECKOUT_ERROR", "ui.source-checkout", "readable git checkout",
+                        str(exc))
+        source_state_report = _classify_ui_source_state(manifest.get("ui", {}), ui_cfg)
+        if source_state_report["kind"] != "CURRENT":
+            finding(source_state_report["kind"], "ui.source-state",
+                    source_state_report["expected"], source_state_report["actual"])
         payload = {k: v for k, v in manifest.items() if k != "profileCombinationHash"}
         calculated = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -865,7 +988,9 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             finding("CONFIG_DRIFT", "profileCombinationHash", calculated,
                     manifest.get("profileCombinationHash", "missing"))
     return {"status": "PASS" if not findings else "DRIFT", "findings": findings,
-            "warnings": warnings, "manifest": manifest}
+            "warnings": warnings, "manifest": manifest,
+            "sourceState": source_state_report,
+            "sourceCheckout": source_checkout_report}
 
 
 def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> dict[str, Any]:

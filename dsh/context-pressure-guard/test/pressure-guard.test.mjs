@@ -60,7 +60,28 @@ test('4. operational max output is capped at 65536', () => {
 test('5. no available output is unsafe', () => {
   const d = admissionDecision({ configuredLimit: 1000000, estimatedInput: 920000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 65536 });
   assert.equal(d.safe, false);
-  assert.ok(d.allowedOutput <= 0);
+  assert.equal(d.allowedOutput, 0);
+});
+
+test('5b. legacy negative admission fields replay as non-negative projection values', async () => {
+  const projectionMod = await import(pathToFileURL(path.join(NM, 'dsh-session-projection', 'lib', 'index.js')).href);
+  const ctx = new Context();
+  const projections = new projectionMod.SessionProjectionRegistry(ctx);
+  new TokenMeter(ctx, {});
+  await new Promise((resolve) => setImmediate(resolve));
+  const id = 'legacy-pressure-' + Math.random().toString(36).slice(2);
+  const session = Session.create(id, [], { version: 0, id, createdAt: Date.now(), cwd: 'C:/test' });
+  session.append('request/context', {
+    provider: 'opencode-go',
+    model: 'deepseek-v4-flash',
+    contextWindow: 1000000,
+    projectedInput: 920000,
+    reservedOutput: -123,
+    combinedContext: -456,
+  });
+  const pressure = projections.snapshot(session).values.contextPressure;
+  assert.equal(pressure.reservedOutput, 0);
+  assert.equal(pressure.combinedContext, 0);
 });
 
 test('6. provider failure usage 0/0 does not replace the meter anchor', () => {
@@ -182,8 +203,34 @@ test('9. failed, incomplete, and current-step results remain on the live surface
   assert.ok(session.surface.nodes.includes(incomplete.seq));
   assert.ok(session.surface.nodes.includes(current.seq));
 });
-test('10. deployed overlay config resolves the observed route effective limit to 1000000', () => {
-  const configured = 1000000;
-  const attested = 1048576;
-  assert.equal(effectiveContextLimit(configured, attested), 1000000);
+test('11. corrected Luna route admits input above the historical 128K value', () => {
+  const d = admissionDecision({ configuredLimit: 1050000, estimatedInput: 130000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 128000, requestedMaxTokens: 1 });
+  assert.equal(d.effectiveLimit, 1050000);
+  assert.equal(d.safe, true);
+  assert.equal(d.allowedOutput, 1);
+});
+
+test('12. corrected Luna route fails closed above its effective limit', () => {
+  const d = admissionDecision({ configuredLimit: 1050000, estimatedInput: 970000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 128000, requestedMaxTokens: 1 });
+  assert.equal(d.safe, false);
+  assert.equal(d.allowedOutput, 0);
+});
+
+test('13. provider clamp wins over native Luna capability', () => {
+  const d = admissionDecision({ configuredLimit: 1050000, providerAttestedLimit: 128000, estimatedInput: 110000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 65536, requestedMaxTokens: 1 });
+  assert.equal(d.effectiveLimit, 128000);
+  assert.equal(d.safe, false);
+});
+
+test('14. Kimi 256K boundary is admitted below and blocked above', () => {
+  const below = admissionDecision({ configuredLimit: 262144, estimatedInput: 200000, inputMultiplier: 1, safetyMargin: 16384, operationalMaxOutput: 1, requestedMaxTokens: 1 });
+  const above = admissionDecision({ configuredLimit: 262144, estimatedInput: 240000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 1, requestedMaxTokens: 1 });
+  assert.equal(below.safe, true);
+  assert.equal(above.safe, false);
+});
+
+test('15. OpenCode DeepSeek 1M route keeps output separate from context', () => {
+  const d = admissionDecision({ configuredLimit: 1048576, providerAttestedLimit: 1048576, estimatedInput: 600000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 65536, requestedMaxTokens: 65536 });
+  assert.equal(d.effectiveLimit, 1048576);
+  assert.equal(d.allowedOutput, 65536);
 });
