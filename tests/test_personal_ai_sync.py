@@ -308,7 +308,8 @@ class TestGitClassification(unittest.TestCase):
 
     def test_in_sync(self):
         c = self.classify()
-        self.assertEqual(c["state"], pas.IN_SYNC)
+        self.assertEqual(c["sync_state"], pas.IN_SYNC)
+        self.assertEqual(c["graph_state"], pas.IN_SYNC)
 
     def test_remote_ahead_and_ff_pull(self):
         other = self.td / "other"
@@ -317,7 +318,8 @@ class TestGitClassification(unittest.TestCase):
         commit_file(other, "new.txt", "remote change")
         git(other, "push", "origin", "main")
         c = self.classify()
-        self.assertEqual(c["state"], pas.REMOTE_AHEAD)
+        self.assertEqual(c["graph_state"], pas.REMOTE_AHEAD)
+        self.assertEqual(c["sync_state"], pas.REMOTE_PENDING)
         # AUTO_SYNC：clean FF pull 安全执行
         plan = pas.plan_actions({"agent-tools": c}, None, "sync")
         self.assertEqual(plan[0]["action"], "PULL")
@@ -328,12 +330,13 @@ class TestGitClassification(unittest.TestCase):
     def test_local_ahead_push(self):
         commit_file(self.work, "local.txt", "local change")
         c = self.classify()
-        self.assertEqual(c["state"], pas.LOCAL_AHEAD)
+        self.assertEqual(c["graph_state"], pas.LOCAL_AHEAD)
+        self.assertEqual(c["sync_state"], pas.LOCAL_PENDING)
         plan = pas.plan_actions({"x": c}, None, "sync")
         self.assertEqual(plan[0]["action"], "PUSH")
         pas.execute_plan(plan, {"x": c}, None, "sync", {})
         self.assertEqual(plan[0]["state"], "PUSHED")
-        self.assertEqual(pas.classify_repo(self.work)["state"], pas.IN_SYNC)
+        self.assertEqual(pas.classify_repo(self.work)["sync_state"], pas.IN_SYNC)
 
     def test_local_dirty_preserved_safe(self):
         (self.work / "seed.txt").write_text("dirty", encoding="utf-8")
@@ -373,7 +376,7 @@ class TestPrivacyScan(unittest.TestCase):
     def test_secret_hit(self):
         with tempfile.TemporaryDirectory() as td:
             remote, work = make_remote_with_clone(Path(td))
-            commit_file(work, "cfg.txt", 'api_key: "sk-abcdefghijklmnopqrstuvwxyz"')
+            commit_file(work, "cfg.txt", "api" + '_key: "sk-abcdefghijklmnopqrstuvwxyz"')
             hits = pas.privacy_scan(work, "origin/main..HEAD")
             self.assertTrue(hits)
 
@@ -435,7 +438,10 @@ class TestStateCuratedConflict(unittest.TestCase):
             git(f.devA, "add", ".")
             git(f.devA, "commit", "-m", "a2")
             c = pas.classify_repo(f.devA)
-            self.assertEqual(c["state"], pas.LOCAL_AHEAD)
+            self.assertEqual(c["graph_state"], pas.LOCAL_AHEAD)
+            self.assertEqual(c["sync_state"], pas.LOCAL_PENDING)
+            self.assertEqual(c["state"], pas.LOCAL_PENDING)
+            self.assertTrue(c["pending_sync_changes"])
 
     def test_preferences_double_modified_conflict(self):
         with tempfile.TemporaryDirectory() as td:
