@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "compositionId": "dsh-context-lifecycle",
+  "node": {
+    "version": "v22.19.0",
+    "relativePath": "runtime/node-v22.19.0-win-x64",
+    "sha256": "995a3fb3cefad590cd3f4b321532a4b9582fb9c6575320ed2e3e894caac3e362"
+  },
+  "base": {
+    "package": "@deepseek-ai/dsh",
+    "version": "0.1.1-rc.2",
+    "entryRelative": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/lib/bin.js",
+    "entrySha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62"
+  },
+  "ui": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
+    "baselineCommit": "dd6322d604e00eec1ba5e0c8541159906a21094a",
+    "sourceState": "dd6322d604e00eec1ba5e0c8541159906a21094a",
+    "fixCommit": "68826e9a6d8911239770016223719559c2842885",
+    "patchFile": "dsh/ui/deepseek-harness-68826e9.patch",
+    "patchSha256": "6b3d1f9bac533f6e9de06441b6916173b229afb0590c1adbfa53bfd712fc931e",
+    "clientBundleRelative": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js",
+    "clientBundleSha256": "1ede75bbbdba073be8ea7f6e505d9f21e91399d12dd01f145e5c878e188938da",
+    "webDistRelative": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist",
+    "webDistSha256": "8cee982409902c91bc53174c8b696ac418a67d1c73a68e77f68cbccae45845ff"
+  },
+  "overlays": [
+    {
+      "id": "token-meter-pressure-guard",
+      "package": "@deepseek-ai/dsh-token-meter",
+      "version": "0.1.1-rc.2+pressure.3",
+      "loadOrder": 1,
+      "sourceRelative": "dsh/context-pressure-guard/token-meter/lib/index.js",
+      "sourceSha256": "37c168e2d6e286dae71ebc74631f65b28037dfe277eb73461fc284bfbb86497a",
+      "deploymentRelative": "profiles/web/plugins/dsh-token-meter-pressure-guard/lib/index.js",
+      "deploymentSha256": "37c168e2d6e286dae71ebc74631f65b28037dfe277eb73461fc284bfbb86497a"
+    },
+    {
+      "id": "agent-loop-pressure-guard",
+      "package": "@deepseek-ai/dsh-agent-loop",
+      "version": "0.1.1-rc.2+pressure.3",
+      "loadOrder": 2,
+      "sourceRelative": "dsh/context-pressure-guard/lib/index.js",
+      "sourceSha256": "2b0edda65e3ac8a807b6f45d77ba1ea8c7686b0235b47300f717b84ee4f44e4c",
+      "deploymentRelative": "profiles/web/plugins/dsh-agent-loop-pressure-guard/lib/index.js",
+      "deploymentSha256": "2b0edda65e3ac8a807b6f45d77ba1ea8c7686b0235b47300f717b84ee4f44e4c"
+    },
+    {
+      "id": "tool-result-pruner-pressure-guard",
+      "package": "@deepseek-ai/dsh-compaction-tool-result-pruner",
+      "version": "0.1.1-rc.2+pressure.2",
+      "loadOrder": 3,
+      "sourceRelative": "dsh/context-pressure-guard/tool-result-pruner/lib/index.js",
+      "sourceSha256": "5f3f12e852d4f9bdf4b461a6007ae074d6feaa3965e2d78a04755a021421b9ea",
+      "deploymentRelative": "profiles/web/plugins/dsh-tool-result-pruner-pressure-guard/lib/index.js",
+      "deploymentSha256": "5f3f12e852d4f9bdf4b461a6007ae074d6feaa3965e2d78a04755a021421b9ea"
+    },
+    {
+      "id": "compaction-basic-convergence",
+      "package": "@deepseek-ai/dsh-compaction-basic",
+      "version": "0.1.1-rc.2+pressure.2",
+      "loadOrder": 4,
+      "sourceRelative": "dsh/compaction-convergence/lib/index.js",
+      "sourceSha256": "b0fb29b66b9c57342067dd7dd445b65e0f8c0f30d3d601b1859bc81b305cf5d7",
+      "deploymentRelative": "profiles/web/plugins/dsh-compaction-convergence/lib/index.js",
+      "deploymentSha256": "b0fb29b66b9c57342067dd7dd445b65e0f8c0f30d3d601b1859bc81b305cf5d7",
+      "markerSha256": "dd9fa82a02f8d3f843a7d9b7a169e4c12dbea6584136f9eb5aff910458761f19"
+    },
+    {
+      "id": "context-lifecycle",
+      "package": "@deepseek-ai/dsh-context-lifecycle",
+      "version": "0.1.1-rc.2+pressure.4",
+      "loadOrder": 5,
+      "sourceRelative": "dsh/context-lifecycle/lib/index.js",
+      "sourceSha256": "cfeaa33032ee35b7001623e5531a8d96d5544ca23b5cb077bccb28645278f39c",
+      "deploymentRelative": "profiles/web/plugins/dsh-context-lifecycle/lib/index.js",
+      "deploymentSha256": "cfeaa33032ee35b7001623e5531a8d96d5544ca23b5cb077bccb28645278f39c"
+    }
+  ],
+  "cordisPatch": {
+    "relativePath": "profiles/web/cordis.patch.yml",
+    "managedBlockSha256": "8741d31bc9ee29b295d3ff84cd6012db1ab5f639fc844791de59eda3b1d7160e"
+  },
+  "launcher": {
+    "relativePath": "profiles/web/dsh-launch-web.ps1",
+    "sha256": "b5275416b1e14580fef0e9724053aacbc7dbfe9a76b20ea2695c0d7ddc183bfe"
+  },
+  "archiveAnchor": {
+    "sessionId": "session-cdc4ad5d-0e4c-45c3-a596-efee4a7544b9",
+    "status": "READ_ONLY_CONTEXT_EXHAUSTED",
+    "operationalLabel": "READ_ONLY_ARCHIVED",
+    "artifactSha256": "17d0b5c91c7f0f76adfad658daddfa8e3980ea6913d81fb29eafce1e6fd5f64f"
+  },
+  "profileCombinationHash": "bec88162700d79434e29db58568ad29f83ac179b4f2f3d3ea6c4ba2e7a9b9c4d"
+}
