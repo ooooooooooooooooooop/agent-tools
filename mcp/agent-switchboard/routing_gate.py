@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 import atomic_io
+import work_registry
 
 BROKER_HOME = Path(os.environ.get("AGENT_BROKER_HOME", Path.home() / ".agent-broker"))
 STATE_DIR = BROKER_HOME / "routing-gate"
@@ -357,6 +358,17 @@ def subagent_start(payload: dict) -> dict:
             ) + 1
 
     _update_state(session_id, update)
+
+    # Activate matching pending work lease in work_registry
+    try:
+        leases = work_registry.list_session_leases(session_id)
+        for l in leases:
+            if l.state == work_registry.STATE_SPAWNING and (not l.agent_id or l.agent_id == agent_id):
+                work_registry.activate_lease(l.work_key, agent_id)
+                break
+    except Exception:
+        pass
+
     return {}
 
 
@@ -394,12 +406,27 @@ def subagent_stop(payload: dict) -> dict:
             state["mutated"] = True
 
     _update_state(session_id, update)
+
+    # Complete/fail matching work lease in work_registry
+    try:
+        leases = work_registry.list_session_leases(session_id)
+        for l in leases:
+            if l.agent_id == agent_id:
+                if payload.get("error"):
+                    work_registry.fail_lease(l.work_key, str(payload.get("error")))
+                else:
+                    msg = str(payload.get("last_assistant_message") or "")
+                    work_registry.complete_lease(l.work_key, result=msg)
+                break
+    except Exception:
+        pass
+
     return {}
 
 
 def sweep_stale(max_age_seconds: float = STATE_TTL_SECONDS) -> None:
     cutoff = time.time() - max_age_seconds
-    for directory in (STATE_DIR, EVIDENCE_DIR):
+    for directory in (STATE_DIR, EVIDENCE_DIR, work_registry.REGISTRY_DIR):
         if not directory.exists():
             continue
         try:
@@ -551,6 +578,124 @@ def _routing_override_command(session_id: str) -> str:
     )
 
 
+def check_exploration_dedup(payload: dict) -> dict | None:
+    """Inspect delegation/exploration tool calls and suppress duplicate active work."""
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return None
+    tool_name = str(payload.get("tool_name") or "").strip().lower()
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+
+    is_native_delegation = tool_name in DELEGATION_TOOL_NAMES
+    is_mcp_explore = (
+        tool_name.startswith("mcp__")
+        and tool_name.endswith("route_agent_task")
+        and (
+            str(tool_input.get("task_kind") or "").strip().lower() in ("explore", "exploration", "audit", "bug_hunt", "sanity_check")
+            or str(tool_input.get("subagent_type") or "").strip().lower() in ("explore", "explorer")
+        )
+    )
+    if not (is_native_delegation or is_mcp_explore):
+        return None
+
+    # Determine lane
+    lane = (
+        str(
+            tool_input.get("subagent_type")
+            or tool_input.get("lane")
+            or tool_input.get("task_kind")
+            or ("explore" if tool_name == "agent" else "worker")
+        )
+        .strip()
+        .lower()
+    )
+    task_scope = str(
+        tool_input.get("task_scope")
+        or tool_input.get("work_package_id")
+        or tool_input.get("topic")
+        or tool_input.get("project")
+        or ""
+    ).strip()
+    target = str(
+        tool_input.get("target")
+        or tool_input.get("path")
+        or tool_input.get("file_path")
+        or tool_input.get("filePath")
+        or ""
+    ).strip()
+    if not target and isinstance(tool_input.get("allowed_files"), list):
+        target = ",".join(sorted(str(f) for f in tool_input.get("allowed_files") if f))
+    intent = str(tool_input.get("prompt") or tool_input.get("description") or "").strip()
+    evidence_domain = str(
+        tool_input.get("evidence_domain")
+        or tool_input.get("domain")
+        or "code"
+    ).strip()
+
+    brain_owned = bool(tool_input.get("brain_owned", False))
+    orchestrator_owned = bool(tool_input.get("orchestrator_owned", True))
+
+    decision, lease, reason = work_registry.request_work_lease(
+        parent_session=session_id,
+        task_scope=task_scope,
+        lane=lane,
+        target=target,
+        intent=intent,
+        evidence_domain=evidence_domain,
+        brain_owned=brain_owned,
+        orchestrator_owned=orchestrator_owned,
+    )
+
+    if decision == work_registry.ACTION_SPAWN_SUPPRESSED_DUPLICATE:
+        agent_id_str = f"agent_id={lease.agent_id}" if lease and lease.agent_id else "spawning"
+        wk_str = f"work_key={lease.work_key[:12]}" if lease else ""
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Duplicate exploration work suppressed ({wk_str}): identical exploration is already ACTIVE "
+                    f"({agent_id_str}). Subagent spawning deduplicated."
+                ),
+            }
+        }
+    elif decision == work_registry.ACTION_REUSE_COMPLETED:
+        wk_str = f"work_key={lease.work_key[:12]}" if lease else ""
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Duplicate exploration work suppressed ({wk_str}): identical exploration has already COMPLETED. "
+                    "Reuse completed receipt."
+                ),
+            }
+        }
+    elif decision == work_registry.ACTION_RETRY_BUDGET_EXHAUSTED:
+        wk_str = f"work_key={lease.work_key[:12]}" if lease else ""
+        attempts_str = f"{lease.retry_count}/{lease.max_retries}" if lease else "limit reached"
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Exploration work blocked ({wk_str}): retry budget exhausted ({attempts_str}). "
+                    "Address underlying error or modify work parameters."
+                ),
+            }
+        }
+    elif decision == work_registry.ACTION_OWNERSHIP_CONFLICT:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Work lease blocked: {reason}",
+            }
+        }
+
+    return None
+
+
 def pre_tool_use(payload: dict) -> dict:
     """Deny the next direct labour call after the threshold until delegation.
 
@@ -577,6 +722,11 @@ def pre_tool_use(payload: dict) -> dict:
                 ),
             }
         }
+
+    # Intercept duplicate exploration / delegation work
+    dedup = check_exploration_dedup(payload)
+    if dedup is not None:
+        return dedup
     session_id = str(payload.get("session_id") or "").strip()
     category = _direct_labour_category(
         payload.get("tool_name"), payload.get("tool_input") or {}
