@@ -1,0 +1,16 @@
+{
+  "package": "@deepseek-ai/dsh",
+  "version": "0.1.1-rc.2",
+  "nodeVersion": "v22.19.0",
+  "nodeRelativePath": "runtime/node-v22.19.0-win-x64",
+  "entryRelativeToProfile": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/lib/bin.js",
+  "installPolicy": "managed-profile-fixed-directory",
+  "baseEntrySha256": "c0226687bb20f45c603ec6fe50f3de16d1c3510c3a803304ec575ef9bc366c62",
+  "uiBundleSha256": "1ede75bbbdba073be8ea7f6e505d9f21e91399d12dd01f145e5c878e188938da",
+  "webDistSha256": "8cee982409902c91bc53174c8b696ac418a67d1c73a68e77f68cbccae45845ff",
+  "compositionHash": "bec88162700d79434e29db58568ad29f83ac179b4f2f3d3ea6c4ba2e7a9b9c4d",
+  "forbiddenLaunchers": [
+    "npx --yes @deepseek-ai/dsh",
+    "npx @deepseek-ai/dsh"
+  ]
+}
