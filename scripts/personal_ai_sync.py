@@ -44,6 +44,18 @@ BLOCKED_PRIVACY = "BLOCKED_PRIVACY"
 OPTIONAL_NOT_INSTALLED = "OPTIONAL_NOT_INSTALLED"
 UNKNOWN = "UNKNOWN"
 
+# 正交工作区状态
+WORKTREE_CLEAN = "CLEAN"
+WORKTREE_DIRTY_SAFE = "DIRTY_SAFE"
+WORKTREE_DIRTY_CONFLICT = "DIRTY_CONFLICT"
+WORKTREE_DIRTY_BLOCKED = "DIRTY_BLOCKED"
+
+NON_CANONICAL_PATTERNS = (
+    ".verify", "tmp/", "temp/", ".tmp", ".log", ".bak", ".swp",
+    "runtime/", "node_modules/", ".dsh/", ".dsh-context-lifecycle/",
+    "base-dsh-", "dist/",
+)
+
 CURATED_PREFIXES = ("state/", "registry/", "sync/", "projects/", "README")
 MEMORY_PREFIX = "memory/records/"
 
@@ -70,9 +82,20 @@ KNOWN_SESSION_ANCHORS = [
 ]
 
 
-def _device_backup_root() -> Path | None:
+def _device_backup_root(state_repo: Path | None = None) -> Path | None:
     """解析 durability backup root（personal-ai-state/sync/this-device.yaml）。
     失败返回 None（该设备未配置备份 = NOT_APPLICABLE 语义）。"""
+    if state_repo:
+        rel = state_repo / "sync" / "this-device.yaml"
+        if rel.is_file():
+            try:
+                import yaml  # noqa: PLC0415
+                cfg = yaml.safe_load(rel.read_text(encoding="utf-8-sig")) or {}
+                root = cfg.get("backup_root")
+                return Path(root) if root else None
+            except Exception:  # noqa: BLE001
+                return None
+        return None
     rel = Path.home() / "personal-ai-state" / "sync" / "this-device.yaml"
     if not rel.is_file():
         rel = Path(os.environ.get("PERSONAL_AI_STATE", "")) / "sync" / "this-device.yaml"
@@ -287,7 +310,7 @@ def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
                            encoding="utf-8", errors="replace",
                            cwd=str(cwd) if cwd else None,
                            env={**os.environ, **env} if env else None)
-        return p.returncode, (p.stdout + p.stderr).strip()
+        return p.returncode, (p.stdout + p.stderr).rstrip()
     except Exception as exc:  # noqa: BLE001
         return -1, str(exc)
 
@@ -302,39 +325,164 @@ def _default_branch(repo: Path) -> str:
 
 
 # ---------------------------------------------------------------- git classify
-def classify_repo(repo: Path, fetch: bool = True) -> dict:
-    """统一仓库状态分类（§6）。只读（除 fetch）。"""
-    r = {"path": str(repo), "state": UNKNOWN, "ahead": 0, "behind": 0,
-         "dirty": False, "branch": "", "reason": ""}
+def _is_sync_eligible(repo: Path, rel_path: str, repo_name: str = "") -> bool:
+    norm = rel_path.replace("\\", "/")
+    if any(pat in norm for pat in NON_CANONICAL_PATTERNS):
+        return False
+    if repo_name == "personal-ai-state" or repo.name == "personal-ai-state":
+        return norm.startswith(("state/", "sync/", "memory/", "projects/", "README"))
+    if repo_name == "agent-tools" or repo == REPO or (repo / "registry").is_dir():
+        if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/", "state/", "tools/", "config/", "dsh-config/")):
+            return True
+        if norm in ("README.md", "SKILLS.md", "AGENTS.md", "package.json", "pnpm-lock.yaml", "LICENSE", ".gitignore"):
+            return True
+        return False
+    return norm.startswith(("src/", "scripts/", "docs/", "tests/", "lib/"))
+
+
+def uncommitted_files(repo: Path) -> list[tuple[str, str]]:
+    p = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-u"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if p.returncode != 0 or not p.stdout.strip():
+        return []
+    res = []
+    for line in p.stdout.splitlines():
+        if not line:
+            continue
+        code = line[:2]
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ")[-1].strip()
+        res.append((code, path.replace("\\", "/")))
+    return res
+
+
+def remote_changed_files(repo: Path, branch: str) -> set[str]:
+    rc, out = git(repo, "diff", "--name-only", f"HEAD..origin/{branch}")
+    if rc != 0:
+        return set()
+    return {l.strip() for l in out.splitlines() if l.strip()}
+
+
+def auto_commit_eligible(repo: Path, c: dict) -> tuple[bool, str]:
+    """为 dirty working tree 中的 sync-eligible canonical 变更执行自动校验与 commit。"""
+    eligible = c.get("eligible_canonical_changes", [])
+    if not eligible:
+        return False, "no eligible canonical changes"
+    # 隐私扫描
+    for f in eligible:
+        full = repo / f
+        if full.is_file():
+            try:
+                text = full.read_text(encoding="utf-8", errors="ignore")
+                for pat in PRIVACY_PATTERNS:
+                    if re.search(pat, text):
+                        return False, f"privacy scan hit in {f}: {pat}"
+            except Exception:
+                pass
+    # 若存在 validate_repo.py 则校验
+    vscript = repo / "scripts" / "validate_repo.py"
+    if vscript.is_file():
+        rc, out = run([sys.executable, str(vscript), "--strict"], cwd=repo)
+        if rc != 0:
+            return False, f"canonical validation failed: {out[-200:]}"
+    # 确定性逐个 add 准入路径（严禁 git add -A / git add . 扫入未准入缓存）
+    for f in eligible:
+        git(repo, "add", "--", f)
+    idargs = _identity_args(repo)
+    rc, out = git(repo, *idargs, "commit", "-m", "sync: auto-converge canonical state")
+    if rc != 0:
+        return False, f"commit failed: {out}"
+    return True, "committed"
+
+
+def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
+    """统一仓库状态分类（正交建模：graph_state + worktree_state）。只读（除 fetch）。"""
+    r = {
+        "path": str(repo),
+        "state": UNKNOWN,
+        "graph_state": UNKNOWN,
+        "worktree_state": WORKTREE_CLEAN,
+        "ahead": 0,
+        "behind": 0,
+        "dirty": False,
+        "branch": "",
+        "reason": "",
+        "conflict_files": [],
+        "eligible_canonical_changes": [],
+        "uncommitted_files": [],
+    }
     if not (repo / ".git").exists():
         r["state"] = UNKNOWN
+        r["graph_state"] = UNKNOWN
         r["reason"] = "not a git repo / missing"
         return r
     r["branch"] = _default_branch(repo)
-    rc, out = git(repo, "status", "--porcelain")
-    r["dirty"] = bool(out.strip()) if rc == 0 else False
+
+    # 1. 检查工作区状态
+    entries = uncommitted_files(repo)
+    uncommitted_paths = {p for _, p in entries}
+    r["uncommitted_files"] = sorted(uncommitted_paths)
+    r["dirty"] = bool(entries)
+
+    has_conflict_markers = any(code in ("UU", "AA", "DD", "DU", "UD", "AU", "UA") for code, _ in entries)
+    if has_conflict_markers:
+        r["worktree_state"] = WORKTREE_DIRTY_BLOCKED
+    elif entries:
+        r["worktree_state"] = WORKTREE_DIRTY_SAFE
+    else:
+        r["worktree_state"] = WORKTREE_CLEAN
+
+    r["eligible_canonical_changes"] = [p for code, p in entries if _is_sync_eligible(repo, p, repo_name)]
+
+    # 2. 检查 Fetch & Graph 状态
     if fetch:
         frc, fout = git(repo, "fetch", "--quiet", "origin", timeout=90)
         if frc != 0:
-            r["state"] = BLOCKED_AUTH if "Permission" in fout or "denied" in fout else UNKNOWN
+            is_auth = "Permission" in fout or "denied" in fout or "fatal: Authentication failed" in fout
+            r["graph_state"] = BLOCKED_AUTH if is_auth else UNKNOWN
+            r["state"] = BLOCKED_AUTH if is_auth else UNKNOWN
             r["reason"] = f"fetch failed: {fout.splitlines()[-1] if fout else frc}"
             return r
+
     rc, remote = git(repo, "rev-parse", f"origin/{r['branch']}")
     if rc != 0:
         r["state"] = UNKNOWN
+        r["graph_state"] = UNKNOWN
         r["reason"] = f"no origin/{r['branch']}"
         return r
+
     rc, ahead = git(repo, "rev-list", "--count", f"origin/{r['branch']}..HEAD")
     rc2, behind = git(repo, "rev-list", "--count", f"HEAD..origin/{r['branch']}")
     r["ahead"], r["behind"] = int(ahead or 0), int(behind or 0)
+
     if r["ahead"] == 0 and r["behind"] == 0:
+        r["graph_state"] = IN_SYNC
         r["state"] = LOCAL_DIRTY if r["dirty"] else IN_SYNC
     elif r["behind"] > 0 and r["ahead"] == 0:
+        r["graph_state"] = REMOTE_AHEAD
         r["state"] = REMOTE_AHEAD
+        if r["dirty"] and not has_conflict_markers:
+            rem_changed = remote_changed_files(repo, r["branch"])
+            overlap = uncommitted_paths & rem_changed
+            if overlap:
+                r["worktree_state"] = WORKTREE_DIRTY_CONFLICT
+                r["conflict_files"] = sorted(overlap)
+            else:
+                r["worktree_state"] = WORKTREE_DIRTY_SAFE
     elif r["ahead"] > 0 and r["behind"] == 0:
+        r["graph_state"] = LOCAL_AHEAD
         r["state"] = LOCAL_AHEAD
     else:
+        r["graph_state"] = DIVERGED
         r["state"] = DIVERGED
+        if r["dirty"] and not has_conflict_markers:
+            rem_changed = remote_changed_files(repo, r["branch"])
+            overlap = uncommitted_paths & rem_changed
+            if overlap:
+                r["worktree_state"] = WORKTREE_DIRTY_CONFLICT
+                r["conflict_files"] = sorted(overlap)
+
     return r
 
 
@@ -635,28 +783,43 @@ def save_checkpoint(data: dict) -> None:
 # -------------------------------------------------------------------- planes
 def plan_actions(classifications: dict, state_repo: Path | None,
                  mode: str) -> list[dict]:
-    """fetch → classify → action plan（§21：先全部分类再执行，防止顺序性数据丢失）。"""
+    """fetch → classify → action plan（正交建模状态机）。"""
     plan = []
     for name, c in classifications.items():
-        st = c["state"]
-        if st == IN_SYNC:
-            plan.append({"plane": name, "action": "NO ACTION", "state": st})
-        elif st == LOCAL_DIRTY:
-            plan.append({"plane": name, "action": "UNTOUCHED", "state": st,
-                         "reason": "working tree dirty，禁止自动 add/commit/stash"})
-        elif st == REMOTE_AHEAD:
-            if c["dirty"]:
-                plan.append({"plane": name, "action": "UNTOUCHED", "state": st,
-                             "reason": "REMOTE_AHEAD 但本地 dirty，pull 被阻止"})
+        graph = c.get("graph_state", c.get("state", UNKNOWN))
+        worktree = c.get("worktree_state", WORKTREE_CLEAN if not c.get("dirty") else WORKTREE_DIRTY_SAFE)
+        eligible = c.get("eligible_canonical_changes", [])
+
+        if graph == BLOCKED_AUTH:
+            plan.append({"plane": name, "action": "REVIEW", "state": BLOCKED_AUTH,
+                         "reason": c.get("reason", "auth blocked")})
+        elif worktree == WORKTREE_DIRTY_BLOCKED:
+            plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_BLOCKED,
+                         "reason": "unresolved merge conflict in working tree"})
+        elif graph == REMOTE_AHEAD:
+            if worktree == WORKTREE_DIRTY_CONFLICT:
+                plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_CONFLICT,
+                             "reason": f"remote changes overlap with uncommitted local modifications: {c.get('conflict_files', [])}"})
             else:
-                plan.append({"plane": name, "action": "PULL", "state": st})
-        elif st == LOCAL_AHEAD:
-            plan.append({"plane": name, "action": "PUSH", "state": st})
-        elif st == DIVERGED:
-            plan.append({"plane": name, "action": "REVIEW", "state": st,
+                # Case C (CLEAN) or Case D (DIRTY_SAFE non-overlapping)
+                plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
+        elif graph == LOCAL_AHEAD:
+            # Case F
+            plan.append({"plane": name, "action": "PUSH", "state": LOCAL_AHEAD})
+        elif graph == IN_SYNC:
+            if worktree == WORKTREE_DIRTY_SAFE and eligible:
+                # Case B with eligible canonical changes
+                plan.append({"plane": name, "action": "AUTO_COMMIT", "state": IN_SYNC,
+                             "eligible": eligible})
+            else:
+                # Case A (CLEAN) or Case B (DIRTY_SAFE with non-canonical/machine-local dirty only)
+                plan.append({"plane": name, "action": "NO ACTION", "state": IN_SYNC})
+        elif graph == DIVERGED:
+            # Case G
+            plan.append({"plane": name, "action": "REVIEW", "state": DIVERGED,
                          "reason": "history diverged"})
         else:
-            plan.append({"plane": name, "action": "REVIEW", "state": st,
+            plan.append({"plane": name, "action": "REVIEW", "state": c.get("state", UNKNOWN),
                          "reason": c.get("reason", "")})
     return plan
 
@@ -670,20 +833,39 @@ def execute_plan(plan: list[dict], classifications: dict,
         c = classifications[name]
         repo = Path(c["path"])
         if mode == "check":
-            item["action"] = "NO ACTION" if action in ("PULL", "PUSH") else action
+            item["action"] = "NO ACTION" if action in ("PULL", "PUSH", "AUTO_COMMIT") else action
             continue
         if action == "PULL":
-            rc, out = git(repo, "pull", "--ff-only", "origin", c["branch"])
+            if mode == "push":
+                item["action"] = "REVIEW"
+                item["reason"] = "push-only 模式"
+                continue
+            # 安全 fast-forward（不覆盖未冲突的 local dirty）
+            rc, out = git(repo, "merge", "--ff-only", f"origin/{c['branch']}")
+            if rc != 0:
+                rc, out = git(repo, "pull", "--ff-only", "origin", c["branch"])
             item["executed"] = rc == 0
             item["state"] = "PULLED" if rc == 0 else item["state"]
             if rc != 0:
                 item["action"] = "REVIEW"
                 item["reason"] = out.splitlines()[-1] if out else "pull failed"
+            else:
+                # Pull 成功后，若在 sync 模式且有 local eligible canonical changes，执行 auto-commit + push
+                if mode == "sync" and c.get("eligible_canonical_changes"):
+                    ok, msg = auto_commit_eligible(repo, c)
+                    if ok:
+                        hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD") if name == "agent-tools" else []
+                        if not hits:
+                            prc, pout = git(repo, "push", "origin", c["branch"])
+                            if prc == 0:
+                                item["state"] = "PULLED_AND_PUSHED"
         elif action == "PUSH":
             if mode == "pull":
                 item["action"] = "REVIEW"
                 item["reason"] = "pull-only 模式不 push"
                 continue
+            if mode == "sync" and c.get("eligible_canonical_changes"):
+                auto_commit_eligible(repo, c)
             if name == "agent-tools":
                 hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD")
                 if hits:
@@ -702,6 +884,33 @@ def execute_plan(plan: list[dict], classifications: dict,
             if rc != 0:
                 item["action"] = "REVIEW"
                 item["reason"] = out.splitlines()[-1] if out else "push failed"
+        elif action == "AUTO_COMMIT":
+            if mode in ("sync", "push"):
+                ok, msg = auto_commit_eligible(repo, c)
+                if not ok:
+                    if "privacy" in msg:
+                        item["action"] = "REVIEW"
+                        item["state"] = BLOCKED_PRIVACY
+                        item["reason"] = msg
+                    else:
+                        item["action"] = "REVIEW"
+                        item["reason"] = msg
+                    continue
+                if name == "agent-tools":
+                    hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD")
+                    if hits:
+                        item["action"] = "REVIEW"
+                        item["state"] = BLOCKED_PRIVACY
+                        item["reason"] = f"privacy scan hit: {hits}"
+                        continue
+                rc, out = git(repo, "push", "origin", c["branch"])
+                item["executed"] = rc == 0
+                item["state"] = "PUSHED" if rc == 0 else item["state"]
+                if rc != 0:
+                    item["action"] = "REVIEW"
+                    item["reason"] = out.splitlines()[-1] if out else "push failed"
+            else:
+                item["action"] = "NO ACTION"
         elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-state":
             _handle_state_divergence(item, repo, c, mode, results)
 
@@ -849,15 +1058,14 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     execute_plan(plan, classifications, state_repo, mode, results)
     results["actions"] = plan
 
-    # 受影响面判定（§7/§8/§23）：只对真正变化的 canonical 做增量 refresh
+    # 受影响面判定（§7/§8/§23）：记录 pull/merge 产生的文件变化
     changed_at: list[str] = []
     changed_state: list[str] = []
     for item in plan:
-        if item.get("state") not in ("PULLED", "MERGED"):
+        if item.get("state") not in ("PULLED", "MERGED", "PULLED_AND_PUSHED"):
             continue
         repo = Path(classifications[item["plane"]]["path"])
         rc, head = git(repo, "rev-parse", "HEAD")
-        # pull/merge 前的 HEAD：reflog 取上一个值
         rc2, prev = git(repo, "rev-parse", "HEAD@{1}")
         if rc2 == 0:
             files = changed_paths(repo, f"{prev.strip()}..{head.strip()}")
@@ -869,32 +1077,37 @@ def run_sync(mode: str, detail: bool = False) -> dict:
             changed_state = files
     results["changed"] = {"agent-tools": changed_at, "personal-ai-state": changed_state}
 
-    pulled = bool(changed_at or changed_state)
-    memory_changed = any(f.startswith(MEMORY_PREFIX) for f in changed_state)
-    skills_changed = any(f.startswith("skills/") for f in changed_at)
-    plugins_changed = any(f.startswith("dsh/") for f in changed_at)
+    # 基于 desired-state 的下游收敛（不再仅依赖 pull 变更列表，而是直接检验期望状态 vs 实际状态）
+    if mode in ("sync", "restore"):
+        # 1. Skills 库状态检查与收敛
+        skills_dest = Path.home() / ".dsh" / "skills"
+        if SYNC_SKILLS.is_file():
+            chk_rc, chk_out = run([sys.executable, str(SYNC_SKILLS), "--destination",
+                                   str(skills_dest), "--check"])
+            if chk_rc != 0:
+                app_rc, app_out = run([sys.executable, str(SYNC_SKILLS), "--destination",
+                                       str(skills_dest), "--apply"])
+                results["skill_sync"] = "PASS" if app_rc == 0 else f"FAIL: {app_out[-200:]}"
+            else:
+                results["skill_sync"] = "PASS"
 
-    # Skills remain a library sync. DSH runtime composition has one owner:
-    # aic apply dsh; sync_skills.py is not a second plugin deployment truth.
-    if mode in ("sync", "restore") and skills_changed:
-        cmd = [sys.executable, str(SYNC_SKILLS), "--destination",
-               str(Path.home() / ".dsh" / "skills")]
-        rc, out = run([*cmd, "--apply"])
-        results["skill_sync"] = "PASS" if rc == 0 else f"FAIL: {out[-200:]}"
-    if mode in ("sync", "restore") and plugins_changed:
-        rc, out = run([sys.executable, str(AIC), "apply", "dsh"], timeout=1800)
-        results["dsh_composition"] = "PASS" if rc == 0 else f"FAIL: {out[-200:]}"
-    # memory-only change → 只做 derived 校验，绝不触发 Harness apply（§8）
-    if memory_changed:
-        results["memory_refresh"] = memory_merge_verify(state_repo) if state_repo else {}
+        # 2. DSH 运行时组合与 settings 期望状态检验与收敛
+        if AIC.is_file():
+            diff_rc, diff_out = run([sys.executable, str(AIC), "diff", "dsh"])
+            if diff_rc != 0:
+                app_rc, app_out = run([sys.executable, str(AIC), "apply", "dsh"], timeout=1800)
+                if app_rc == 0:
+                    post_rc, _ = run([sys.executable, str(AIC), "diff", "dsh"])
+                    results["dsh_composition"] = "PASS" if post_rc == 0 else "DRIFT"
+                else:
+                    results["dsh_composition"] = f"FAIL: {app_out[-200:]}"
+            else:
+                results["dsh_composition"] = "PASS"
 
-    affected = affected_targets(changed_at, changed_state)
-    if affected:
-        results["runtime"] = runtime_refresh(affected, mode)
-    elif pulled or mode == "check":
-        results["runtime"] = runtime_status()
-    else:
-        results["runtime"] = {"status": "SKIPPED"}
+    if state_repo and (state_repo / "memory").is_dir():
+        results["memory_refresh"] = memory_merge_verify(state_repo)
+
+    results["runtime"] = runtime_status()
     results["secrets"] = check_secrets()
 
     # checkpoint（machine-local，可删，删除后可重新 discover）
@@ -923,13 +1136,16 @@ def _overall(plan: list[dict], results: dict) -> str:
     actions = [i.get("action", "") for i in plan]
     if any(s == BLOCKED_AUTH for s in states):
         return "BLOCKED"
-    if any(s in (CONFLICT, BLOCKED_PRIVACY) for s in states):
+    if any(s in (CONFLICT, BLOCKED_PRIVACY, WORKTREE_DIRTY_CONFLICT, WORKTREE_DIRTY_BLOCKED) for s in states):
         return "REVIEW"
-    if "REVIEW" in actions or "UNTOUCHED" in actions:
-        # REVIEW = 需人工裁决；UNTOUCHED = 有 dirty tree 等未发布状态，如实报告
+    if "REVIEW" in actions:
         return "REVIEW"
     if results.get("runtime", {}).get("status") == "DRIFT" \
             or results.get("runtime", {}).get("review"):
+        return "REVIEW"
+    if results.get("dsh_composition") == "DRIFT" or (isinstance(results.get("dsh_composition"), str) and results["dsh_composition"].startswith("FAIL")):
+        return "REVIEW"
+    if isinstance(results.get("skill_sync"), str) and results["skill_sync"].startswith("FAIL"):
         return "REVIEW"
     return "PASS"
 
@@ -1009,7 +1225,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
     # DSH_SESSION_HISTORY plane（§9 事故契约）：备份计数 / live 计数 / 锚点 /
     # schema 探针；非 PASS|NOT_APPLICABLE 时总体 result 不得为 PASS。
     sh_root = sessions_root or (Path.home() / ".dsh" / "sessions")
-    bk_root = backup_root if backup_root is not None else _device_backup_root()
+    bk_root = backup_root if backup_root is not None else _device_backup_root(state_repo)
     sh = session_history_status(sh_root, bk_root)
     anchors_summary = "".join(
         f" {a[-8:]}:backup={v['in_backup']}/live={v['in_live']}"
