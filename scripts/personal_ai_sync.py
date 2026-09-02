@@ -34,11 +34,14 @@ SETTINGS = Path.home() / ".dsh" / "settings.yaml"
 
 # 状态枚举（§6）
 IN_SYNC = "IN_SYNC"
+LOCAL_PENDING = "LOCAL_PENDING"
+REMOTE_PENDING = "REMOTE_PENDING"
 REMOTE_AHEAD = "REMOTE_AHEAD"
 LOCAL_AHEAD = "LOCAL_AHEAD"
-LOCAL_DIRTY = "LOCAL_DIRTY"
+LOCAL_DIRTY = "LOCAL_DIRTY"  # legacy alias
 DIVERGED = "DIVERGED"
 CONFLICT = "CONFLICT"
+BLOCKED = "BLOCKED"
 BLOCKED_AUTH = "BLOCKED_AUTH"
 BLOCKED_PRIVACY = "BLOCKED_PRIVACY"
 OPTIONAL_NOT_INSTALLED = "OPTIONAL_NOT_INSTALLED"
@@ -397,15 +400,18 @@ def auto_commit_eligible(repo: Path, c: dict) -> tuple[bool, str]:
 
 
 def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
-    """统一仓库状态分类（正交建模：graph_state + worktree_state）。只读（除 fetch）。"""
+    """统一仓库状态分类（正交建模：sync_state + graph_state + worktree_state）。只读（除 fetch）。"""
     r = {
         "path": str(repo),
+        "sync_state": UNKNOWN,
         "state": UNKNOWN,
         "graph_state": UNKNOWN,
         "worktree_state": WORKTREE_CLEAN,
         "ahead": 0,
         "behind": 0,
         "dirty": False,
+        "pending_sync_changes": False,
+        "local_only_preserved": False,
         "branch": "",
         "reason": "",
         "conflict_files": [],
@@ -413,6 +419,7 @@ def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
         "uncommitted_files": [],
     }
     if not (repo / ".git").exists():
+        r["sync_state"] = UNKNOWN
         r["state"] = UNKNOWN
         r["graph_state"] = UNKNOWN
         r["reason"] = "not a git repo / missing"
@@ -441,12 +448,14 @@ def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
         if frc != 0:
             is_auth = "Permission" in fout or "denied" in fout or "fatal: Authentication failed" in fout
             r["graph_state"] = BLOCKED_AUTH if is_auth else UNKNOWN
+            r["sync_state"] = BLOCKED_AUTH if is_auth else UNKNOWN
             r["state"] = BLOCKED_AUTH if is_auth else UNKNOWN
             r["reason"] = f"fetch failed: {fout.splitlines()[-1] if fout else frc}"
             return r
 
     rc, remote = git(repo, "rev-parse", f"origin/{r['branch']}")
     if rc != 0:
+        r["sync_state"] = UNKNOWN
         r["state"] = UNKNOWN
         r["graph_state"] = UNKNOWN
         r["reason"] = f"no origin/{r['branch']}"
@@ -458,30 +467,61 @@ def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
 
     if r["ahead"] == 0 and r["behind"] == 0:
         r["graph_state"] = IN_SYNC
-        r["state"] = LOCAL_DIRTY if r["dirty"] else IN_SYNC
+        if r["eligible_canonical_changes"]:
+            r["sync_state"] = LOCAL_PENDING
+            r["state"] = LOCAL_PENDING
+            r["pending_sync_changes"] = True
+        else:
+            r["sync_state"] = IN_SYNC
+            r["state"] = IN_SYNC
+            if r["worktree_state"] == WORKTREE_DIRTY_SAFE:
+                r["local_only_preserved"] = True
     elif r["behind"] > 0 and r["ahead"] == 0:
         r["graph_state"] = REMOTE_AHEAD
-        r["state"] = REMOTE_AHEAD
+        r["pending_sync_changes"] = True
         if r["dirty"] and not has_conflict_markers:
             rem_changed = remote_changed_files(repo, r["branch"])
             overlap = uncommitted_paths & rem_changed
             if overlap:
                 r["worktree_state"] = WORKTREE_DIRTY_CONFLICT
                 r["conflict_files"] = sorted(overlap)
+                r["sync_state"] = CONFLICT
+                r["state"] = CONFLICT
             else:
                 r["worktree_state"] = WORKTREE_DIRTY_SAFE
+                r["sync_state"] = REMOTE_PENDING
+                r["state"] = REMOTE_PENDING
+        else:
+            r["sync_state"] = REMOTE_PENDING
+            r["state"] = REMOTE_PENDING
     elif r["ahead"] > 0 and r["behind"] == 0:
         r["graph_state"] = LOCAL_AHEAD
-        r["state"] = LOCAL_AHEAD
+        r["pending_sync_changes"] = True
+        r["sync_state"] = LOCAL_PENDING
+        r["state"] = LOCAL_PENDING
+        if r["worktree_state"] == WORKTREE_DIRTY_SAFE and not r["eligible_canonical_changes"]:
+            r["local_only_preserved"] = True
     else:
         r["graph_state"] = DIVERGED
-        r["state"] = DIVERGED
+        r["pending_sync_changes"] = True
         if r["dirty"] and not has_conflict_markers:
             rem_changed = remote_changed_files(repo, r["branch"])
             overlap = uncommitted_paths & rem_changed
             if overlap:
                 r["worktree_state"] = WORKTREE_DIRTY_CONFLICT
                 r["conflict_files"] = sorted(overlap)
+                r["sync_state"] = CONFLICT
+                r["state"] = CONFLICT
+            else:
+                r["sync_state"] = DIVERGED
+                r["state"] = DIVERGED
+        else:
+            r["sync_state"] = DIVERGED
+            r["state"] = DIVERGED
+
+    if r["worktree_state"] == WORKTREE_DIRTY_BLOCKED:
+        r["sync_state"] = CONFLICT
+        r["state"] = CONFLICT
 
     return r
 
@@ -850,6 +890,12 @@ def execute_plan(plan: list[dict], classifications: dict,
                 item["action"] = "REVIEW"
                 item["reason"] = out.splitlines()[-1] if out else "pull failed"
             else:
+                c["graph_state"] = IN_SYNC
+                c["sync_state"] = IN_SYNC
+                c["state"] = IN_SYNC
+                c["pending_sync_changes"] = False
+                if c["worktree_state"] == WORKTREE_DIRTY_SAFE and not c.get("eligible_canonical_changes"):
+                    c["local_only_preserved"] = True
                 # Pull 成功后，若在 sync 模式且有 local eligible canonical changes，执行 auto-commit + push
                 if mode == "sync" and c.get("eligible_canonical_changes"):
                     ok, msg = auto_commit_eligible(repo, c)
@@ -859,6 +905,9 @@ def execute_plan(plan: list[dict], classifications: dict,
                             prc, pout = git(repo, "push", "origin", c["branch"])
                             if prc == 0:
                                 item["state"] = "PULLED_AND_PUSHED"
+                                c["eligible_canonical_changes"] = []
+                                if c["worktree_state"] == WORKTREE_DIRTY_SAFE:
+                                    c["local_only_preserved"] = True
         elif action == "PUSH":
             if mode == "pull":
                 item["action"] = "REVIEW"
@@ -872,11 +921,15 @@ def execute_plan(plan: list[dict], classifications: dict,
                     item["action"] = "REVIEW"
                     item["state"] = BLOCKED_PRIVACY
                     item["reason"] = f"privacy scan hit: {hits}"
+                    c["sync_state"] = BLOCKED
+                    c["state"] = BLOCKED
                     continue
             if name.startswith("project:") and classifications[name].get("privacy_blocked"):
                 item["action"] = "REVIEW"
                 item["state"] = BLOCKED_PRIVACY
                 item["reason"] = "public/privacy-blocked 项目不自动 push"
+                c["sync_state"] = BLOCKED
+                c["state"] = BLOCKED
                 continue
             rc, out = git(repo, "push", "origin", c["branch"])
             item["executed"] = rc == 0
@@ -884,6 +937,13 @@ def execute_plan(plan: list[dict], classifications: dict,
             if rc != 0:
                 item["action"] = "REVIEW"
                 item["reason"] = out.splitlines()[-1] if out else "push failed"
+            else:
+                c["graph_state"] = IN_SYNC
+                c["sync_state"] = IN_SYNC
+                c["state"] = IN_SYNC
+                c["pending_sync_changes"] = False
+                if c["worktree_state"] == WORKTREE_DIRTY_SAFE and not c.get("eligible_canonical_changes"):
+                    c["local_only_preserved"] = True
         elif action == "AUTO_COMMIT":
             if mode in ("sync", "push"):
                 ok, msg = auto_commit_eligible(repo, c)
@@ -892,6 +952,8 @@ def execute_plan(plan: list[dict], classifications: dict,
                         item["action"] = "REVIEW"
                         item["state"] = BLOCKED_PRIVACY
                         item["reason"] = msg
+                        c["sync_state"] = BLOCKED
+                        c["state"] = BLOCKED
                     else:
                         item["action"] = "REVIEW"
                         item["reason"] = msg
@@ -902,6 +964,8 @@ def execute_plan(plan: list[dict], classifications: dict,
                         item["action"] = "REVIEW"
                         item["state"] = BLOCKED_PRIVACY
                         item["reason"] = f"privacy scan hit: {hits}"
+                        c["sync_state"] = BLOCKED
+                        c["state"] = BLOCKED
                         continue
                 rc, out = git(repo, "push", "origin", c["branch"])
                 item["executed"] = rc == 0
@@ -909,6 +973,14 @@ def execute_plan(plan: list[dict], classifications: dict,
                 if rc != 0:
                     item["action"] = "REVIEW"
                     item["reason"] = out.splitlines()[-1] if out else "push failed"
+                else:
+                    c["graph_state"] = IN_SYNC
+                    c["sync_state"] = IN_SYNC
+                    c["state"] = IN_SYNC
+                    c["pending_sync_changes"] = False
+                    c["eligible_canonical_changes"] = []
+                    if c["worktree_state"] == WORKTREE_DIRTY_SAFE:
+                        c["local_only_preserved"] = True
             else:
                 item["action"] = "NO ACTION"
         elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-state":
@@ -1118,6 +1190,8 @@ def run_sync(mode: str, detail: bool = False) -> dict:
             "last_sync": datetime.now(timezone.utc).isoformat(),
             "last_mode": mode,
             "per_repo_head": {n: _head(Path(c["path"])) for n, c in classifications.items()},
+            "per_repo_sync_state": {n: c.get("sync_state", c.get("state", IN_SYNC)) for n, c in classifications.items()},
+            "per_repo_worktree_state": {n: c.get("worktree_state", WORKTREE_CLEAN) for n, c in classifications.items()},
             "last_result": _overall(plan, results),
         })
         save_checkpoint(cp)
@@ -1246,9 +1320,22 @@ def run_restore(detail: bool = False, repo: Path = REPO,
 def print_human(results: dict, detail: bool = False) -> None:
     print("Personal AI Sync\n")
     for name, c in results.get("planes", {}).items():
-        st = c.get("state", UNKNOWN)
+        st = c.get("sync_state", c.get("state", UNKNOWN))
+        wt = c.get("worktree_state", WORKTREE_CLEAN)
         note = c.get("note") or c.get("reason") or ""
-        print(f"  {name:22s} {st}" + (f" — {note}" if note and st != IN_SYNC else ""))
+        details = []
+        if wt == WORKTREE_DIRTY_SAFE and c.get("local_only_preserved", True) and not c.get("eligible_canonical_changes"):
+            details.append("worktree: DIRTY_SAFE, local-only preserved")
+        elif wt == WORKTREE_DIRTY_SAFE:
+            details.append("worktree: DIRTY_SAFE")
+        elif wt == WORKTREE_DIRTY_CONFLICT:
+            details.append(f"worktree: DIRTY_CONFLICT ({c.get('conflict_files', [])})")
+        elif wt == WORKTREE_DIRTY_BLOCKED:
+            details.append("worktree: DIRTY_BLOCKED")
+        if note:
+            details.append(note)
+        detail_str = f" — {', '.join(details)}" if details else ""
+        print(f"  {name:22s} {st}{detail_str}")
     rt = results.get("runtime", {})
     if rt.get("status"):
         extra = f"（applied: {','.join(rt['applied'])}）" if rt.get("applied") else ""
