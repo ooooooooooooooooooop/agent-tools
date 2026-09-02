@@ -21,6 +21,13 @@
 # Host-plane row: registers tools as mcp__agent-switchboard__* for every session.
 # Reload marker: 2026-08-19 — force HMR respawn onto merged v1.0.33 code.
 - insert:
+  - id: research-lab-adapter
+    name: '@research-lab/dsh-adapter'
+    config:
+      python: 'python'
+      workspace: '{{DESKTOP}}\\research-lab\\demo-ws2'
+      workspaceId: 'research-lab'
+      deviceId: 'desktop'
   - id: mcp-agent-switchboard
     name: '@deepseek-ai/dsh-mcp-client'
     config:
@@ -72,3 +79,54 @@
   - id: model-persona
     name: './plugins/model-persona.js'
 
+
+# DSH compaction-convergence overlay (pinned local package at ./plugins/dsh-compaction-convergence).
+# The upstream web bundle disables its host-plane compaction row, so keep that row disabled
+# and mount the compatible local implementation under its own loader id. insert appends;
+# reusing compaction-basic here would create a duplicate loader entry instead of an overlay.
+# Managed by dsh/compaction-convergence/test/guard-convergence.ps1.
+
+# DSH context-pressure guard overlay.
+# Managed by dsh/context-pressure-guard/test/install-guard.ps1.
+
+# AIC DSH RUNTIME COMPOSITION BEGIN
+- id: compaction-basic
+  disabled: true
+- id: token-meter
+  disabled: true
+- id: agent-loop
+  disabled: true
+- insert:
+  - id: token-meter-pressure-guard
+    name: ./plugins/dsh-token-meter-pressure-guard/lib/index.js
+  - id: agent-loop-pressure-guard
+    name: ./plugins/dsh-agent-loop-pressure-guard/lib/index.js
+    config:
+      contextAdmission:
+        safetyMargin: 16384
+        operationalMaxOutput: 65536
+        inputMultiplier: 1.08
+        routes:
+        - provider: opencode-go
+          model: deepseek-v4-flash
+          providerAttestedLimit: 1048576
+  - id: tool-result-pruner-pressure-guard
+    name: ./plugins/dsh-tool-result-pruner-pressure-guard/lib/index.js
+    config:
+      thresholdChars: 8192
+      headChars: 4096
+      tailChars: 1024
+  - id: compaction-basic-convergence
+    name: ./plugins/dsh-compaction-convergence/lib/index.js
+    config:
+      summarizationProvider: cpa
+      summarizationModel: gemini-3.7-flash-high
+      maxTokens: 2048
+      maxOverflowRetries: 2
+      maxConsecutiveFailures: 3
+  - id: context-lifecycle
+    name: ./plugins/dsh-context-lifecycle/lib/index.js
+    config:
+      archiveThresholdTokens: 800000
+      sidecarDir: ./.dsh-context-lifecycle
+# AIC DSH RUNTIME COMPOSITION END

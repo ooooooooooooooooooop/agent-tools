@@ -10,7 +10,7 @@ render_targets:
     mode: full-file
     sections:
       "llm-pi-ai.providers": "registry/providers.yaml#providers"
-      "agent-default-model": "registry/routing-policy.yaml#rules.main_default (keys provider/model/reasoningEffort)"
+      "agent-default-model": "overlay (user-owned; preserve admitted provider/model tuple, canonical main_default fallback when missing/invalid)"
       "agent-presets": "overlay"
       "ui-onboarding": "overlay"
       "llm-deepseek": "overlay"
@@ -77,7 +77,11 @@ runtime_composition:
     entry_relative_to_distribution: node_modules/@deepseek-ai/dsh/lib/bin.js
   ui:
     repository: https://github.com/deepseek-ai/deepseek-harness.git
-    baseline_commit: aa6c361a972c8369148dea7380bb5c21c24e07ec
+    # sourceState in the runtime manifest is immutable effective-build
+    # provenance (commit plus any applied patch recipe). It is compared to
+    # this desired recipe; source-checkout HEAD and dirty state are separate
+    # evidence and must not be treated as runtime drift by themselves.
+    baseline_commit: dd6322d604e00eec1ba5e0c8541159906a21094a
     fix_commit: 68826e9a6d8911239770016223719559c2842885
     fix_commit_remote: unavailable-at-audit
     apply_patch: false

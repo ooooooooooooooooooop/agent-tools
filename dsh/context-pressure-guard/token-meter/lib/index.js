@@ -1,7 +1,7 @@
 import { Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { BlockAssembler, deepFreeze } from "@deepseek-ai/dsh-llm";
-import { canonicalHeader, deriveEventMessage, headerEquals, isSurfaceEvent } from "@deepseek-ai/dsh-session";
+import { canonicalHeader, deriveEventMessage, headerEquals, isReplacementSurfaceEvent, isSurfaceEvent } from "@deepseek-ai/dsh-session";
 import { z as z$1 } from "zod";
 //#region lib/types/estimate.js
 /**
@@ -419,7 +419,9 @@ const contextPressureProjectionDefinition = {
 				next = withoutContextWindow;
 			}
 			for (const key of ["projectedInput", "reservedOutput", "combinedContext", "configuredLimit", "effectiveLimit", "providerAttestedLimit", "trustedUsage", "usageEstimate", "sampleValidity", "sampleSource", "sampleStatus", "estimateMethod", "estimateConfidence", "compactionState", "circuitBreakerState"]) {
-				if (event.data[key] !== void 0 && next[key] !== event.data[key]) next = { ...next, [key]: event.data[key] };
+				const value = event.data[key];
+				const normalized = (key === "reservedOutput" || key === "combinedContext") && typeof value === "number" ? Math.max(0, value) : value;
+				if (normalized !== void 0 && next[key] !== normalized) next = { ...next, [key]: normalized };
 			}
 		}
 		const rawUsage = event.type === "assistant/chunk" && event.data.chunk.type === "usage" ? event.data.chunk.usage : event.type === "assistant/message" ? event.data.usage : void 0;

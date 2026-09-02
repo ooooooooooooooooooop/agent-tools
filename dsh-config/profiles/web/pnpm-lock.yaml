@@ -8,36 +8,25 @@ importers:
 
   .:
     dependencies:
+      '@research-lab/dsh-adapter':
+        specifier: file:C:/Users/admin/Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz
+        version: file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz
       dsh-remote-web-gateway:
         specifier: ^0.2.1
         version: 0.2.1
       dshmarket:
         specifier: ^1.29.2
-        version: 1.32.0(@deepseek-ai/schemastery@3.18.1)
+        version: 1.32.0
 
 packages:
 
-  '@deepseek-ai/cosmokit@1.8.2':
-    resolution: {integrity: sha512-muBOKtSrUKU5m/xpq8ZXWL6hQ/jgd4PhU2PqH97bcxIiLEJfNwZOGQEx4t/aS/GgxRAR+ra9pMHPMtTHU4sqqA==}
-
-  '@deepseek-ai/dsh-tools@0.1.1-rc.2':
-    resolution: {integrity: sha512-0GGL4D55MwYDepzZMOI3L0ycu5b2qr96GL0Y7snwhAnpK2Di61rbX3fJE+PB3ZrovGX0csIRdt9n3iJZDVtDrw==}
+  '@research-lab/dsh-adapter@file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz':
+    resolution: {integrity: sha512-inc0Z13/4o1TTj69AsehnzlM7mKzmRS3stHwO6lVkKle3HZ5+y8/OSvbHcoBP1YXwPi0iPzSKiY/70yvW0x6AA==, tarball: file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz}
+    version: 0.2.1
     peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      '@deepseek-ai/dsh-agent': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-code-runtime': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-invariants': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-llm': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-scope': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-session': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-system-prompt': ^0.1.1-rc.2
-      '@deepseek-ai/dsh-user-approval': ^0.1.1-rc.2
-
-  '@deepseek-ai/schemastery@3.18.1':
-    resolution: {integrity: sha512-Qn0FCSwCQnpnj6SB31I6i2sIKgKWnkbJM8O0EU91Gv2UsYVvtZTl6IA0sCwk2e2MZf5S8w5hpq9QkeVvK9qwxg==}
-
-  '@standard-schema/spec@1.1.0':
-    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+      '@deepseek-ai/dsh-client-runtime': ^0.1.1-rc.2
+      '@deepseek-ai/dsh-client-ui-conversation': ^0.1.1-rc.2
+      react: ^18.2.0
 
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
@@ -110,18 +99,7 @@ packages:
 
 snapshots:
 
-  '@deepseek-ai/cosmokit@1.8.2': {}
-
-  '@deepseek-ai/dsh-tools@0.1.1-rc.2':
-    dependencies:
-      '@deepseek-ai/schemastery': 3.18.1
-
-  '@deepseek-ai/schemastery@3.18.1':
-    dependencies:
-      '@deepseek-ai/cosmokit': 1.8.2
-      '@standard-schema/spec': 1.1.0
-
-  '@standard-schema/spec@1.1.0': {}
+  '@research-lab/dsh-adapter@file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz': {}
 
   argparse@2.0.1: {}
 
@@ -137,12 +115,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  dshmarket@1.32.0(@deepseek-ai/schemastery@3.18.1):
+  dshmarket@1.32.0:
     dependencies:
       js-yaml: 4.3.1
       undici: 7.29.0
-    optionalDependencies:
-      '@deepseek-ai/schemastery': 3.18.1
 
   follow-redirects@1.16.0(debug@4.4.3):
     optionalDependencies:

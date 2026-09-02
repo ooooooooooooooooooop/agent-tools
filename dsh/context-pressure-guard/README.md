@@ -19,6 +19,33 @@ status, hash, event sequence, artifact path and a short summary; its
 Compaction convergence is a separate overlay, and the context-lifecycle
 package owns read-only exhaustion, handoff and restart protection.
 
+## Replacement replay incident — frozen closure
+
+The DSH token-meter replacement replay incident is closed. The durable status
+is:
+
+```text
+INCIDENT_REMEDIATION = COMPLETE
+DSH_TOKEN_METER_REPLACEMENT_REPLAY_FIX = COMPLETE
+OVERALL = PASS
+INCIDENT_LINE = CLOSED
+```
+
+Canonical contract: `assistant/message` with `surfaceOp=replace` is a
+logical-surface replacement, not a new provider invocation or step-lifecycle
+event. A replacement assistant participates in surface folding, creates no
+new step lifecycle, creates no new provider-usage anchor, and its copied
+usage is excluded from projection and accounting. A normal, non-replacement
+assistant continues to require strict matching `step/start` lifecycle
+validation.
+
+The following are independent follow-ups and do not reopen this incident:
+
+- `AIC_SOURCE_STATE_DRIFT` — `FOLLOW_UP`; UI source-state alignment is
+  separate from token-meter remediation.
+- `ARCHIVED_SESSION_ANCHOR_COVERAGE` — `FOLLOW_UP`; profile anchor coverage
+  is separate from the accepted target-session runtime validation.
+
 ## Portable profile fragment
 
 Apply this fragment through the DSH profile patch loader. Keep the upstream

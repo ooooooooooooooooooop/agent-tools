@@ -97,7 +97,7 @@ def resolve_value_from(policy: dict, dotted: str):
 
 # ---------------------------------------------------------------- render (dsh)
 
-def render_settings(canonical: dict, overlay: dict) -> dict:
+def render_settings(canonical: dict, overlay: dict, existing: dict | None = None) -> dict:
     md = canonical["policy"]["rules"]["main_default"]
     providers = canonical["providers"]["providers"]
     models = canonical["models"]["models"]
@@ -112,7 +112,15 @@ def render_settings(canonical: dict, overlay: dict) -> dict:
     out = {}
     out.update(overlay["overlay"]["settings"])  # ui-onboarding, agent-presets
     out["llm-pi-ai"] = {"providers": rendered_providers}
-    out["agent-default-model"] = {
+    selection = None
+    if isinstance(existing, dict):
+        candidate = existing.get("agent-default-model")
+        if isinstance(candidate, dict):
+            admitted = {(m["provider"], m["id"]) for m in models
+                        if m.get("status") == "admitted"}
+            if (candidate.get("provider"), candidate.get("model")) in admitted:
+                selection = dict(candidate)
+    out["agent-default-model"] = selection or {
         k: md[k] for k in ("provider", "model", "reasoningEffort") if k in md
     }
     return out
@@ -337,7 +345,7 @@ def cmd_diff(args) -> int:
         actual = (load_cordis_yaml(actual_path) if target["id"] == "agent-preset-cc"
                   else load_yaml(actual_path))
         if target["mode"] == "full-file":
-            expected = render_settings(canonical, overlay)
+            expected = render_settings(canonical, overlay, actual)
             raw: list = []
             deep_diff(expected, actual, "", raw)
             for field, exp, act in raw:
@@ -1301,7 +1309,7 @@ def _dsh_structured_drift() -> dict:
             continue
         if target["mode"] == "full-file":
             actual = load_yaml(actual_path)
-            deep_diff(render_settings(canonical, overlay), actual, "", out["full_file"])
+            deep_diff(render_settings(canonical, overlay, actual), actual, "", out["full_file"])
         elif target["mode"] == "field-projection":
             actual = load_cordis_yaml(actual_path)
             for check in target.get("field_checks", []):
@@ -1349,7 +1357,9 @@ def _apply_dsh() -> tuple[int, list[str]]:
                 return 1, msgs
             backup = _apply_backup("dsh", actual_path)
             _atomic_write_text(actual_path, yaml.safe_dump(
-                render_settings(canonical, overlay), allow_unicode=True, sort_keys=False))
+                render_settings(canonical, overlay,
+                                load_yaml(actual_path) if actual_path.is_file() else None),
+                allow_unicode=True, sort_keys=False))
             written.append((actual_path, backup))
             msgs.append(f"applied settings: {[f for f, _, _ in d['full_file']] or ['<file>']}")
         elif target["mode"] == "full-file-json" and (d["gov_profiles"] or d["gov_profiles_missing"]):
