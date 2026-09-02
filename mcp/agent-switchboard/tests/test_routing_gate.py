@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import routing_gate  # noqa: E402
+import work_registry  # noqa: E402
 
 DIRECT_BRAIN_LABOUR = (
     "direct-brain-labour: reads=0 | searches=0 | evidence=0 | "
@@ -28,18 +29,24 @@ class RoutingGateTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state_dir = Path(self.tmp.name) / "routing-gate"
         self.evidence_dir = Path(self.tmp.name) / "context-evidence"
+        self.registry_dir = Path(self.tmp.name) / "work-registry"
         self.db_path = Path(self.tmp.name) / "state.sqlite"
         self.state_patch = mock.patch.object(routing_gate, "STATE_DIR", self.state_dir)
         self.evidence_patch = mock.patch.object(
             routing_gate, "EVIDENCE_DIR", self.evidence_dir
         )
         self.db_patch = mock.patch.object(routing_gate, "DB_PATH", self.db_path)
+        self.reg_patch = mock.patch.object(
+            work_registry, "REGISTRY_DIR", self.registry_dir
+        )
         self.state_patch.start()
         self.evidence_patch.start()
         self.db_patch.start()
+        self.reg_patch.start()
         self.addCleanup(self.state_patch.stop)
         self.addCleanup(self.evidence_patch.stop)
         self.addCleanup(self.db_patch.stop)
+        self.addCleanup(self.reg_patch.stop)
 
     @staticmethod
     def payload(message=""):
