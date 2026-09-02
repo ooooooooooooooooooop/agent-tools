@@ -6,3 +6,5 @@ overlay:
       welcomeNoticeVersion: "2026-08-13.1"
     agent-presets:
       default: cc
+    llm-deepseek:
+      models: []

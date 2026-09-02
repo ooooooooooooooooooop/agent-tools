@@ -1,4 +1,4 @@
-﻿# BOOTSTRAP — Personal AI 自主配置种子
+# BOOTSTRAP — Personal AI 自主配置种子
 
 本文件是这台电脑 Personal AI 生命周期的**唯一入口**。
 用户只需要对这台电脑上的 Agent 说一句：
@@ -53,7 +53,7 @@
    该工具只做增量覆盖，绝不删除目标端额外文件；装完重跑 `--check` 必须退出码 0。
 5. **Handoff 给 `$publish-and-reuse`**：打开 [`skills/publish-and-reuse/SKILL.md`](./skills/publish-and-reuse/SKILL.md)（权威细节：[`references/personal-ai-lifecycle-sync.md`](./skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md)），严格按其 **RESTORE** 模式契约执行：
    `python <REPO>/scripts/personal_ai_sync.py restore`
-   restore 自动完成：克隆 personal-ai-state（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills → `aic apply dsh` 重建固定 Node/Base/UI/五个 overlay/Profile → 校验 Memory canonical 可读 → 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
+   restore 自动完成：克隆 personal-ai-state（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills → `aic apply dsh` 重建固定 Node/Base/UI/五个 overlay/Profile → 校验 Memory canonical 可读 → **校验 DSH 会话历史**（备份计数 / live 计数 / 已知锚点 / schema 探针；非 `PASS|NOT_APPLICABLE` 时总体不得 PASS，历史缺失绝不因"配置恢复成功"而放行）→ 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
 6. restore 结果 `PASS` → §4 收尾；`REVIEW` / `BLOCKED` → §5。
 
 ## 3. AUTO_SYNC（已安装设备的日常入口）
@@ -84,10 +84,13 @@ mode                 RESTORE / AUTO_SYNC
 agent-tools          <状态>
 personal-ai-state    <状态>
 runtime              <状态>
+dsh-session-history  <状态>（backup=<n> live=<n> missing=<n>）
 secrets              <状态>
 
 Result: PASS
 ```
+
+`dsh-session-history` 状态 = `PASS`（备份与 live 会话数匹配、锚点与 schema 探针通过）/ `NOT_APPLICABLE`（从未配置备份的 fresh 设备，不阻塞）/ `PARTIAL` / `FAIL`。**不得用一个总体 PASS 混合各 plane**；历史缺失时总体 `Result` 一律降为 REVIEW。
 
 
 ## 4.1 Harness compatibility overlay（自动恢复）
@@ -117,4 +120,5 @@ DSH 的固定 Base、Node、UI bundle、五个 overlay、Profile patch、组合 
 - `python <REPO>/scripts/aic/aic.py validate` = VALID；
 - 每个已安装 Harness 的 `aic diff` = NO DRIFT（未安装 = OPTIONAL_NOT_INSTALLED，不自动装齐）；
 - `python <REPO>/scripts/personal_ai_sync.py check` 结果 `PASS`（各 plane `IN_SYNC`）；
-- fresh 恢复后跑一个低风险普通任务，确认 Personalization context 正常（不得以旧聊天 history 作为恢复依据）。
+- restore 的 `dsh-session-history` step = `PASS | NOT_APPLICABLE`（含已知锚点 `session-869904c0-fcd0-4ea3-a3b7-fec230ac8017` 的 backup/live 存在性）；
+- fresh 恢复后跑一个低风险普通任务，确认 Personalization context 正常（不得以旧聊天 history 作为恢复依据）；恢复过历史的设备须确认旧会话在运行时可见（会话文件挂载 + schema 探针），不得只看左侧列表。

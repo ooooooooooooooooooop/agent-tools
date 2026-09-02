@@ -17,6 +17,9 @@ from typing import Any
 
 WORKHORSE_KEYWORDS = ("balanced", "everyday", "workhorse")
 READER_KEYWORDS = ("affordable", "cost-efficient", "cost efficient", "fast", "repeatable")
+# User policy: Codex child agents use Luna by default.  This preference applies
+# only to the managed child roles; it never rewrites the main session model.
+PREFERRED_CODEX_CHILD_MODEL = "gpt-5.6-luna"
 
 CLAUDE_PEER_ALIASES = {"frontier": "best", "workhorse": "sonnet", "reader": "haiku"}
 # User policy: prefer the moving Fable family at max effort and fall back to
@@ -112,28 +115,21 @@ def select_codex_roles(models_json: dict) -> CodexRoles:
     by_priority = sorted(entries, key=lambda e: (e["priority"], e["id"]))
     frontier = by_priority[0]
 
-    non_frontier = [entry for entry in by_priority if entry["id"] != frontier["id"]]
+    preferred_child = next(
+        (
+            entry
+            for entry in by_priority
+            if entry["id"].strip().lower() == PREFERRED_CODEX_CHILD_MODEL
+        ),
+        None,
+    )
 
-    workhorse = None
-    for entry in non_frontier:
-        text = _capability_text(entry["raw"])
-        if any(kw in text for kw in WORKHORSE_KEYWORDS):
-            workhorse = entry
-            break
-    if workhorse is None:
-        workhorse = non_frontier[0] if non_frontier else None
-
-    reader = None
-    for entry in non_frontier:
-        text = _capability_text(entry["raw"])
-        if any(kw in text for kw in READER_KEYWORDS):
-            reader = entry
-            break
-    if reader is None:
-        # A two-model catalog may legitimately use the one non-frontier model
-        # for both cheap roles. It is still cheaper than silently inheriting the
-        # selected frontier brain.
-        reader = non_frontier[-1] if non_frontier else None
+    # A user-pinned child model wins over the generic capability heuristic. If
+    # Luna is absent, leave both managed child roles unavailable so callers can
+    # stop and request authorization instead of silently selecting another
+    # model. The main-session frontier remains a separate, caller-owned role.
+    workhorse = preferred_child
+    reader = preferred_child
 
     # The live catalog may embed full base-instruction templates in each raw
     # entry. They are useful only while matching descriptions and would add

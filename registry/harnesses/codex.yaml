@@ -1,58 +1,27 @@
-# codex.yaml — Codex harness adapter contract（canonical）
+# codex.yaml — Codex harness contract（canonical · NATIVE INDEPENDENT）
+# Personal AI 管理范围：READ_ONLY_DISCOVERY ONLY（禁止 AIC 写控制 / Hook 注入 / 强制 MCP 劫持）
 harness: codex
 home: ".codex"
-version_observed: "codex-cli 0.149.0-alpha.4.1 (bin 110b3d66a02d864e)"
+status: native_independent
+version_observed: "codex-cli 0.149.0"
 
-consumes:
-  - registry/capabilities.yaml        # 标准 MCP 能力集
-  - registry/models.yaml              # 准入校验（default model 须在 admitted catalog）
-  - personal-ai-state:static          # 静态指令（见 static_instructions）
-  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
-
-render_targets:
-  - file: config.toml
-    format: toml
-    generated_fields:
-      - {path: "model", source: "harness_defaults.model", mode: exact}
-      - {path: "mcp_servers", source: "capabilities.mcp_standard", mode: superset_keys}
-    note: "node_repl / agent_switchboard / plugins / desktop / windows / marketplaces / projects / notify = OVERLAY/MACHINE_LOCAL，render 保留、不生成"
-  - file: AGENTS.md
-    kind: instruction
-    owner: shared-managed-blocks      # switchboard owns cost-routing block；aic owns capability-adoption + governance blocks
-    check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
-    generated_blocks:
-      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
-      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
-
-harness_defaults:
-  model: gpt-5.6-luna                 # 须在 models.yaml admitted catalog（validate 校验）
-  model_provider_block: "Codex 自有 OpenAI 认证路径（requires_openai_auth），非 cpa 网关 → 属 harness 认证现实，不入 canonical providers"
+consumes: []
+render_targets: []
 
 overlay:
-  - "config.toml: sandbox/windows/features/desktop/notify/plugins/marketplaces/projects/trust_level"
-  - "skills/ agents/ plugins/（harness 自有扩展）"
+  - "All configuration in ~/.codex/config.toml and ~/.codex/ is 100% user-owned and harness-native"
 
 static_instructions:
   file: AGENTS.md
-  owner: shared-managed-blocks
-  legality: "switchboard cost routing + aic long-term capability-adoption projection；无动态状态"
+  owner: user
+  legality: "Official native instructions only; no AIC or Switchboard managed blocks"
 
 runtime_context_hook:
-  mechanism: "session-start injection（无原生动态 hook；由编排方在 prompt 首帧注入 Context Package）"
-  constraint: "禁止把 Context Package 写入 AGENTS.md（static）"
+  mechanism: "none (harness native independent)"
+  constraint: "Personal AI does not inject runtime hooks or instructions"
 
-health_check: "codex.exe --version 可执行（bin 路径为 MACHINE_LOCAL，当前 broker config codex_path 已漂移过期 — 见报告）"
-
+health_check: "codex --version"
 runtime_state: "sessions/ *.sqlite logs/ models_cache.json thread-writer-locks/ — 永不入 canonical"
 secret: "auth.json（ChatGPT OAuth）— 永不入 canonical"
 
-# AUTONOMOUS_EXECUTION_GOVERNANCE — Codex hook 矩阵（canonical；wrapper/sidecar，不改上游源码）
-governance_hooks:
-  BEFORE_MODEL_CALL: {impl: wrapper, detail: "codex exec wrapper（sidecar 计数 + gate，dispatch 前）"}
-  AFTER_MODEL_CALL: {impl: wrapper, detail: "解析 --json 输出 usage"}
-  AFTER_AGENT_ACTION: {impl: wrapper, detail: "thread JSONL 扫描 tool 调用"}
-  ON_PROGRESS: {impl: wrapper, detail: "artifact/git delta"}
-  ON_CHECKPOINT: {impl: wrapper, detail: "→ scripts/checkpoint/checkpoint.py"}
-  ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + durable checkpoint（stop_reason=BUDGET_LIMIT）"}
-  ON_NO_PROGRESS: {impl: wrapper, detail: "loop breaker → checkpoint + 退出"}
-  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+governance_hooks: {}

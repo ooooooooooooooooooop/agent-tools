@@ -341,7 +341,7 @@ class TestAffectedTargets(unittest.TestCase):
     def test_preferences_refreshes_all_instruction_consumers(self):
         self.assertEqual(
             pas.affected_targets([], ["state/preferences.md"]),
-            ["claude", "codex", "dsh", "gemini", "switchboard"],
+            ["dsh"],
         )
 
 
@@ -384,6 +384,160 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
                                  agent_tools_remote=str(at_remote),
                                  state_remote=str(st.remote))
             self.assertEqual(r2["result"], "PASS")
+
+
+class TestSessionHistoryGateRegression(unittest.TestCase):
+    """DSH_SESSION_HISTORY 门禁防复发回归测试（A/B/C/D 合同语义）。"""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.root = Path(self.td.name)
+        self.live_sessions = self.root / "dsh" / "sessions"
+        self.storages = self.root / "dsh" / "storages"
+        self.backup_root = self.root / "backup"
+
+        self.live_sessions.mkdir(parents=True, exist_ok=True)
+        self.storages.mkdir(parents=True, exist_ok=True)
+        (self.backup_root / "state").mkdir(parents=True, exist_ok=True)
+
+        self.anchor_id = "session-869904c0-fcd0-4ea3-a3b7-fec230ac8017"
+        self.valid_zstd_bytes = b"\x28\xb5\x2f\xfd\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def _create_physical_sessions(self, count=623, include_anchor=True):
+        ids = []
+        if include_anchor:
+            ids.append(self.anchor_id)
+        for i in range(len(ids), count):
+            ids.append(f"session-mock-{i:04d}")
+
+        for sid in ids:
+            s_dir = self.live_sessions / "mock-proj" / sid
+            s_dir.mkdir(parents=True, exist_ok=True)
+            (s_dir / "session.jsonl.zstd").write_bytes(self.valid_zstd_bytes)
+        return ids
+
+    def _write_backup_index(self, session_ids):
+        index = {
+            f"mock-proj/{sid}/session.jsonl.zstd": {
+                "size": len(self.valid_zstd_bytes),
+                "mtime": 1787825061,
+                "sha256": "mock-sha",
+                "backup": f"sessions/daily-mock/mock-proj/{sid}/session.jsonl.zstd"
+            }
+            for sid in session_ids
+        }
+        (self.backup_root / "state" / "sessions-index.json").write_text(
+            json.dumps(index), encoding="utf-8"
+        )
+
+    def _write_workspace_json(self, attached_ids, initialized=True):
+        ws_data = {
+            "unit": {"name": "workspace", "version": 2},
+            "global": {
+                "initialized": initialized,
+                "workspaceIds": ["ws-1"],
+                "archivedSessionIds": []
+            },
+            "tables": {
+                "workspaces": {
+                    "ws-1": {
+                        "path": "C:\\Desktop\\mock-proj",
+                        "title": "mock-proj",
+                        "sessionIds": list(attached_ids),
+                        "createdAt": "2026-09-01T00:00:00.000Z",
+                        "updatedAt": "2026-09-01T00:00:00.000Z"
+                    }
+                }
+            }
+        }
+        (self.storages / "workspace.json").write_text(
+            json.dumps(ws_data), encoding="utf-8"
+        )
+
+    def test_scenario_A_physical_present_but_unattached_fails_gate(self):
+        """Scenario A: 623 physical sessions exist, anchor exists, but workspace only attached 2 dummy sessions.
+        Must return REVIEW/FAIL and NOT PASS (prevents repeating this exact incident)."""
+        ids = self._create_physical_sessions(623, include_anchor=True)
+        self._write_backup_index(ids)
+        # Workspace only attached 2 non-anchor sessions (accident scenario)
+        non_anchor_ids = [x for x in ids if x != self.anchor_id][:2]
+        self._write_workspace_json(non_anchor_ids, initialized=True)
+
+        res = pas.session_history_status(
+            live_root=self.live_sessions,
+            backup_root=self.backup_root,
+            anchors=[self.anchor_id],
+            storage_root=self.storages
+        )
+        self.assertNotEqual(res["status"], "PASS")
+        self.assertEqual(res["status"], "REVIEW")
+        self.assertIn("workspace_unattached", res["reason"])
+        self.assertEqual(res["unattached_count"], 621)
+        self.assertFalse(res["anchors"][self.anchor_id]["attached"])
+
+    def test_scenario_B_all_attached_and_enumerable_passes(self):
+        """Scenario B: 623 physical sessions, 623 attached, anchor attached -> PASS."""
+        ids = self._create_physical_sessions(623, include_anchor=True)
+        self._write_backup_index(ids)
+        self._write_workspace_json(ids, initialized=True)
+
+        res = pas.session_history_status(
+            live_root=self.live_sessions,
+            backup_root=self.backup_root,
+            anchors=[self.anchor_id],
+            storage_root=self.storages
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["unattached_count"], 0)
+        self.assertTrue(res["anchors"][self.anchor_id]["attached"])
+
+    def test_scenario_C_merged_old_and_new_passes(self):
+        """Scenario C: 605 backup + 20 new sessions = 625 all attached -> PASS."""
+        backup_ids = self._create_physical_sessions(605, include_anchor=True)
+        self._write_backup_index(backup_ids)
+
+        # Add 20 new sessions
+        all_ids = list(backup_ids)
+        for i in range(20):
+            new_id = f"session-new-{i:03d}"
+            all_ids.append(new_id)
+            s_dir = self.live_sessions / "mock-proj" / new_id
+            s_dir.mkdir(parents=True, exist_ok=True)
+            (s_dir / "session.jsonl.zstd").write_bytes(self.valid_zstd_bytes)
+
+        self._write_workspace_json(all_ids, initialized=True)
+
+        res = pas.session_history_status(
+            live_root=self.live_sessions,
+            backup_root=self.backup_root,
+            anchors=[self.anchor_id],
+            storage_root=self.storages
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["live_count"], 625)
+        self.assertEqual(res["attached_count"], 625)
+        self.assertEqual(res["unattached_count"], 0)
+
+    def test_scenario_D_anchor_missing_from_workspace_fails_gate(self):
+        """Scenario D: All counts match but anchor is omitted from workspace -> REVIEW."""
+        ids = self._create_physical_sessions(10, include_anchor=True)
+        self._write_backup_index(ids)
+        # Attach 10 sessions but swap anchor with a different dummy ID
+        attached = [x for x in ids if x != self.anchor_id] + ["session-mock-dummy"]
+        self._write_workspace_json(attached, initialized=True)
+
+        res = pas.session_history_status(
+            live_root=self.live_sessions,
+            backup_root=self.backup_root,
+            anchors=[self.anchor_id],
+            storage_root=self.storages
+        )
+        self.assertNotEqual(res["status"], "PASS")
+        self.assertEqual(res["status"], "REVIEW")
+        self.assertFalse(res["anchors"][self.anchor_id]["attached"])
 
 
 class TestActiveProjectDiscovery(unittest.TestCase):

@@ -19,6 +19,7 @@ venv/
 
 # Temporary inspection and generated deliverables
 .tmp_*
+.personal-ai-migration-backup-*
 _make_summary*.py
 build_weekly_summary.mjs
 *.inspect.ndjson
@@ -50,3 +51,8 @@ docs/cli-adapter-*.md
 dsh/compaction-convergence/.dsh-convergence-backup/
 dsh/compaction-convergence/test/.replay/
 dsh/compaction-convergence/test/.last-deploy-marker.json
+
+# Incident and stability closure staging artifacts
+.incident-tmp/
+.recovery-snapshots-*/
+.stability-closure-*/

@@ -85,6 +85,7 @@ class LauncherVersionAgnosticTests(unittest.TestCase):
         self.assertIn("dsh-managed-state.json", text)
         self.assertIn('base-dsh-$baseVersion', text)
         self.assertIn('$entryRel', text)
+        self.assertIn("Join-Path $managedNodePath 'node.exe'", text)
         self.assertIn("$package.version -ne $baseVersion", text)
 
 

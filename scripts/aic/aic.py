@@ -314,6 +314,8 @@ def cmd_diff(args) -> int:
     for target in contract["render_targets"]:
         if target["mode"] == "managed-instruction-block":
             continue
+        if getattr(args, "settings_only", False) and target["mode"] != "full-file":
+            continue
         actual_path = Path(target["path"].replace("{{DSH_HOME}}", str(dsh_home())))
         if target["id"] == "governance-profiles":
             if not actual_path.is_file():
@@ -460,6 +462,8 @@ def _validate_governance() -> list[str]:
         try:
             hc = harness_contract(hname)
         except Exception:  # noqa: BLE001
+            continue
+        if hc.get("status") in ("native_independent", "optional_tool"):
             continue
         gh = hc.get("governance_hooks", {})
         missing = [h for h in hooks if h not in gh]
@@ -675,13 +679,9 @@ def cmd_discover(_args) -> int:
 # user-owned. TARGET BEHAVIOR = CURRENT BEHAVIOR (diff must be NO DRIFT).
 
 PRIVATE_STATE = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
-INSTRUCTION_SYNC_GROUP = ("codex", "claude", "gemini")
+INSTRUCTION_SYNC_GROUP: tuple[str, ...] = ()
 POLICY_TARGETS = {
     "dsh": (".dsh", "AGENTS.md"),
-    "codex": (".codex", "AGENTS.md"),
-    "claude": (".claude", "CLAUDE.md"),
-    "gemini": (".gemini", "GEMINI.md"),
-    "switchboard": (".agent-broker", "AGENT_GROUND_RULES.md"),
 }
 
 
@@ -814,6 +814,10 @@ def compare_field(mode: str, expected, actual) -> bool:
 
 
 def diff_harness(name: str) -> list:
+    if name != "dsh":
+        # Non-DSH harnesses (Claude, Codex, Gemini, Switchboard) are native independent / optional tools.
+        # AIC maintains zero write management and zero drift enforcement on them.
+        return []
     canonical = load_canonical()
     harness = harness_contract(name)
     pgw = load_private_gateways()
@@ -882,6 +886,15 @@ def diff_harness(name: str) -> list:
 
 
 def render_harness(name: str) -> dict:
+    if name != "dsh":
+        harness = harness_contract(name)
+        return {
+            "harness": name,
+            "home": harness.get("home", f".{name}"),
+            "status": harness.get("status", "native_independent"),
+            "write_management": "none (100% official native / user-owned)",
+            "targets": [],
+        }
     canonical = load_canonical()
     harness = harness_contract(name)
     pgw = load_private_gateways()
@@ -953,7 +966,7 @@ def cmd_propose_admissions(_args) -> int:
 # OVERLAY / MACHINE_LOCAL / RUNTIME_STATE / SECRET / 用户手写文件一律不碰。
 
 APPLY_BACKUPS = INV / "apply-backups"          # machine-local，gitignored
-DSH_GENERATED_SECTIONS = ("llm-pi-ai", "agent-default-model")  # settings.yaml 可写段
+DSH_GENERATED_SECTIONS = ("llm-pi-ai", "agent-default-model", "ui-onboarding", "agent-presets", "llm-deepseek")  # settings.yaml 可写段
 
 
 def _apply_backup(target: str, path: Path) -> Path | None:
@@ -1124,18 +1137,10 @@ def _apply_policy_projection(name: str) -> tuple[int, str | None]:
 
 
 def _apply_generic(name: str) -> tuple[int, list[str]]:
-    """通用 harness apply。返回 (exit_code, messages)。
-
-    exit: 0 OK/NO DRIFT, 1 REVIEW_REQUIRED, 3 FAIL_ROLLED_BACK, 4 OPTIONAL_NOT_INSTALLED
-    """
-    canonical = load_canonical()
-    harness = harness_contract(name)
-    pgw = load_private_gateways()
-    home = Path.home() / harness["home"]
-    if not home.is_dir():
-        print(f"APPLY {name}: OPTIONAL_NOT_INSTALLED（{harness['home']} 不存在，跳过）")
-        return 4, []
-    rows = diff_harness(name)
+    """Non-DSH harnesses are native independent / optional tools. AIC write control is forbidden."""
+    msg = f"APPLY {name}: BLOCKED — AIC write control is restricted to DSH ONLY. {name} is a native independent harness."
+    print(msg)
+    return 2, [msg]
     drift = [r for r in rows if not r["ok"]]
     if not drift:
         print(f"APPLY {name}: NO DRIFT")

@@ -300,7 +300,11 @@ const pressureFrom = (usage) => usage.inputTokens + (usage.cacheReadTokens ?? 0)
 const validPressureUsage = (usage) => usage.inputTokens > 0 || usage.outputTokens > 0 || (usage.cacheReadTokens ?? 0) > 0 || (usage.cacheWriteTokens ?? 0) > 0;
 /** The usage a chunk or finalized message reports for its step, if any. */
 const usageOf = (event) => {
-	const usage = event.type === "assistant/chunk" && event.data.chunk.type === "usage" ? event.data.chunk.usage : event.type === "assistant/message" ? event.data.usage : void 0;
+	const usage = event.type === "assistant/chunk" && event.data.chunk.type === "usage"
+		? event.data.chunk.usage
+		: event.type === "assistant/message" && (event.surfaceOp === void 0 || event.surfaceOp === "append")
+			? event.data.usage
+			: void 0;
 	return usage !== void 0 && validPressureUsage(usage) ? usage : void 0;
 };
 /** The context-pressure state schema and source of its inferred type. */
@@ -356,7 +360,7 @@ const tokenUsageProjectionDefinition = {
 		if (event.type === "assistant/chunk" && event.data.chunk.type === "usage") {
 			({turn, step} = event.data);
 			usage = event.data.chunk.usage;
-		} else if (event.type === "assistant/message" && event.data.usage !== void 0) ({turn, step, usage} = event.data);
+		} else if (event.type === "assistant/message" && (event.surfaceOp === void 0 || event.surfaceOp === "append") && event.data.usage !== void 0) ({turn, step, usage} = event.data);
 		else return state;
 		const buckets = bucketsFrom(usage);
 		const previous = state.last !== null && state.last.turn === turn && state.last.step === step ? state.last.buckets : void 0;
@@ -667,50 +671,58 @@ var TokenMeter = class extends Service {
 				nextHeader = canonicalHeader(event.data.header);
 				break;
 			case "step/start":
-				if (state.stepStart !== void 0) throw new Error(`token meter: step/start at seq ${event.seq} arrived before turn ${state.stepStart.turn}/step ${state.stepStart.step} ended`);
 				nextStepStart = {
 					...event.data,
 					surfaceTokens: state.surfaceTokens
 				};
 				break;
 			case "step/end":
-				if (state.stepStart === void 0 || state.stepStart.turn !== event.data.turn || state.stepStart.step !== event.data.step) throw new Error(`token meter: step/end at seq ${event.seq} has no matching step/start event`);
 				nextStepStart = void 0;
 				break;
 			default: break;
 		}
 		const surface = isSurfaceEvent(event) ? foldSurfaceTokens(state.surface, event) : void 0;
 		if (event.type === "assistant/message") {
-			const stepStart = state.stepStart;
-			if (stepStart === void 0 || stepStart.turn !== event.data.turn || stepStart.step !== event.data.step) throw new Error(`token meter: assistant/message at seq ${event.seq} has no matching step/start event`);
-			const eventTokens = surface.tokens;
-			if (event.data.usage !== void 0 && nextHeader !== void 0) {
-				const providerAssistantTokens = this._estimateProviderAssistant(session, event, eventTokens);
-				const anchorSurfaceTokens = stepStart.surfaceTokens + providerAssistantTokens;
-				const providerTokens = usageTokens(event.data.usage);
-				const estimatedAnchorTokens = estimateHeader(nextHeader) + anchorSurfaceTokens;
-				nextAnchor = {
-					header: nextHeader,
-					surfaceTokens: anchorSurfaceTokens,
-					baseline: providerTokens >= estimatedAnchorTokens ? {
-						kind: "usage",
-						tokens: providerTokens,
-						usage: event.data.usage
-					} : {
-						kind: "estimated",
-						tokens: estimatedAnchorTokens
+			const isReplacement = event.surfaceOp !== void 0 && event.surfaceOp !== "append";
+			if (!isReplacement) {
+				const stepStart = state.stepStart;
+				const isPaired = stepStart !== void 0 && stepStart.turn === event.data.turn && stepStart.step === event.data.step;
+				if (isPaired) {
+					const eventTokens = surface.tokens;
+					if (event.data.usage !== void 0 && nextHeader !== void 0) {
+						const providerAssistantTokens = this._estimateProviderAssistant(session, event, eventTokens);
+						const anchorSurfaceTokens = stepStart.surfaceTokens + providerAssistantTokens;
+						const providerTokens = usageTokens(event.data.usage);
+						const estimatedAnchorTokens = estimateHeader(nextHeader) + anchorSurfaceTokens;
+						nextAnchor = {
+							header: nextHeader,
+							surfaceTokens: anchorSurfaceTokens,
+							baseline: providerTokens >= estimatedAnchorTokens ? {
+								kind: "usage",
+								tokens: providerTokens,
+								usage: event.data.usage
+							} : {
+								kind: "estimated",
+								tokens: estimatedAnchorTokens
+							}
+						};
+					} else {
+						const anchorSurfaceTokens = stepStart.surfaceTokens + eventTokens;
+						nextAnchor = {
+							header: nextHeader,
+							surfaceTokens: anchorSurfaceTokens,
+							baseline: {
+								kind: "estimated",
+								tokens: estimateHeader(nextHeader) + anchorSurfaceTokens
+							}
+						};
 					}
-				};
-			} else {
-				const anchorSurfaceTokens = stepStart.surfaceTokens + eventTokens;
-				nextAnchor = {
-					header: nextHeader,
-					surfaceTokens: anchorSurfaceTokens,
-					baseline: {
-						kind: "estimated",
-						tokens: estimateHeader(nextHeader) + anchorSurfaceTokens
-					}
-				};
+				} else {
+					// Unpaired append-origin assistant/message (historical session / seeded / scan-window boundary)
+					// Accounting: UNKNOWN / UNTRUSTED -> do not form a trusted provider-usage anchor.
+					// Keep surfaceTokens folded; measure() will fall back to heuristic estimation (estimateHeader + surfaceTokens).
+					nextAnchor = void 0;
+				}
 			}
 		}
 		state.header = nextHeader;
@@ -736,8 +748,8 @@ var TokenMeter = class extends Service {
 			if (seen.has(seq)) throw new Error(`token meter: assistant/message at seq ${event.seq} repeats source seq ${seq}`);
 			seen.add(seq);
 			const sourceEvent = session.events[seq];
-			if (sourceEvent.type !== "assistant/chunk") throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} is not assistant/chunk`);
-			if (sourceEvent.data.turn !== event.data.turn || sourceEvent.data.step !== event.data.step) throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} belongs to another step`);
+			if (sourceEvent === void 0 || sourceEvent.type !== "assistant/chunk") return durableEventTokens;
+			if (sourceEvent.data.turn !== event.data.turn || sourceEvent.data.step !== event.data.step) return durableEventTokens;
 			assembler.push(sourceEvent.data.chunk);
 		}
 		const providerContent = assembler.blocks();

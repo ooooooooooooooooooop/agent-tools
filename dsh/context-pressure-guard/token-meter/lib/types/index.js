@@ -146,17 +146,9 @@ export class TokenMeter extends Service {
                 nextHeader = canonicalHeader(event.data.header);
                 break;
             case 'step/start':
-                if (state.stepStart !== undefined) {
-                    throw new Error(`token meter: step/start at seq ${event.seq} arrived before turn ${state.stepStart.turn}/step ${state.stepStart.step} ended`);
-                }
                 nextStepStart = { ...event.data, surfaceTokens: state.surfaceTokens };
                 break;
             case 'step/end':
-                if (state.stepStart === undefined
-                    || state.stepStart.turn !== event.data.turn
-                    || state.stepStart.step !== event.data.step) {
-                    throw new Error(`token meter: step/end at seq ${event.seq} has no matching step/start event`);
-                }
                 nextStepStart = undefined;
                 break;
             default:
@@ -166,40 +158,49 @@ export class TokenMeter extends Service {
             ? foldSurfaceTokens(state.surface, event)
             : undefined;
         if (event.type === 'assistant/message') {
-            const stepStart = state.stepStart;
-            if (stepStart === undefined
-                || stepStart.turn !== event.data.turn
-                || stepStart.step !== event.data.step) {
-                throw new Error(`token meter: assistant/message at seq ${event.seq} has no matching step/start event`);
-            }
-            // assistant/message is surface-mandatory at every append/seed boundary.
-            // oxlint-disable-next-line typescript/no-non-null-assertion
-            const eventTokens = surface.tokens;
-            if (event.data.usage !== undefined && nextHeader !== undefined) {
-                const providerAssistantTokens = this._estimateProviderAssistant(session, event, eventTokens);
-                const anchorSurfaceTokens = stepStart.surfaceTokens + providerAssistantTokens;
-                const providerTokens = usageTokens(event.data.usage);
-                const estimatedAnchorTokens = estimateHeader(nextHeader) + anchorSurfaceTokens;
-                nextAnchor = {
-                    header: nextHeader,
-                    surfaceTokens: anchorSurfaceTokens,
-                    // Signed heuristic deltas remain conservative only from an anchor
-                    // that is at least as large as the matching full heuristic price.
-                    baseline: providerTokens >= estimatedAnchorTokens
-                        ? { kind: 'usage', tokens: providerTokens, usage: event.data.usage }
-                        : { kind: 'estimated', tokens: estimatedAnchorTokens },
-                };
-            }
-            else {
-                const anchorSurfaceTokens = stepStart.surfaceTokens + eventTokens;
-                nextAnchor = {
-                    header: nextHeader,
-                    surfaceTokens: anchorSurfaceTokens,
-                    baseline: {
-                        kind: 'estimated',
-                        tokens: estimateHeader(nextHeader) + anchorSurfaceTokens,
-                    },
-                };
+            const isReplacement = event.surfaceOp !== undefined && event.surfaceOp !== 'append';
+            if (!isReplacement) {
+                const stepStart = state.stepStart;
+                const isPaired = stepStart !== undefined
+                    && stepStart.turn === event.data.turn
+                    && stepStart.step === event.data.step;
+                if (isPaired) {
+                    // assistant/message is surface-mandatory at every append/seed boundary.
+                    // oxlint-disable-next-line typescript/no-non-null-assertion
+                    const eventTokens = surface.tokens;
+                    if (event.data.usage !== undefined && nextHeader !== undefined) {
+                        const providerAssistantTokens = this._estimateProviderAssistant(session, event, eventTokens);
+                        const anchorSurfaceTokens = stepStart.surfaceTokens + providerAssistantTokens;
+                        const providerTokens = usageTokens(event.data.usage);
+                        const estimatedAnchorTokens = estimateHeader(nextHeader) + anchorSurfaceTokens;
+                        nextAnchor = {
+                            header: nextHeader,
+                            surfaceTokens: anchorSurfaceTokens,
+                            // Signed heuristic deltas remain conservative only from an anchor
+                            // that is at least as large as the matching full heuristic price.
+                            baseline: providerTokens >= estimatedAnchorTokens
+                                ? { kind: 'usage', tokens: providerTokens, usage: event.data.usage }
+                                : { kind: 'estimated', tokens: estimatedAnchorTokens },
+                        };
+                    }
+                    else {
+                        const anchorSurfaceTokens = stepStart.surfaceTokens + eventTokens;
+                        nextAnchor = {
+                            header: nextHeader,
+                            surfaceTokens: anchorSurfaceTokens,
+                            baseline: {
+                                kind: 'estimated',
+                                tokens: estimateHeader(nextHeader) + anchorSurfaceTokens,
+                            },
+                        };
+                    }
+                }
+                else {
+                    // Unpaired append-origin assistant/message (historical session / seeded / scan-window boundary)
+                    // Accounting: UNKNOWN / UNTRUSTED -> do not form a trusted provider-usage anchor.
+                    // Keep surfaceTokens folded; measure() will fall back to heuristic estimation (estimateHeader + surfaceTokens).
+                    nextAnchor = undefined;
+                }
             }
         }
         state.header = nextHeader;
@@ -232,15 +233,13 @@ export class TokenMeter extends Service {
             // Session construction validates contiguous seqs, and the explicit
             // earlier-than-assistant check above therefore guarantees existence.
             const source = session.events[seq];
-            // oxlint-disable-next-line typescript/no-non-null-assertion
-            const sourceEvent = source;
-            if (sourceEvent.type !== 'assistant/chunk') {
-                throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} is not assistant/chunk`);
+            if (source === undefined || source.type !== 'assistant/chunk') {
+                return durableEventTokens;
             }
-            if (sourceEvent.data.turn !== event.data.turn || sourceEvent.data.step !== event.data.step) {
-                throw new Error(`token meter: assistant/message at seq ${event.seq} source seq ${seq} belongs to another step`);
+            if (source.data.turn !== event.data.turn || source.data.step !== event.data.step) {
+                return durableEventTokens;
             }
-            assembler.push(sourceEvent.data.chunk);
+            assembler.push(source.data.chunk);
         }
         const providerContent = assembler.blocks();
         return providerContent.length === 0 ? 0 : estimateContent(providerContent) + ROLE_OVERHEAD;

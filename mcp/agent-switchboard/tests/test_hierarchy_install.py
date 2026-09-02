@@ -16,8 +16,8 @@ import hierarchy_install  # noqa: E402
 
 CODEX_ROLES = {
     "frontier": {"id": "gpt-next-sol"},
-    "workhorse": {"id": "gpt-next-terra"},
-    "reader": {"id": "gpt-next-luna"},
+    "workhorse": {"id": "gpt-5.6-luna"},
+    "reader": {"id": "gpt-5.6-luna"},
 }
 CLAUDE_ROLES = {"frontier": ["best", "fable", "opus"], "workhorse": "sonnet", "reader": "haiku"}
 
@@ -179,8 +179,8 @@ class HierarchyInstallTests(unittest.TestCase):
         self.assertIn("MUST NOT invoke `agy`", gemini_text)
         self.assertIn("never the brain or router", gemini_text)
 
-        self.assertIn('model = "gpt-next-luna"', self.paths.codex_explorer.read_text(encoding="utf-8"))
-        self.assertIn('model = "gpt-next-terra"', self.paths.codex_worker.read_text(encoding="utf-8"))
+        self.assertIn('model = "gpt-5.6-luna"', self.paths.codex_explorer.read_text(encoding="utf-8"))
+        self.assertIn('model = "gpt-5.6-luna"', self.paths.codex_worker.read_text(encoding="utf-8"))
         self.assertIn("model: haiku", self.paths.claude_explore.read_text(encoding="utf-8"))
         self.assertIn("model: sonnet", self.paths.claude_worker.read_text(encoding="utf-8"))
 
@@ -302,7 +302,7 @@ class HierarchyInstallTests(unittest.TestCase):
         self.assertIn("retain final judgment", hierarchy_lower)
         self.assertIn("external antigravity flash lane", hierarchy_lower)
         self.assertIn("not a native child agent", hierarchy_lower)
-        self.assertIn("codex, claude, and gemini brains should proactively consider", hierarchy_lower)
+        self.assertIn("codex, claude, and gemini brains should only proactively consider", hierarchy_lower)
         self.assertIn("bounded search, reading, extraction, summaries, drafting", hierarchy_lower)
         self.assertIn("low-risk implementation/tests from an approved plan", hierarchy_lower)
         self.assertIn("must call mcp `route_agent_task`", hierarchy_lower)
@@ -448,7 +448,7 @@ class HierarchyInstallTests(unittest.TestCase):
         empty_roles = {"frontier": None, "workhorse": None, "reader": None}
         self.refresh()
         explorer = self.paths.codex_explorer.read_text(encoding="utf-8")
-        tampered = explorer.replace('model = "gpt-next-luna"', 'model = "user-edited"')
+        tampered = explorer.replace('model = "gpt-5.6-luna"', 'model = "user-edited"')
         self.paths.codex_explorer.write_text(tampered, encoding="utf-8")
         user_worker = 'name = "worker"\nmodel = "user-owned"\n'
         self.paths.codex_worker.write_text(user_worker, encoding="utf-8")

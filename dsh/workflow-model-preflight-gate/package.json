@@ -1,0 +1,14 @@
+{
+  "name": "@deepseek-ai/dsh-workflow-model-preflight-gate",
+  "description": "Fail-closed preflight model admission and provenance guard for DSH workflow tool",
+  "version": "0.1.1-rc.2+workflow.1",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib/index.js"
+  ],
+  "license": "MIT"
+}

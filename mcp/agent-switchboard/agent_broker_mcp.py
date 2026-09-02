@@ -435,9 +435,12 @@ SECRET_WORDS = {
     "token",
 }
 
+# User policy: managed Codex child agents default to Luna. The main session's
+# selected model remains caller-owned and is never rewritten here.
+CODEX_CHILD_MODEL = "gpt-5.6-luna"
 CODEX_FLAGSHIP_MODEL = "gpt-5.6-sol"
 CODEX_BALANCED_MODEL = "gpt-5.6-terra"
-CODEX_CHEAP_MODEL = "gpt-5.6-luna"
+CODEX_CHEAP_MODEL = CODEX_CHILD_MODEL
 CLAUDE_FLAGSHIP_MODEL = "fable"
 CLAUDE_BALANCED_MODEL = "sonnet"
 CLAUDE_CHEAP_MODEL = "haiku"
@@ -838,9 +841,9 @@ GENERIC_GROUND_RULES = [
     "Prefer plain language over corporate jargon; keep technical and domain terminology intact.",
 ]
 
-COST_AWARE_ROUTING_RULES = [
+LEGACY_COST_AWARE_ROUTING_RULES = [
     "The model selected for the main session is the brain; never rewrite that user choice. It owns requirements, architecture, planning, hard diagnosis, risk decisions, and final signoff.",
-    "For non-trivial planning or a hard issue, obtain one opposite-vendor maximum-effort consultation: Codex brain -> moving Claude Fable alias (Opus only when Fable is explicitly unavailable); Claude brain -> the live Codex frontier at its highest single-agent effort.",
+    "User model authorization policy: managed Codex child agents use gpt-5.6-luna by default. Any other model or provider (including Terra, Sol, Claude/Fable/Opus, Gemini/Flash, and provider aliases) requires explicit authorization from the user in the current conversation. If Luna is unavailable, stop and report it; never choose another model as an automatic fallback. This does not rewrite the user's selected main-session model.",
     "Capability tier outranks model version. Gemini Flash High is a useful, non-authoritative workhorse-level adviser; a higher version does not promote it above Sol/Fable or make its advice automatically authoritative. When Claude's Fable -> Opus chain is unavailable because of quota, reachability, entitlement, or another availability failure, a Codex brain should request a second opinion from the newest live Flash High, label it degraded advisory fallback, and retain final judgment.",
     "Native first: same-vendor labour uses the host's managed native subagents (Codex explorer/worker; Claude Explore/economy-worker). Agent Switchboard is reserved for opposite-vendor consultation, the external Antigravity Flash workhorse lane, or an explicitly documented native-unavailable fallback; Flash is not a native child agent.",
     "Cross-vendor routing must enter through Agent Switchboard's MCP tools whenever Switchboard is registered. For Flash labour, the sender brain MUST call MCP route_agent_task; 'through CLI' means surface=cli on that MCP call. The brain MUST NOT shell out to agy or call consult_antigravity directly. Only the Switchboard backend may start agy; sender-side direct agy is prohibited.",
@@ -849,7 +852,7 @@ COST_AWARE_ROUTING_RULES = [
     "A Switchboard-launched Gemini Flash session is the non-authoritative worker for exactly its assigned envelope, never the brain or router. It must not dispatch agents, reinterpret the whole plan, or continue to another package.",
     "Switchboard's internal agy backend must use --output-format json with --json-schema. Missing/malformed fields, scope violations, contradictory completion, unsupported design-intent claims, ambiguity, or failed checks are failures to escalate -- never prose to accept. The sender brain independently inspects cited lines, the actual diff, and check output before dispatching another package.",
     "Flash never receives production SSH, live credentials, destructive operations, migrations, or danger-full-access. It may prepare bounded local changes and checks; the brain owns live deployment and approval.",
-    "If agy or Flash is missing, quota-limited, times out, mismatches the requested model, or otherwise fails, fall back to the host's native cheap roles (Codex explorer/worker; Claude Explore/economy-worker) and record the fallback.",
+    "If agy or Flash is missing, quota-limited, times out, mismatches the requested model, or otherwise fails, a Codex brain may fall back only to its native Luna explorer/worker roles and must record the fallback; never substitute another model without fresh user authorization. Claude Explore/economy-worker remain a separate same-vendor path and are subject to authorization when selected by a Codex brain.",
     "Classify risk and difficulty at every work-package boundary. Reader/low handles bounded reading, search, extraction, and formatting; workhorse/medium handles routine writing, light implementation, tests, scripts, and reversible deployment from an approved plan.",
     "Portable packages state Lane | mechanism | exact resolved model/effort | deliverable | verification | escalation. Imported foreign-vendor reader/workhorse routes are re-resolved to the executor's current same-vendor native role at execution start.",
     "A worker follows the resolved package. A retained package uses `override: brain - <WP-ID>: <specific reason>` in the Routing audit; bare/global overrides are invalid.",
@@ -864,6 +867,30 @@ COST_AWARE_ROUTING_RULES = [
     "The final routing audit covers planned and unplanned packages and uses host-attested native:<agent-id> receipts for native labour, broker:<uuid> ledger receipts for Switchboard calls, or a structured per-package brain override. It includes direct-brain-labour: reads=N | searches=N | evidence=N | tests=N | docs=N | other=N, and maps every nonzero category to a package row as direct=reads,searches,... . Native model/effort is configured by the checksum-protected role and labeled unverified if the host exposes no runtime model attestation.",
     "Skip delegation when specifying and verifying the handoff would cost more than doing the small task directly.",
 ]
+
+COST_AWARE_ROUTING_RULES = [
+    "The model selected for the main session is the brain; never rewrite that user choice. It owns requirements, architecture, planning, hard diagnosis, risk decisions, and final signoff.",
+    "User model authorization policy: managed Codex child agents use gpt-5.6-luna by default. Any other model or provider requires explicit authorization from the user in the current conversation. If Luna is unavailable, stop and report it; never choose another model as an automatic fallback.",
+    "Native first: Codex explorer/worker both use gpt-5.6-luna (low and medium effort respectively); Claude Explore/economy-worker remain a separate same-vendor path. Agent Switchboard may use another provider/model only after explicit user authorization; Flash is not a native child agent.",
+    "Opposite-vendor consultation is opt-in, not automatic. An authorized route must name the exact model and effort; if it is unavailable, stop and report it rather than selecting a fallback model.",
+    "Capability tier outranks model version. Gemini Flash High remains non-authoritative; a higher version does not grant permission or make it authoritative.",
+    "Cross-vendor routing must enter through Agent Switchboard's MCP tools whenever Switchboard is registered. The sender brain must not shell out to agy or call consult_antigravity directly.",
+    "Every external call is exactly one bounded work package. Never hand an external worker an entire autonomous plan or let it continue to another package.",
+    "If an authorized external route is missing, quota-limited, times out, mismatches, or otherwise fails, a Codex brain may fall back only to its native Luna explorer/worker roles and must record the fallback.",
+    "Classify risk and difficulty at every work-package boundary. Portable packages state Lane | mechanism | exact resolved model/effort | deliverable | verification | escalation.",
+    "A worker follows the resolved package and stops on security, authentication, payments, destructive operations, migrations, ambiguity, plan deviation, or failed verification.",
+    "The final routing audit covers planned and unplanned packages and records direct-brain-labour: reads=N | searches=N | evidence=N | tests=N | docs=N | other=N plus native:<agent-id> or broker:<uuid> receipts, or a structured per-package brain override. A retained package uses override: brain - <WP-ID>: <specific reason>.",
+    "Capability tier outranks model version. Gemini Flash High is a useful, non-authoritative workhorse-level adviser; a higher version does not promote it above Sol/Fable or make it automatically authoritative. When an authorized route fails because of quota, reachability, entitlement, or another failure, stop unless the user authorizes the next model; a Codex brain should request a second opinion from the newest live Flash High only after explicit user authorization, label it degraded advisory fallback, and retain final judgment.",
+    "Agent Switchboard is reserved for an explicitly authorized opposite-vendor consultation or external Antigravity Flash workhorse lane; Flash is not a native child agent.",
+    "Codex, Claude, and Gemini brains should proactively consider the newest live Antigravity Gemini Flash High only after explicit user authorization. Authorized Flash work is limited to bounded search, reading, extraction, summaries, drafting, and low-risk implementation/tests from an approved plan.",
+    "Every Flash call is exactly one bounded work package. Implementation requires at most five allowed files, explicit acceptance criteria, and forbidden actions; never hand Flash an entire autonomous plan.",
+    "For Flash labour the sender brain must call MCP route_agent_task; Switchboard must use --output-format json with --json-schema; the brain must not shell out to agy, and only the Switchboard backend may start agy. A Flash session is never the brain or router.",
+    "Flash never receives production SSH, live credentials, destructive operations, migrations, or danger-full-access. The sender independently inspects cited lines, the actual diff, and check output before acceptance.",
+    "Flash and native workers may run concurrently only on independent stages/packages; writes run serially unless state isolation is demonstrated. The brain reviews evidence and actual diffs.",
+    "The installed native-first PreToolUse gate allows ten direct brain labour calls, then requires a managed role or a package-specific routing-override; each relief opens only the next bounded block, and registered overrides must appear in the final audit.",
+    "Brain-context ingress is capped at roughly 1-2k tokens. A decision premise is a claim whose falsity changes the patch or risk decision; the reader locates minimal primary evidence and the brain adjudicates it.",
+]
+
 
 FLASH_WORKHORSE_MAX_ALLOWED_FILES = 5
 FLASH_WORKHORSE_DEFAULT_FORBIDDEN_ACTIONS = (
@@ -2793,8 +2820,8 @@ def codex_roles_from_models(models: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "frontier": role(selected.frontier, CODEX_FLAGSHIP_MODEL),
-        "workhorse": role(selected.workhorse, CODEX_BALANCED_MODEL),
-        "reader": role(selected.reader, CODEX_CHEAP_MODEL),
+        "workhorse": role(selected.workhorse, CODEX_CHILD_MODEL),
+        "reader": role(selected.reader, CODEX_CHILD_MODEL),
         "source": "codex-debug" if selected.frontier else "static-fallback",
     }
 
@@ -2813,8 +2840,8 @@ def current_codex_role_model(role: str) -> str:
     selected = current_codex_roles().get(role) or {}
     fallback = {
         "frontier": CODEX_FLAGSHIP_MODEL,
-        "workhorse": CODEX_BALANCED_MODEL,
-        "reader": CODEX_CHEAP_MODEL,
+        "workhorse": CODEX_CHILD_MODEL,
+        "reader": CODEX_CHILD_MODEL,
     }
     return str(selected.get("id") or fallback[role])
 
@@ -3111,7 +3138,7 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
     codex_catalog = catalog.get("catalogs", {}).get("codex", {})
     codex_roles = codex_catalog.get("roles") or current_codex_roles()
     codex_frontier = str((codex_roles.get("frontier") or {}).get("id") or CODEX_FLAGSHIP_MODEL)
-    codex_workhorse = str((codex_roles.get("workhorse") or {}).get("id") or CODEX_BALANCED_MODEL)
+    codex_workhorse = str((codex_roles.get("workhorse") or {}).get("id") or CODEX_CHILD_MODEL)
     codex_reader = str((codex_roles.get("reader") or {}).get("id") or CODEX_CHEAP_MODEL)
     antigravity_catalog = catalog.get("catalogs", {}).get("antigravity", {})
     antigravity_roles = antigravity_catalog.get("roles") or antigravity_roles_from_models(
@@ -3124,7 +3151,7 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
         "purpose": "Use this before routing if you are unsure which model/effort to request.",
         "execution_precedence": [
             "Same-vendor bounded labour uses native subagents first: Codex explorer/worker or Claude Explore/economy-worker.",
-            "Proactively consider the newest live Antigravity Gemini Flash High through Agent Switchboard/agy as a fast, cheap external workhorse; it is not a native child agent.",
+            "Only after explicit user authorization, consider the newest live Antigravity Gemini Flash High through Agent Switchboard/agy as a fast, cheap external workhorse; it is not a native child agent.",
             "Use Agent Switchboard for opposite-vendor maximum-effort consultation.",
             "Use a same-vendor broker worker only when the named native role is unavailable or failed to start, and record the fallback.",
         ],
@@ -3145,7 +3172,7 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
                 "target_agent": "codex",
                 "target_model": codex_workhorse,
                 "effort": "medium",
-                "rule": "Broker fallback only: a Codex main session should use its native worker first. Otherwise model_policy='balanced' resolves to the live Codex workhorse/medium.",
+                "rule": "Broker fallback only: a Codex main session should use its native Luna worker first. If this authorized fallback is needed, model_policy='balanced' resolves to Luna/medium; never substitute a non-Luna model without fresh user authorization.",
             },
             "claude_consult_audit_review_debate": {
                 "target_agent": "claude",
@@ -3190,7 +3217,7 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
                     "claude": ["Explore", "economy-worker"],
                     "record_fallback": True,
                 },
-                "rule": "Antigravity routes through agy using the newest stable numeric Gemini Flash High advertised live. Codex and Claude brains should proactively consider it as a fast, cheap external workhorse, not a native child agent. Every call is one bounded package with schema-enforced JSON; implementation requires a package id, 1-5 allowed files, and acceptance criteria. Never hand Flash a whole plan or production access. Flash remains non-authoritative: the brain reviews evidence/diffs and independently verifies cited lines, the actual diff, and checks before accepting or dispatching another package. If agy/Flash is missing, quota-limited, times out, mismatches, or fails -- including malformed/contradictory output or ambiguity -- use the host native reader/workhorse and record the fallback. Flash and native workers run concurrently only on independent packages; writes are serial unless demonstrably isolated.",
+                "rule": "Antigravity routes through agy using the newest stable numeric Gemini Flash High advertised live. Codex and Claude brains may consider it as a fast, cheap external workhorse only after explicit user authorization; it is not a native child agent. Every call is one bounded package with schema-enforced JSON; implementation requires a package id, 1-5 allowed files, and acceptance criteria. Never hand Flash a whole plan or production access. Flash remains non-authoritative: the brain reviews evidence/diffs and independently verifies cited lines, the actual diff, and checks before accepting or dispatching another package. If agy/Flash is missing, quota-limited, times out, mismatches, or fails -- including malformed/contradictory output or ambiguity -- use only the authorized host-native route and record the fallback; never silently switch to another model. Flash and native workers run concurrently only on independent packages; writes are serial unless demonstrably isolated.",
             },
         },
         "caller_examples": {
@@ -3280,9 +3307,9 @@ def get_model_routing_guide(agent: str | None = None, project: str | None = None
             "Use target_model for the model slug only; put reasoning in effort.",
             "Antigravity CLI models are discovered live with `agy models`; newly released models become routable without changing the static catalog.",
             "The newest exact stable gemini-<numeric>-flash-high slug is the Antigravity workhorse; numeric version order never promotes previews or renamed/nonconforming SKUs.",
-            "Capability tier outranks version: Gemini Flash is useful non-authoritative workhorse-level advice, and a higher version does not promote it above Sol/Fable or make it automatically authoritative. If Claude's Fable -> Opus chain is unavailable because of quota, reachability, entitlement, or another availability failure, Codex should request a second opinion from the newest live Flash High, label it degraded advisory fallback, and retain final judgment.",
-            "Both Codex and Claude brains should proactively consider newest live Flash High for bounded external workhorse labour; this does not make Flash a native child agent.",
-            "If agy/Flash is missing, quota-limited, times out, mismatches, or fails, use the host native explorer/worker or Explore/economy-worker and record the fallback.",
+            "Capability tier outranks version: Gemini Flash is useful non-authoritative workhorse-level advice, and a higher version does not promote it above Sol/Fable or make it automatically authoritative. If Claude's Fable -> Opus chain is unavailable because of quota, reachability, entitlement, or another availability failure, Codex may request a second opinion from the newest live Flash High only after explicit user authorization, label it degraded advisory fallback, and retain final judgment.",
+            "Codex and Claude brains may consider newest live Flash High for bounded external workhorse labour only after explicit user authorization; this does not make Flash a native child agent.",
+            "If agy/Flash is missing, quota-limited, times out, mismatches, or fails, use only the authorized host-native route and record the fallback; never silently switch to another model.",
             "Flash and native workers may run concurrently only for independent stages/packages: parallel reads are allowed, while writes are serial unless demonstrably isolated; the brain reviews evidence/diffs and owns the final decision.",
             "Each Flash call carries exactly one bounded package and schema-enforced output. Implementation without a package id, 1-5 allowed files, and explicit acceptance criteria is rejected before agy starts.",
             "A Flash completion is never acceptance: the sender brain independently checks cited primary evidence, the actual diff, and command output. Unsupported intentional/by-design claims keep the investigation open.",
@@ -3621,16 +3648,20 @@ def family_frontier_model(family: str) -> str | None:
 
 def pick_cli_model(family: str, model_text: Any) -> str | None:
     """Resolve an (effort-stripped) model request for a CLI family. Generic/empty ->
-    the family default (frontier for Codex/Claude, workhorse for Antigravity). A named
-    model resolves to its catalog id; an unmatched name passes through unchanged so
-    brand-new CLI models still work."""
+    the family default (Luna child role for Codex, frontier for Claude, workhorse for
+    Antigravity). A named model resolves to its catalog id; an unmatched name passes
+    through unchanged so brand-new CLI models still work."""
     text = str(model_text or "").strip()
     if not text or normalize_lookup(text) in GENERIC_MODEL_REQUESTS:
+        if family == "codex":
+            return current_codex_role_model("workhorse")
         return family_frontier_model(family)
     match = match_model_request(family, text)
     if match.get("status") == "matched":
         return match["model"]
     if match.get("status") == "generic":
+        if family == "codex":
+            return current_codex_role_model("workhorse")
         return family_frontier_model(family)
     return text
 
@@ -9961,7 +9992,7 @@ TOOLS = [
                 "token_budget": {"type": "integer", "minimum": 500, "maximum": 20000},
                 "include_task_contract": {"type": "boolean"},
                 "max_response_chars": {"type": "integer", "minimum": 800, "maximum": 200000},
-                "model_policy": {"type": "string", "description": "Explicit cost policy: 'cheap_read' -> current live Codex reader/low; 'balanced'/'efficient'/'lower_effort' -> current live Codex workhorse/medium. Omit for frontier/max consultation."},
+                "model_policy": {"type": "string", "description": "Explicit cost policy: Codex cheap_read/balanced use the current live Luna reader/worker by default. Any non-Luna model/provider requires explicit user authorization in the current conversation. Omit for frontier/max consultation."},
                 "native_unavailable_reason": {"type": "string", "description": "Required only when a Codex caller falls back to a Codex MCP session after the named native role failed to start or was unavailable."},
                 "target_model": {"type": "string", "description": "Model only — keep reasoning effort out of this string; use the 'effort' field. e.g. 'gpt-5.6-luna', 'gpt-5.4-mini'."},
                 "effort": {"type": "string", "description": "Single-agent reasoning effort: minimal|low|medium|high|xhigh|max. Omit for max (default); Ultra is an orchestration/delegation mode rather than a deeper single-agent consult tier."},
@@ -9997,7 +10028,7 @@ TOOLS = [
     },
     {
         "name": "consult_antigravity",
-        "description": "Use the standalone agy CLI for exactly one bounded Gemini Flash High work package. Switchboard always enforces --json-schema and returns brain_verification=pending. Implementation requires work_package_id, 1-5 allowed_files, and acceptance_criteria; danger-full-access and live deployment are rejected. Flash is non-authoritative: independently verify cited lines, actual diff, and checks before accepting or dispatching another package. On malformed output, ambiguity, failure, quota, timeout, or missing agy, use the host native reader/workhorse and record fallback.",
+        "description": "Use the standalone agy CLI for exactly one bounded Gemini Flash High work package only after explicit user authorization. Switchboard always enforces --json-schema and returns brain_verification=pending. Implementation requires work_package_id, 1-5 allowed_files, and acceptance_criteria; danger-full-access and live deployment are rejected. Flash is non-authoritative: independently verify cited lines, actual diff, and checks before accepting or dispatching another package. On malformed output, ambiguity, failure, quota, timeout, or missing agy, use only the authorized host-native route and record fallback.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -10136,7 +10167,7 @@ TOOLS = [
                 "allowed_files": {"type": "array", "maxItems": 5, "items": {"type": "string"}, "description": "For Flash implementation, required exact edit allowlist."},
                 "acceptance_criteria": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "For Flash implementation, required deterministic criteria for this package."},
                 "forbidden_actions": {"type": "array", "maxItems": 12, "items": {"type": "string"}, "description": "Additional prohibitions; global Flash safety rules cannot be removed."},
-                "model_policy": {"type": "string", "description": "Explicit cost policy for Codex or Claude. 'cheap_read' selects Luna/low or Haiku (no effort); 'balanced'/'efficient'/'lower_effort' selects Terra/medium or Sonnet/medium. Omit for frontier/max consultation, audit, review, or debate."},
+                "model_policy": {"type": "string", "description": "Explicit cost policy for Codex or Claude. Codex cheap_read/balanced defaults to Luna/low or Luna/medium; Claude policies select Haiku/Sonnet. Any non-Luna model/provider requires explicit user authorization in the current conversation. Omit for frontier/max consultation, audit, review, or debate."},
                 "native_unavailable_reason": {"type": "string", "description": "Required for same-vendor Codex/Claude MCP fallback after native subagent startup/access failure."},
                 "chain_key": {"type": "string", "description": "Stable id for one review->repair chain (same artifact). Pass the same chain_key on every iterative rework of the same artifact; the broker refuses more than 3 requests under one chain_key so repair loops cannot nest forever."},
                 "prompt": {"type": "string"},
@@ -10948,21 +10979,21 @@ PUBLIC_TOOL_NAMES = CLAUDE_LITE_TOOL_NAMES | {
 TOOL_DESCRIPTION_OVERRIDES = {
     "route_agent_task": (
         "Required MCP entry for cross-vendor labour; never shell out to agy directly. Codex/Claude "
-        "brains should proactively consider external Antigravity "
+        "brains may consider external Antigravity "
         "Flash High for bounded cheap labour via target_agent='antigravity', surface='cli', "
-        "target_model='gemini flash', effort='high'; plan is read-only and accept-edits requires an "
+        "target_model='gemini flash', effort='high' only after explicit user authorization; plan is read-only and accept-edits requires an "
         "approved isolated package. Flash is non-authoritative and not a native child. On failure, "
-        "use the host native reader/workhorse and record fallback. Parallelize only independent work. "
+        "use only the authorized host-native route and record fallback; never substitute a non-Luna model. Parallelize only independent work. "
         "Call get_model_routing_guide/list_agent_models if unsure."
     ),
 }
 
 COMPACT_TOOL_DESCRIPTIONS = {
-    "consult_codex": "Cross-vendor Codex consultation; same-vendor fallback requires native_unavailable_reason.",
-    "consult_claude": "Cross-vendor Claude consultation; same-vendor fallback requires native_unavailable_reason.",
-    "consult_antigravity": "Low-level compatibility/diagnostic route. For Flash labour, call route_agent_task with surface=cli; never invoke agy directly.",
+    "consult_codex": "Cross-vendor Codex consultation; non-Luna requires explicit user authorization; same-vendor fallback requires native_unavailable_reason.",
+    "consult_claude": "Cross-vendor Claude consultation; non-Luna requires explicit user authorization; same-vendor fallback requires native_unavailable_reason.",
+    "consult_antigravity": "Flash route requires explicit user authorization; call route_agent_task with surface=cli; never invoke agy directly.",
     "consult_gemini": "Ask Gemini through the configured CLI/API. Long answers return an excerpt plus response_ref.",
-    "route_agent_task": "Required MCP entry for cross-vendor work, including Antigravity Flash packages; surface=cli selects the backend without direct agy invocation.",
+    "route_agent_task": "Required MCP entry for cross-vendor work; non-Luna requires explicit user authorization; surface=cli selects the backend without direct agy invocation.",
     "queue_codex_request": "Queue Codex work; same-vendor callers require native_unavailable_reason after native subagents fail.",
     "get_codex_requests": "List recent queued/completed Codex extension requests.",
     "queue_claude_request": "Queue Claude work; same-vendor callers require native_unavailable_reason after native subagents fail.",

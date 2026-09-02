@@ -139,8 +139,8 @@ def validate_contract(contract: dict[str, Any], *, check_lock: bool = True) -> l
         if not profile.get("patch_file") or not profile.get("manifest_file"):
             errors.append("runtime_composition.profile must declare patch_file and manifest_file")
         plugins = cfg["managed_rows"]["plugins"]
-        if len(plugins) != 5:
-            errors.append("runtime_composition must declare exactly five managed plugins")
+        if not plugins or len(plugins) < 5:
+            errors.append("runtime_composition must declare at least five managed plugins")
         ids = [p.get("id") for p in plugins]
         if len(set(ids)) != len(ids):
             errors.append("runtime_composition plugin ids must be unique")
@@ -206,7 +206,8 @@ if ([string]::IsNullOrWhiteSpace($nodeRel) -or [string]::IsNullOrWhiteSpace($bas
   throw 'Managed composition state unavailable (dsh-managed-state.json / dsh-runtime-composition.json)'
 }
 $distributionRoot = Join-Path $ProfileRoot "base-dsh-$baseVersion"
-$managedNodePath = Join-Path $DshHome $nodeRel
+$managedNodePath = Join-Path $DshHome ($nodeRel -replace '/', '\\')
+$managedNodePath = Join-Path $managedNodePath 'node.exe'
 if ([string]::IsNullOrWhiteSpace($NodePath)) { $NodePath = $managedNodePath }
 $entry = Join-Path $DshHome ($entryRel -replace '/', '\')
 $packageJson = Join-Path $distributionRoot 'node_modules\@deepseek-ai\dsh\package.json'
@@ -352,10 +353,21 @@ def _node_runtime(stage: Path, home: Path, cfg: dict[str, Any]) -> tuple[Path, s
     return target, actual, sha256_file(node_exe)
 
 
-def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any]) -> Path:
+def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any], home: Path | None = None) -> Path:
     base_cfg = cfg["base"]
     base_root = stage_profile / f"base-dsh-{base_cfg['version']}"
     source_env = os.environ.get("DSH_BASE_SOURCE")
+    if not source_env and home:
+        live_base = home / cfg["profile"]["relative_to_dsh_home"] / f"base-dsh-{base_cfg['version']}"
+        cand_pkg = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
+        cand_entry = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        if cand_pkg.is_file() and cand_entry.is_file():
+            try:
+                pkg_data = json.loads(cand_pkg.read_text(encoding="utf-8-sig"))
+                if pkg_data.get("name") == base_cfg["package"] and pkg_data.get("version") == base_cfg["version"]:
+                    source_env = str(live_base)
+            except Exception:
+                pass
     if source_env:
         source = Path(source_env)
         package_json = source / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
@@ -514,8 +526,39 @@ def _pnpm_command() -> str:
     raise DshCompositionError("pnpm is required to build the fixed Harness UI")
 
 
+def _validate_ui_version_alignment(source: Path, cfg: dict[str, Any]) -> None:
+    """Reject a UI release whose package contracts do not match the pinned base."""
+    ui = cfg["ui"]
+    expected_version = str(cfg["base"]["version"])
+    package_specs = [
+        ("client", ui["client_package"], Path(ui["client_bundle_relative"]).parent.parent / "package.json"),
+        ("web", ui["web_package"], Path(ui["web_dist_relative"]).parent / "package.json"),
+    ]
+    for label, expected_name, relative_manifest in package_specs:
+        manifest_path = source / relative_manifest
+        if not manifest_path.is_file():
+            raise DshCompositionError(
+                f"UI {label} package manifest is missing: {manifest_path}"
+            )
+        try:
+            package = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DshCompositionError(
+                f"UI {label} package manifest is invalid: {manifest_path}: {exc}"
+            ) from exc
+        actual_name = package.get("name")
+        actual_version = package.get("version")
+        if actual_name != expected_name or actual_version != expected_version:
+            raise DshCompositionError(
+                "UI/base package mismatch: "
+                f"{label} expected {expected_name}@{expected_version}, "
+                f"got {actual_name}@{actual_version} ({manifest_path})"
+            )
+
+
 def _build_ui(source: Path, node_root: Path, cfg: dict[str, Any]) -> tuple[Path, Path, str]:
     ui = cfg["ui"]
+    _validate_ui_version_alignment(source, cfg)
     env = {**os.environ, "PATH": str(node_root) + os.pathsep + os.environ.get("PATH", "")}
     pnpm = _pnpm_command()
     if not (source / "node_modules").is_dir():
@@ -746,10 +789,14 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
     launcher = profile / cfg["profile"]["launcher_file"]
     if not launcher.is_file():
         finding("DEPLOYMENT_DRIFT", "launcher", "present", "missing")
-    elif manifest.get("launcher", {}).get("sha256"):
+    else:
         actual_hash = sha256_file(launcher)
-        if actual_hash != manifest["launcher"]["sha256"]:
+        if manifest.get("launcher", {}).get("sha256") and actual_hash != manifest["launcher"]["sha256"]:
             finding("DEPLOYMENT_DRIFT", "launcher", manifest["launcher"]["sha256"], actual_hash)
+        generated_hash = sha256_text(_powershell_launcher(cfg))
+        actual_portable_hash = sha256_portable_file(launcher)
+        if actual_portable_hash != generated_hash:
+            finding("CONFIG_DRIFT", "launcher.generated", generated_hash, actual_portable_hash)
 
     expected = {p["id"]: p for p in cfg["managed_rows"]["plugins"]}
     deployed = {p["id"]: p for p in manifest.get("overlays", [])}
@@ -774,6 +821,16 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         if deployed.get(plugin["id"], {}).get("loadOrder") != order:
             finding("CONFIG_DRIFT", f"{plugin['id']}.loadOrder", order,
                     deployed.get(plugin["id"], {}).get("loadOrder", "missing"))
+
+    for extra_id in sorted(set(deployed.keys()) - set(expected.keys())):
+        finding("CONFIG_DRIFT", f"extra-overlay:{extra_id}", "absent", "deployed")
+
+    plugins_dir = profile / "plugins"
+    if plugins_dir.is_dir():
+        expected_dirs = {p["plugin_directory"] for p in cfg["managed_rows"]["plugins"]}
+        for d in sorted(plugins_dir.iterdir()):
+            if d.is_dir() and d.name not in expected_dirs:
+                finding("DEPLOYMENT_DRIFT", f"unmanaged-plugin-dir:{d.name}", "absent", "present")
 
     anchor = cfg.get("archive_anchor", {})
     archive = _find_archive(home, anchor.get("session_id", ""))
@@ -829,12 +886,40 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
         stage_profile = stage_root / "profile"
         stage_profile.mkdir(parents=True, exist_ok=True)
         node_root, node_version, node_hash = _node_runtime(stage_root, home, cfg)
-        base_root = _install_base(stage_profile, node_root, cfg)
-        source_root, source_state, cleanup_ui = _resolve_harness_root(home, cfg["ui"])
-        client, web_dist, web_hash = _build_ui(source_root, node_root, cfg)
-        client_dest, web_dest, deployed_web_hash = _copy_ui(base_root, client, web_dist)
-        if web_hash != deployed_web_hash:
-            raise DshCompositionError("Web static asset tree hash changed during deployment staging")
+        base_root = _install_base(stage_profile, node_root, cfg, home=home)
+
+        ui_cfg = cfg["ui"]
+        live_profile = home / cfg["profile"]["relative_to_dsh_home"]
+        live_manifest_path = live_profile / cfg["profile"]["manifest_file"]
+        reused_ui = False
+        client_dest = None
+        web_dest = None
+        web_hash = None
+        source_state = None
+
+        if live_manifest_path.is_file():
+            try:
+                live_manifest = json.loads(live_manifest_path.read_text(encoding="utf-8-sig"))
+                live_client = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-client-ui-conversation") / "lib" / "client.js"
+                live_dist = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-web-frontend") / "dist"
+                if live_client.is_file() and live_dist.is_dir():
+                    client_hash = sha256_file(live_client)
+                    dist_hash = sha256_tree(live_dist)
+                    if client_hash == live_manifest.get("ui", {}).get("clientBundleSha256") and dist_hash == live_manifest.get("ui", {}).get("webDistSha256"):
+                        client_dest = live_client
+                        web_dest = live_dist
+                        web_hash = dist_hash
+                        source_state = live_manifest.get("ui", {}).get("sourceState", str(ui_cfg["baseline_commit"]))
+                        reused_ui = True
+            except Exception:
+                pass
+
+        if not reused_ui:
+            source_root, source_state, cleanup_ui = _resolve_harness_root(home, cfg["ui"])
+            client, web_dist, web_hash = _build_ui(source_root, node_root, cfg)
+            client_dest, web_dest, deployed_web_hash = _copy_ui(base_root, client, web_dist)
+            if web_hash != deployed_web_hash:
+                raise DshCompositionError("Web static asset tree hash changed during deployment staging")
         overlays = _copy_overlays(stage_profile, cfg)
         patch_text, managed_hash = render_patch(
             home / cfg["profile"]["relative_to_dsh_home"] / cfg["profile"]["patch_file"], cfg)

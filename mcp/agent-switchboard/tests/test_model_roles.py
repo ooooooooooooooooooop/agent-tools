@@ -96,31 +96,45 @@ class SelectCodexRolesTests(unittest.TestCase):
         roles = model_roles.select_codex_roles({"models": models})
         self.assertEqual(roles.frontier["id"], "top")
 
-    def test_workhorse_chosen_by_keyword(self):
+    def test_non_luna_catalog_does_not_auto_select_workhorse(self):
         models = [
             {"id": "top", "priority": 1, "description": "flagship"},
             {"id": "mid", "priority": 5, "description": "balanced everyday driver"},
             {"id": "low", "priority": 9, "description": "affordable fast option"},
         ]
         roles = model_roles.select_codex_roles({"models": models})
-        self.assertEqual(roles.workhorse["id"], "mid")
+        self.assertIsNone(roles.workhorse)
+        self.assertIsNone(roles.reader)
 
-    def test_reader_chosen_by_keyword(self):
+    def test_user_preferred_luna_wins_for_both_child_roles(self):
+        models = [
+            {"id": "gpt-5.6-sol", "priority": 1, "description": "flagship"},
+            {"id": "gpt-5.6-terra", "priority": 5, "description": "balanced everyday driver"},
+            {"id": "gpt-5.6-luna", "priority": 9, "description": "affordable fast reader"},
+        ]
+        roles = model_roles.select_codex_roles({"models": models})
+        self.assertEqual(roles.frontier["id"], "gpt-5.6-sol")
+        self.assertEqual(roles.workhorse["id"], "gpt-5.6-luna")
+        self.assertEqual(roles.reader["id"], "gpt-5.6-luna")
+
+    def test_non_luna_catalog_does_not_auto_select_reader(self):
         models = [
             {"id": "top", "priority": 1, "description": "flagship"},
             {"id": "mid", "priority": 5, "description": "balanced everyday driver"},
             {"id": "low", "priority": 9, "description": "affordable cost-efficient fast"},
         ]
         roles = model_roles.select_codex_roles({"models": models})
-        self.assertEqual(roles.reader["id"], "low")
+        self.assertIsNone(roles.workhorse)
+        self.assertIsNone(roles.reader)
 
-    def test_workhorse_falls_back_to_next_priority_without_keyword_hit(self):
+    def test_non_luna_catalog_does_not_fall_back_to_next_priority(self):
         models = [
             {"id": "top", "priority": 1, "description": "flagship"},
             {"id": "mid", "priority": 5, "description": "no keyword hit here"},
         ]
         roles = model_roles.select_codex_roles({"models": models})
-        self.assertEqual(roles.workhorse["id"], "mid")
+        self.assertIsNone(roles.workhorse)
+        self.assertIsNone(roles.reader)
 
     def test_deterministic_tie_break_by_id_on_equal_priority(self):
         models = [
@@ -152,17 +166,17 @@ class SelectCodexRolesTests(unittest.TestCase):
         ]
         roles = model_roles.select_codex_roles({"models": models})
         self.assertEqual(roles.frontier["id"], "top")
-        self.assertNotEqual(roles.workhorse["id"], roles.frontier["id"])
-        self.assertNotEqual(roles.reader["id"], roles.frontier["id"])
+        self.assertIsNone(roles.workhorse)
+        self.assertIsNone(roles.reader)
 
-    def test_two_model_catalog_uses_non_frontier_for_both_cheap_roles(self):
+    def test_two_model_catalog_requires_luna_for_both_child_roles(self):
         models = [
             {"id": "top", "priority": 1, "description": "balanced affordable fast flagship"},
             {"id": "economy", "priority": 9, "description": "general purpose"},
         ]
         roles = model_roles.select_codex_roles({"models": models})
-        self.assertEqual(roles.workhorse["id"], "economy")
-        self.assertEqual(roles.reader["id"], "economy")
+        self.assertIsNone(roles.workhorse)
+        self.assertIsNone(roles.reader)
 
 
 class SelectClaudeRolesTests(unittest.TestCase):
