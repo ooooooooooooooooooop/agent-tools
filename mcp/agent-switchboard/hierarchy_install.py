@@ -440,13 +440,13 @@ def update_hooks(
             data,
             "PreToolUse",
             _hook_handler(command_prefix, "PreToolUse", host),
-            "Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|Read|Grep|Glob|WebFetch|WebSearch|mcp__.*",
+            "Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|Read|Grep|Glob|WebFetch|WebSearch|Agent|task|spawn_agent|mcp__.*",
         )
         _merge_hook_event(
             data,
             "PostToolUse",
             _hook_handler(command_prefix, "PostToolUse", host),
-            "Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|Read|Grep|Glob|WebFetch|WebSearch|mcp__.*",
+            "Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|Read|Grep|Glob|WebFetch|WebSearch|Agent|task|spawn_agent|mcp__.*",
         )
         _merge_hook_event(data, "Stop", _hook_handler(command_prefix, "Stop", host), None)
     except Exception as exc:  # noqa: BLE001

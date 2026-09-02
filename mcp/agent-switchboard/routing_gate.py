@@ -598,17 +598,30 @@ def check_exploration_dedup(payload: dict) -> dict | None:
     if not (is_native_delegation or is_mcp_explore):
         return None
 
-    # Determine lane
+    # Determine execution metadata (not part of semantic identity)
     lane = (
         str(
-            tool_input.get("subagent_type")
-            or tool_input.get("lane")
+            tool_input.get("lane")
+            or tool_input.get("subagent_type")
             or tool_input.get("task_kind")
             or ("explore" if tool_name == "agent" else "worker")
         )
         .strip()
         .lower()
     )
+    agent_type = str(tool_input.get("subagent_type") or tool_input.get("agent_type") or tool_name).strip()
+    provider = str(tool_input.get("provider") or tool_input.get("target_agent") or "").strip()
+    model = str(tool_input.get("model") or tool_input.get("target_model") or "").strip()
+
+    # Determine semantic work identity
+    explicit_independence_role = str(
+        tool_input.get("explicit_independence_role")
+        or tool_input.get("independence_role")
+        or tool_input.get("semantic_role")
+        or tool_input.get("role")
+        or ""
+    ).strip().lower()
+
     task_scope = str(
         tool_input.get("task_scope")
         or tool_input.get("work_package_id")
@@ -638,10 +651,14 @@ def check_exploration_dedup(payload: dict) -> dict | None:
     decision, lease, reason = work_registry.request_work_lease(
         parent_session=session_id,
         task_scope=task_scope,
-        lane=lane,
         target=target,
         intent=intent,
         evidence_domain=evidence_domain,
+        explicit_independence_role=explicit_independence_role,
+        lane=lane,
+        agent_type=agent_type,
+        provider=provider,
+        model=model,
         brain_owned=brain_owned,
         orchestrator_owned=orchestrator_owned,
     )
