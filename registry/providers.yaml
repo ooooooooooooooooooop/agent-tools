@@ -4,8 +4,28 @@
 providers:
   opencode-go:
     apiKeyEnv: OPENCODE_GO_API_KEY
+    models:
+      - id: deepseek-v4-flash
+        contextWindow: 1048576
+        maxOutputTokens: 393216
+        capabilityClass: TEXT_GENERATION
+        capabilityEvidence:
+          grade: authoritative
+          source: "OpenCode route/model capability contract (authoritative evidence supplied 2026-09-02)"
+          contextWindow: 1048576
+          maxOutputTokens: 393216
   kimi-coding:
     apiKeyEnv: KIMI_CODING_API_KEY
+    models:
+      - id: k3-256k
+        contextWindow: 262144
+        outputSemantics: CONTEXT_REMAINDER
+        capabilityClass: TEXT_GENERATION
+        capabilityEvidence:
+          grade: authoritative
+          source: "https://platform.moonshot.cn/docs/pricing/chat"
+          contextWindow: 262144
+          outputSemantics: CONTEXT_REMAINDER
   bai:
     apiKeyEnv: BAI_API_KEY
     api: openai-completions

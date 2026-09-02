@@ -4,8 +4,8 @@
 rules:
   main_default:
     provider: cpa
-    model: gpt-5.6-sol-xhigh
-    evidence: "~/.dsh/settings.yaml agent-default-model（2026-08-29 已确认当前运行模型；canonical 仅同步现状，不改变 routing）"
+    model: gpt-5.6-luna-max
+    evidence: "canonical governance fallback if user-owned agent-default-model is absent or invalid"
   subagent_spawn:
     provider: cpa
     model: gpt-5.6-luna-max

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "validation_date": "2026-09-02",
+  "scope": "representative live validation for the corrected Luna family",
+  "receipts": [
+    {
+      "provider": "cpa",
+      "requested_model": "gpt-5.6-luna-max",
+      "resolved_model": "gpt-5.6-luna",
+      "endpoint": "http://127.0.0.1:8317/v1/chat/completions",
+      "request": {
+        "estimated_input_tokens": 130500,
+        "max_tokens": 1
+      },
+      "response": {
+        "http_status": 200,
+        "accepted": true,
+        "prompt_tokens": 130803,
+        "completion_tokens": 185,
+        "total_tokens": 130988,
+        "reasoning_tokens": 144
+      },
+      "result": "PASS",
+      "conclusion": "The CPA route accepted input above the historical 128K value; no independent 128K hard clamp was observed. This receipt does not by itself prove the full 1,050,000-token boundary."
+    }
+  ]
+}

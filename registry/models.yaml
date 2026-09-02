@@ -9,12 +9,30 @@ models:
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: kimi-coding provider 可选模型；2026-08-28 前为 main_default"}
     contextWindow: 262144
+    outputSemantics: CONTEXT_REMAINDER
+    capabilityClass: TEXT_GENERATION
     capacityEvidence:
       grade: authoritative
       source: "https://platform.moonshot.cn/docs/pricing/chat"
       upstreamModel: k3
       contextWindow: 262144
-      retrieved: "2026-08-31"
+      outputSemantics: CONTEXT_REMAINDER
+      retrieved: "2026-09-02"
+    roles: []
+  - id: deepseek-v4-flash
+    provider: opencode-go
+    status: admitted
+    admission: {date: "2026-09-02", basis: "in-use: OpenCode route pressure configuration and authoritative route evidence"}
+    contextWindow: 1048576
+    maxOutputTokens: 393216
+    capabilityClass: TEXT_GENERATION
+    capacityEvidence:
+      grade: authoritative
+      source: "OpenCode route/model capability contract (authoritative evidence supplied 2026-09-02)"
+      upstreamModel: deepseek-v4-flash
+      contextWindow: 1048576
+      maxOutputTokens: 393216
+      retrieved: "2026-09-02"
     roles: []
   - id: deepseek-v4-flash
     provider: bai
@@ -46,14 +64,16 @@ models:
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: subagent spawn/fork default"}
-    contextWindow: 128000
+    contextWindow: 1050000
+    maxOutputTokens: 128000
+    capabilityClass: TEXT_GENERATION
     capacityEvidence:
       grade: authoritative
       source: "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
       upstreamModel: gpt-5.6-luna
-      contextWindow: 128000
-      maxOutputTokens: 16384
-      retrieved: "2026-08-31"
+      contextWindow: 1050000
+      maxOutputTokens: 128000
+      retrieved: "2026-09-02"
     roles: [subagent_default]
   - id: gemini-3.7-flash-high
     provider: cpa
@@ -112,4 +132,13 @@ models:
     provider: cpa
     status: admitted
     admission: {date: "2026-08-28", basis: "in-use: declared on cpa (image)"}
+    capabilityClass: IMAGE_GENERATION
+    modality: image_generation
+    modalityEvidence:
+      grade: authoritative
+      source: "OpenAI GPT-Image-2 image-generation contract (authoritative evidence supplied 2026-09-02)"
+      input: [ text, image ]
+      output: [ image ]
+      endpoints: [ images, images.edits ]
+      retrieved: "2026-09-02"
     roles: []
