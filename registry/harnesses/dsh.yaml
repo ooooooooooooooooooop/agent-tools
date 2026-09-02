@@ -13,6 +13,7 @@ render_targets:
       "agent-default-model": "registry/routing-policy.yaml#rules.main_default (keys provider/model/reasoningEffort)"
       "agent-presets": "overlay"
       "ui-onboarding": "overlay"
+      "llm-deepseek": "overlay"
   - id: continuous-capability-adoption
     path: "{{DSH_HOME}}/AGENTS.md"
     mode: managed-instruction-block
@@ -47,6 +48,7 @@ render_targets:
 opaque_paths:
   - {path: "[tool-bash].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
   - {path: "[tool-pwsh].disabled", reason: "cordis-js-expression (!!js -> runtime 表达式)", owner: "dsh-agent-preset-cc"}
+  - {path: "[skill-filesystem].config.customSkillDirs[0]", reason: "cordis-js-expression (!!js -> baseUrl 相对路径计算)", owner: "dsh-agent-preset-cc"}
 out_of_scope:
   - "会话/skills/hooks 等非模型路由面"
 
@@ -75,11 +77,11 @@ runtime_composition:
     entry_relative_to_distribution: node_modules/@deepseek-ai/dsh/lib/bin.js
   ui:
     repository: https://github.com/deepseek-ai/deepseek-harness.git
-    baseline_commit: dd6322d604e00eec1ba5e0c8541159906a21094a
+    baseline_commit: aa6c361a972c8369148dea7380bb5c21c24e07ec
     fix_commit: 68826e9a6d8911239770016223719559c2842885
     fix_commit_remote: unavailable-at-audit
     apply_patch: false
-    note: "apply_patch:false = 从公开 baseline 干净构建（fix commit 在公开渠道永久不可达，补丁在全部公开提交不可应用；补丁资产保留为溯源）。2026-09-01 收敛决定：部署公开 HEAD UI。"
+    note: "从与固定 DSH base 0.1.1-rc.2 同版本的公开 release baseline 构建；跳过仅适用于未来 alpha UI 的补丁，禁止将不兼容源码混入 rc.2 基座。"
     patch_file: dsh/ui/deepseek-harness-68826e9.patch
     patch_sha256: 6b3d1f9bac533f6e9de06441b6916173b229afb0590c1adbfa53bfd712fc931e
     build_patch_file: dsh/ui/deepseek-harness-build-reproducibility.patch
@@ -148,6 +150,20 @@ runtime_composition:
         config:
           archiveThresholdTokens: 800000
           sidecarDir: ./.dsh-context-lifecycle
+      - id: workflow-model-preflight-gate
+        package: '@deepseek-ai/dsh-workflow-model-preflight-gate'
+        version: 0.1.1-rc.2+workflow.1
+        source_relative: dsh/workflow-model-preflight-gate
+        plugin_directory: dsh-workflow-model-preflight-gate
+        entry_relative: lib/index.js
+        config: {}
+      - id: autonomous-execution-governor
+        package: '@deepseek-ai/dsh-autonomous-execution-governor'
+        version: 0.1.1-rc.2+governor.1
+        source_relative: dsh/autonomous-execution-governor
+        plugin_directory: dsh-autonomous-execution-governor
+        entry_relative: lib/index.js
+        config: {}
   archive_anchor:
     session_id: session-cdc4ad5d-0e4c-45c3-a596-efee4a7544b9
     status: READ_ONLY_CONTEXT_EXHAUSTED

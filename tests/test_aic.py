@@ -77,16 +77,16 @@ class TestCapabilityAdoptionProjection(unittest.TestCase):
             state = root / "state"
             (state / "state").mkdir(parents=True)
             (state / "state" / "preferences.md").write_text(self.POLICY, encoding="utf-8")
-            (home / ".codex").mkdir(parents=True)
-            target = home / ".codex" / "AGENTS.md"
+            (home / ".dsh").mkdir(parents=True)
+            target = home / ".dsh" / "AGENTS.md"
             target.write_text("# User rules\nkeep this\n", encoding="utf-8")
             with mock.patch.object(Path, "home", return_value=home), \
                     mock.patch.object(aic, "PRIVATE_STATE", state):
-                row = aic._policy_diff_row("codex")
+                row = aic._policy_diff_row("dsh")
                 self.assertFalse(row["ok"])
-                rc, _ = aic._apply_policy_projection("codex")
+                rc, _ = aic._apply_policy_projection("dsh")
                 self.assertEqual(rc, 0)
-                row = aic._policy_diff_row("codex")
+                row = aic._policy_diff_row("dsh")
                 self.assertTrue(row["ok"])
             text = target.read_text(encoding="utf-8")
             self.assertIn("keep this", text)

@@ -1,52 +1,27 @@
-# gemini.yaml — Gemini CLI harness adapter contract（canonical）
+# gemini.yaml — Gemini CLI harness contract（canonical · NATIVE INDEPENDENT）
+# Personal AI 管理范围：READ_ONLY_DISCOVERY ONLY（禁止 AIC 写控制 / 指令覆盖）
 harness: gemini
 home: ".gemini"
+status: native_independent
+version_observed: "0.56.0"
 
-consumes:
-  - registry/capabilities.yaml
-  - personal-ai-state:static
-  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
-
-render_targets:
-  - file: settings.json
-    format: json
-    generated_fields:
-      - {path: "mcpServers", source: "capabilities.mcp_standard", mode: superset_keys}
-    note: "security.auth.selectedType=oauth-personal = OVERLAY"
-  - file: GEMINI.md
-    kind: instruction
-    owner: shared-managed-blocks
-    check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
-    generated_blocks:
-      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
-      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
-  - file: .env
-    kind: secret-container
-    check: {mode: exists}           # 只查存在性；secret 值永不入 canonical
+consumes: []
+render_targets: []
 
 overlay:
-  - "settings.json: security/auth"
+  - "All configuration in ~/.gemini/ is 100% user-owned and harness-native"
 
 static_instructions:
   file: GEMINI.md
-  owner: shared-managed-blocks
-  legality: "switchboard execution policy + aic long-term capability-adoption projection；无动态状态"
+  owner: user
+  legality: "Official native instructions only; no AIC or Switchboard managed blocks"
 
 runtime_context_hook:
-  mechanism: "session-start injection（未发现原生动态 hook；编排方首帧注入）"
-  constraint: "禁止把动态状态写入 GEMINI.md"
+  mechanism: "none (harness native independent)"
+  constraint: "Personal AI does not inject runtime hooks or instructions"
 
-health_check: "gemini CLI 可用性由调用方探测（adapter 不硬编码路径）"
-runtime_state: "（oauth 凭据由 CLI 自管，不在 ~/.gemini 明文目录）"
-secret: ".env — 值永不入 canonical（当前为空文件）"
+health_check: "gemini --version"
+runtime_state: "projects.json, tmp/, history/ — 永不入 canonical"
+secret: ".env / OAuth tokens — 永不入 canonical"
 
-# AUTONOMOUS_EXECUTION_GOVERNANCE — Gemini hook 矩阵（canonical；wrapper/sidecar）
-governance_hooks:
-  BEFORE_MODEL_CALL: {impl: wrapper, detail: "gemini CLI wrapper（无原生 hook）"}
-  AFTER_MODEL_CALL: {impl: wrapper, detail: "usage 解析"}
-  AFTER_AGENT_ACTION: {impl: wrapper, detail: "stream 扫描"}
-  ON_PROGRESS: {impl: wrapper, detail: "artifact delta"}
-  ON_CHECKPOINT: {impl: wrapper, detail: "→ checkpoint.py"}
-  ON_BUDGET_LIMIT: {impl: wrapper, detail: "terminate + checkpoint"}
-  ON_NO_PROGRESS: {impl: wrapper, detail: "→ checkpoint + 退出"}
-  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
+governance_hooks: {}

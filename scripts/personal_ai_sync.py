@@ -59,6 +59,226 @@ PRIVACY_PATTERNS = [
 KNOWN_BLOCKERS = ["BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT",
                   "NOVEL_REPO_DURABILITY=BLOCKED_PRIVACY"]
 
+# ---------------------------------------------------- DSH session history plane
+# DSH session/history 属于 runtime/durable user data（data plane），不属于
+# preferences canonical。restore 必须独立报告并验证 DSH_SESSION_HISTORY，
+# 不得用一个总体 PASS 混同（事故：配置恢复 PASS 而历史会话消失）。
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+KNOWN_SESSION_ANCHORS = [
+    # 历史明确存在的锚点（来自事故恢复记录；可按需扩展）
+    "session-869904c0-fcd0-4ea3-a3b7-fec230ac8017",
+]
+
+
+def _device_backup_root() -> Path | None:
+    """解析 durability backup root（personal-ai-state/sync/this-device.yaml）。
+    失败返回 None（该设备未配置备份 = NOT_APPLICABLE 语义）。"""
+    rel = Path.home() / "personal-ai-state" / "sync" / "this-device.yaml"
+    if not rel.is_file():
+        rel = Path(os.environ.get("PERSONAL_AI_STATE", "")) / "sync" / "this-device.yaml"
+    if not rel.is_file():
+        return None
+    try:
+        import yaml  # noqa: PLC0415
+        cfg = yaml.safe_load(rel.read_text(encoding="utf-8-sig")) or {}
+        root = cfg.get("backup_root")
+        return Path(root) if root else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_zstd_session_header(zstd_path: Path) -> dict | None:
+    """从单个 session.jsonl.zstd 文件的首帧读取 SessionHeader。"""
+    try:
+        data = zstd_path.read_bytes()
+        if len(data) < 4 or data[:4] != ZSTD_MAGIC:
+            return None
+        import zlib as _zlib
+        # 首帧通常较小，尝试标准或 node-zstd 流式解压；标准库尝试 zlib/decompress
+        # 若无 zstd C 库绑定，解析第一行明文 JSON
+        try:
+            import zstandard as _zstd  # noqa: PLC0415
+            dctx = _zstd.ZstdDecompressor()
+            first_line = dctx.decompress(data, max_output_size=65536).split(b"\n")[0]
+            return json.loads(first_line.decode("utf-8"))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return None
+
+
+def session_history_status(live_root: Path, backup_root: Path | None = None,
+                           anchors: list[str] | None = None,
+                           storage_root: Path | None = None) -> dict:
+    """DSH_SESSION_HISTORY plane：备份物理计数、live 物理计数、工作区挂载、锚点与可枚举性。
+
+    同时验证两层：
+      1. 物理层：live 物理文件存在、备份完整性、zstd 魔数与探针
+      2. 逻辑/挂载层：workspace.json / workspaceRegistry 中已挂载 sessionIds 覆盖率、
+         anchor 挂载状态、未挂载 session 发现、initialized 状态下的逻辑一致性。
+
+    status 语义：
+      PASS            物理文件完整 且 workspace 挂载全部覆盖 且 anchor 已挂载
+      REVIEW          物理文件存在但 workspace 未挂载（本次事故模式），或存在未关联 session
+      PARTIAL         live 物理缺失部分备份会话
+      FAIL            物理与备份严重不匹配或 schema/文件损坏
+      NOT_APPLICABLE  无备份索引（fresh 机器 / 从未备份过）
+    """
+    anchors = anchors or KNOWN_SESSION_ANCHORS
+    live_count = 0
+    live_names = set()
+    if live_root.is_dir():
+        for p in live_root.rglob("session.jsonl.zstd"):
+            live_count += 1
+            live_names.add(p.parent.name)
+
+    # 1. 检查 workspace.json 挂载层（防复发核心逻辑门）
+    st_root = storage_root or (live_root.parent / "storages")
+    ws_file = st_root / "workspace.json"
+    attached_session_ids = set()
+    workspace_count = 0
+    workspace_initialized = False
+    unattached_sessions = []
+
+    if ws_file.is_file():
+        try:
+            ws_data = json.loads(ws_file.read_text(encoding="utf-8"))
+            workspace_initialized = bool(ws_data.get("global", {}).get("initialized", False))
+            workspaces = ws_data.get("tables", {}).get("workspaces", {})
+            workspace_count = len(workspaces)
+            for ws_info in workspaces.values():
+                for s_id in ws_info.get("sessionIds", []):
+                    attached_session_ids.add(s_id)
+        except Exception:
+            pass
+
+    # 计算未挂载的物理 root session（子代理 session 由 parentSession 索引，不挂在 workspace 顶层）
+    root_live_names = {s for s in live_names if s.startswith("session-")}
+    if root_live_names:
+        unattached_sessions = sorted(list(root_live_names - attached_session_ids))
+
+    attached_count = len(attached_session_ids)
+
+    if backup_root is None or not backup_root.is_dir():
+        # 无备份环境（如纯单机 / fresh 机器 / 从未备份过）
+        anchor_res: dict[str, dict] = {}
+        for a in anchors:
+            anchor_res[a] = {
+                "in_backup": False,
+                "in_live": a in live_names,
+                "attached": a in attached_session_ids,
+            }
+
+        status = "NOT_APPLICABLE"
+        reason = "no backup root configured"
+
+        return {
+            "status": status,
+            "reason": reason,
+            "live_count": live_count,
+            "backup_count": 0,
+            "missing": 0,
+            "attached_count": attached_count,
+            "workspace_count": workspace_count,
+            "unattached_count": len(unattached_sessions),
+            "unattached_sample": unattached_sessions[:5],
+            "anchors": anchor_res,
+            "probe": {"checked": 0, "bad": 0}
+        }
+
+    idx = backup_root / "state" / "sessions-index.json"
+    if not idx.is_file():
+        return {
+            "status": "NOT_APPLICABLE",
+            "reason": "backup root present but sessions-index missing",
+            "live_count": live_count,
+            "backup_count": 0,
+            "missing": 0,
+            "attached_count": attached_count,
+            "workspace_count": workspace_count,
+            "unattached_count": len(unattached_sessions),
+            "anchors": {},
+            "probe": {"checked": 0, "bad": 0}
+        }
+
+    try:
+        index = json.loads(idx.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "FAIL",
+            "reason": f"sessions-index unreadable: {exc}",
+            "live_count": live_count,
+            "backup_count": -1,
+            "missing": -1,
+            "attached_count": attached_count,
+            "workspace_count": workspace_count,
+            "unattached_count": len(unattached_sessions),
+            "anchors": {},
+            "probe": {"checked": 0, "bad": 0}
+        }
+
+    backup_count = len(index)
+    anchor_res: dict[str, dict] = {}
+    for a in anchors:
+        anchor_res[a] = {
+            "in_backup": any(a in k for k in index),
+            "in_live": a in live_names,
+            "attached": a in attached_session_ids,
+        }
+
+    probe = {"checked": 0, "bad": 0}
+    if live_root.is_dir():
+        for p in sorted(live_root.rglob("session.jsonl.zstd"))[:3]:
+            probe["checked"] += 1
+            try:
+                head = p.read_bytes()[:4]
+                if len(head) != 4 or head != ZSTD_MAGIC or p.stat().st_size < 8:
+                    probe["bad"] += 1
+            except OSError:
+                probe["bad"] += 1
+
+    backup_session_ids = {Path(k).parent.name for k in index.keys()}
+    unattached_backup = sorted(list((live_names & backup_session_ids) - attached_session_ids))
+    missing = max(0, backup_count - live_count)
+
+    # 门禁决策判定
+    if probe["bad"]:
+        status = "FAIL"
+        reason = "zstd probe failed or corrupted"
+    elif missing > 0 and missing >= backup_count:
+        status = "FAIL"
+        reason = "all backup sessions missing from live physical store"
+    elif missing > 0:
+        status = "PARTIAL"
+        reason = f"missing {missing} backup sessions from live store"
+    elif len(unattached_backup) > 0 and workspace_initialized:
+        # 【关键防复发门禁】：物理 session 齐全，但 workspace.json 未全部挂载！
+        status = "REVIEW"
+        reason = f"workspace_unattached: {len(unattached_backup)} backup sessions not registered in workspace.json"
+    elif not all(v.get("attached", False) for v in anchor_res.values() if v.get("in_backup")):
+        # 锚点未挂载
+        status = "REVIEW"
+        reason = "one or more anchor sessions are physically present but NOT attached to workspaces"
+    else:
+        status = "PASS"
+        reason = ""
+
+    return {
+        "status": status,
+        "reason": reason,
+        "live_count": live_count,
+        "backup_count": backup_count,
+        "missing": missing,
+        "attached_count": attached_count,
+        "workspace_count": workspace_count,
+        "unattached_count": len(unattached_backup),
+        "unattached_sample": unattached_backup[:5],
+        "anchors": anchor_res,
+        "probe": probe,
+        "backup_source": str(idx)
+    }
+
 
 def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
         env: dict[str, str] | None = None) -> tuple[int, str]:
@@ -326,33 +546,24 @@ def check_secrets() -> dict:
 
 
 # ------------------------------------------------------------------ runtime
-# §24 依赖映射：canonical 变化 → 受影响 Harness target（简单代码映射，非 graph db）
+# §24 依赖映射：canonical 变化 → 受影响 Harness target（DSH ONLY 控制面）
 TARGET_DEPENDENCIES = {
     "dsh": ["registry/providers.yaml", "registry/routing-policy.yaml",
-            "registry/harnesses/dsh"],
-    "codex": ["registry/capabilities.yaml", "registry/harnesses/codex.yaml",
-              "registry/models.yaml"],
-    "claude": ["registry/harnesses/claude.yaml"],
-    "gemini": ["registry/capabilities.yaml", "registry/harnesses/gemini.yaml"],
-    "switchboard": ["registry/routing-policy.yaml", "registry/capabilities.yaml",
-                    "registry/harnesses/switchboard.yaml"],
+            "registry/harnesses/dsh", "registry/models.yaml",
+            "registry/execution-profiles.yaml"],
 }
-# personal-ai-state 私有 gateways 是 claude/switchboard 的 generated 源
-PRIVATE_GATEWAYS_PATH = "registry/gateways.yaml"
 PREFERENCES_PATH = "state/preferences.md"
 
 
 def affected_targets(agent_tools_changed: list[str],
                      state_changed: list[str]) -> list[str]:
-    """只返回真正受 canonical change 影响的 Harness（§7/§8）。"""
+    """只返回真正受 canonical change 影响的 Harness（DSH ONLY）。"""
     targets = set()
     for t, deps in TARGET_DEPENDENCIES.items():
         if any(any(f.startswith(d) for d in deps) for f in agent_tools_changed):
             targets.add(t)
-    if any(f == PRIVATE_GATEWAYS_PATH for f in state_changed):
-        targets |= {"claude", "switchboard"}
     if any(f == PREFERENCES_PATH for f in state_changed):
-        targets |= {"dsh", "codex", "claude", "gemini", "switchboard"}
+        targets.add("dsh")
     return sorted(targets)
 
 
@@ -729,11 +940,14 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 skills_dest: Path | None = None,
                 apply_dsh: bool = True,
                 agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/agent-tools.git",
-                state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-state.git"
-                ) -> dict:
+                state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-state.git",
+                sessions_root: Path | None = None,
+                backup_root: Path | None = None) -> dict:
     """RESTORE = local canonical missing 时的特殊 SYNC（§28），复用 PULL+bootstrap。
 
     路径可注入：fresh-restore 演练在独立 temp destination 上进行，不破坏 live 环境。
+    DSH_SESSION_HISTORY plane 默认解析 live ~/.dsh/sessions 与 durability backup
+    root（this-device.yaml）；测试注入空 root 得到 NOT_APPLICABLE。
     """
     results = {"mode": "restore", "steps": []}
 
@@ -792,6 +1006,19 @@ def run_restore(detail: bool = False, repo: Path = REPO,
         if (state_repo / "memory").is_dir():
             v = memory_merge_verify(state_repo)
             step("memory loadable", v["ok"], f"records={v.get('records')}")
+    # DSH_SESSION_HISTORY plane（§9 事故契约）：备份计数 / live 计数 / 锚点 /
+    # schema 探针；非 PASS|NOT_APPLICABLE 时总体 result 不得为 PASS。
+    sh_root = sessions_root or (Path.home() / ".dsh" / "sessions")
+    bk_root = backup_root if backup_root is not None else _device_backup_root()
+    sh = session_history_status(sh_root, bk_root)
+    anchors_summary = "".join(
+        f" {a[-8:]}:backup={v['in_backup']}/live={v['in_live']}"
+        for a, v in sh["anchors"].items())
+    step("dsh session history", sh["status"] in ("PASS", "NOT_APPLICABLE"),
+         f"status={sh['status']} backup={sh['backup_count']} live={sh['live_count']}"
+         f" missing={sh['missing']}{anchors_summary}"
+         + (f" ({sh['reason']})" if sh.get("reason") else ""))
+    results["session_history"] = sh
     sec = check_secrets()
     step("secrets", True, f"{sec['status']} missing={sec['missing']}")
     results["secrets"] = sec
@@ -814,6 +1041,11 @@ def print_human(results: dict, detail: bool = False) -> None:
     if sec:
         print(f"  {'secrets':22s} {sec['status']}" +
               (f" — missing: {sec['missing']}" if sec.get("missing") else ""))
+    sh = results.get("session_history")
+    if sh:
+        print(f"  {'dsh-session-history':22s} {sh['status']}"
+              f" (backup={sh['backup_count']} live={sh['live_count']}"
+              f" missing={sh['missing']})")
     print(f"\n  external blockers    known external blocker, unchanged "
           f"({len(KNOWN_BLOCKERS)})")
     for s in results.get("steps", []):

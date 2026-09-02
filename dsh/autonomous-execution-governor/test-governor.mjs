@@ -36,7 +36,7 @@ test('provider-call budget: 674 calls impossible (stops at 200)', () => {
   let state = emptyState({ taskId: 't', projectId: 'p', profile: 'X', harness: 'dsh' });
   let stop = null;
   for (let i = 0; i < 674; i++) {
-    const r = evaluateGuards(state, { key: actionKey('read', { i }), isMutating: false }, profile);
+    const r = evaluateGuards(state, { key: actionKey('edit', { i }), isMutating: true }, profile);
     state = r.nextState;
     if (r.stop) { stop = r.stop; break; }
   }

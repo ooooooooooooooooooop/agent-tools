@@ -1,73 +1,27 @@
-# claude.yaml — Claude Code harness adapter contract（canonical）
+# claude.yaml — Claude Code harness contract（canonical · NATIVE INDEPENDENT）
+# Personal AI 管理范围：READ_ONLY_DISCOVERY ONLY（禁止 AIC 写控制 / Hook 注入 / 代理劫持）
 harness: claude
 home: ".claude"
-version_observed: "2.1.239"
+status: native_independent
+version_observed: "2.1.258"
 
-consumes:
-  - personal-ai-state:registry/gateways.yaml   # cc-switch alias_map 唯一 SSOT（私有）
-  - personal-ai-state:static                    # 静态指令
-  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
-  - registry/models.yaml                        # 准入校验
-
-render_targets:
-  - file: settings.json
-    format: json
-    generated_fields:
-      # 由 gateways alias_map 生成：每个 claude-* 显示名一对 _MODEL/_NAME
-      - {path: "env.ANTHROPIC_DEFAULT_OPUS_MODEL", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-opus-4-8", side: alias}
-      - {path: "env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-opus-4-8", side: actual}
-      - {path: "env.ANTHROPIC_DEFAULT_SONNET_MODEL", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-sonnet-4-6", side: alias}
-      - {path: "env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-sonnet-4-6", side: actual}
-      - {path: "env.ANTHROPIC_DEFAULT_HAIKU_MODEL", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-haiku-4-5", side: alias}
-      - {path: "env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-haiku-4-5", side: actual}
-      - {path: "env.ANTHROPIC_DEFAULT_FABLE_MODEL", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-fable-5", side: alias}
-      - {path: "env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", source: "gateways.cc-switch.alias_map", mode: exact, key: "claude-fable-5", side: actual}
-      - {path: "env.CLAUDE_CODE_SUBAGENT_MODEL", source: "gateways.cc-switch.alias_map", mode: exact, key: "subagent-default", side: actual}
-      - {path: "env.ANTHROPIC_BASE_URL", source: "gateways.cc-switch.listen_url", mode: exact}
-      - {path: "env.ANTHROPIC_AUTH_TOKEN", source: "literal", mode: exact, value: "PROXY_MANAGED"}
-      - {path: "model", source: "harness_defaults.model_alias", mode: exact}
-    note: "hooks = OVERLAY（switchboard 安装拥有）；CLAUDE_CODE_*_WINDOW/TOKENS = OVERLAY"
-  - file: CLAUDE.md
-    kind: instruction
-    owner: shared-managed-blocks
-    check: {mode: managed_block_marker, marker: "agent-switchboard:cost-routing:begin", sync_group: harness-instructions}
-    generated_blocks:
-      - {id: CONTINUOUS_CAPABILITY_ADOPTION, source: "personal-ai-state/state/preferences.md", owner: aic}
-      - {id: AUTONOMOUS_EXECUTION_GOVERNANCE, source: "registry/autonomous-execution-governance.yaml", owner: aic}
-
-harness_defaults:
-  model_alias: opus                   # 显示档别名；真实模型经 alias_map 解析
+consumes: []
+render_targets: []
 
 overlay:
-  - "settings.json: hooks.*（agent-switchboard routing-hook 安装物）"
-  - "settings.json: env.CLAUDE_CODE_AUTO_COMPACT_WINDOW / CLAUDE_CODE_MAX_CONTEXT_TOKENS"
-  - "config.json: primaryApiKey=any（占位，非 secret 实值）"
-  - "agents/ skills/ plugins/（harness 自有扩展）"
+  - "All configuration in ~/.claude/ and ~/.claude.json is 100% user-owned and harness-native"
 
 static_instructions:
   file: CLAUDE.md
-  owner: shared-managed-blocks
-  legality: "switchboard execution policy + aic long-term capability-adoption projection；无动态状态"
+  owner: user
+  legality: "Official native instructions only; no AIC or Switchboard managed blocks"
 
 runtime_context_hook:
-  mechanism: "原生 UserPromptSubmit hook（已由 switchboard 安装）— 可作为动态注入点"
-  constraint: "禁止把动态状态写入 CLAUDE.md"
+  mechanism: "none (harness native independent)"
+  constraint: "Personal AI does not inject runtime hooks or instructions"
 
-health_check: "claude.EXE --version（~/.local/bin/claude.EXE）"
+health_check: "claude --version"
 runtime_state: "projects/ sessions/ history.jsonl tasks/ plans/ — 永不入 canonical"
-secret: "ANTHROPIC_AUTH_TOKEN 实为代理占位引用；oauth/凭据由 cc-switch 管理 — 永不入 canonical"
+secret: "Official Anthropic auth / user-defined proxy — 永不入 canonical"
 
-# AUTONOMOUS_EXECUTION_GOVERNANCE — Claude Code hook 矩阵（canonical；原生 hooks 复用）
-governance_hooks:
-  BEFORE_MODEL_CALL: {impl: native, detail: "PreToolUse hook（可 deny）"}
-  AFTER_MODEL_CALL: {impl: native, detail: "PostToolUse / Stop"}
-  AFTER_AGENT_ACTION: {impl: native, detail: "PostToolUse"}
-  ON_PROGRESS: {impl: native, detail: "PostToolUse artifact delta"}
-  ON_CHECKPOINT: {impl: native, detail: "Stop/SubagentStop hook → checkpoint.py"}
-  ON_BUDGET_LIMIT: {impl: native+wrapper, detail: "--max-turns / hook deny / managed supervisor max_autonomous_actions"}
-  ON_NO_PROGRESS: {impl: native, detail: "PostToolUse 统计 → 警告/停止"}
-  ON_RESUME: {impl: tool, detail: "checkpoint.py resume"}
-  native_reuse:
-    - "hooks（PreToolUse/PostToolUse/Stop/SessionStart/SubagentStop）已由 switchboard 安装（OVERLAY）"
-    - "--max-turns（CLI 原生 turn 上限）"
-    - "CLAUDE_CODE_MAX_CONTEXT_TOKENS / CLAUDE_CODE_AUTO_COMPACT_WINDOW（OVERLAY，已登记）"
+governance_hooks: {}

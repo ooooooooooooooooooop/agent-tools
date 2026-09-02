@@ -189,7 +189,8 @@ governance script changed   → governance task validation
 Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 → aic discover → Discover active projects → Clone eligible projects
 → Validate canonical → Restore Skills/Plugins/MCP → Render installed Harnesses
-→ Rebuild Memory index → Register Governance/Durability/Sync-check tasks (idempotent)
+→ Rebuild Memory index → Verify DSH session history（backup/live 计数 + 已知锚点 + schema 探针；非 PASS/NOT_APPLICABLE 则总体不得 PASS）
+→ Register Governance/Durability/Sync-check tasks (idempotent)
 → Verify CONTINUOUS_CAPABILITY_ADOPTION generated block on installed Harnesses
 → Physical smoke test → Status
 ```
@@ -216,6 +217,8 @@ external blockers    known external blocker, unchanged
 
 Result: PASS / REVIEW / BLOCKED
 ```
+
+RESTORE 模式追加 `dsh-session-history` plane 行（backup / live / missing 计数）。状态语义：`PASS`（备份与 live 会话匹配、已知锚点与 schema 探针通过）/ `NOT_APPLICABLE`（该设备从未配置备份，fresh restore 不阻塞）/ `PARTIAL` / `FAIL`。**历史缺失时总体 `Result` 不得写完整 PASS**（2026-09-01 事故：配置恢复 PASS 而会话历史丢失，根因 = restore 未把 DSH conversation history 纳入契约）。
 
 冲突时先把确定安全的部分做完，只把真正冲突留下（§35）；不问“要不要同步其他没冲突的”。Known blockers 状态未变只显示 `known external blocker, unchanged`（§34）。
 

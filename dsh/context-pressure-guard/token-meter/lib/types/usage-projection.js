@@ -57,7 +57,7 @@ const pressureFrom = (usage) => usage.inputTokens + (usage.cacheReadTokens ?? 0)
 /** The usage a chunk or finalized message reports for its step, if any. */
 const usageOf = (event) => event.type === 'assistant/chunk' && event.data.chunk.type === 'usage'
     ? event.data.chunk.usage
-    : event.type === 'assistant/message'
+    : event.type === 'assistant/message' && (event.surfaceOp === undefined || event.surfaceOp === 'append')
         ? event.data.usage
         : undefined;
 /** The context-pressure state schema and source of its inferred type. */
@@ -96,7 +96,7 @@ export const tokenUsageProjectionDefinition = {
             ({ turn, step } = event.data);
             usage = event.data.chunk.usage;
         }
-        else if (event.type === 'assistant/message' && event.data.usage !== undefined) {
+        else if (event.type === 'assistant/message' && (event.surfaceOp === undefined || event.surfaceOp === 'append') && event.data.usage !== undefined) {
             ;
             ({ turn, step, usage } = event.data);
         }

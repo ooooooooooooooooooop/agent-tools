@@ -33,7 +33,7 @@ def claude_stream(model: str, response: str = "ok") -> str:
 
 
 class DynamicCodexRoleTests(unittest.TestCase):
-    def test_live_priority_and_descriptions_select_all_roles(self):
+    def test_live_priority_keeps_frontier_but_requires_luna_child_roles(self):
         roles = broker.codex_roles_from_models(
             [
                 broker.model_entry(
@@ -48,8 +48,8 @@ class DynamicCodexRoleTests(unittest.TestCase):
             ]
         )
         self.assertEqual(roles["frontier"]["id"], "gpt-8-brain")
-        self.assertEqual(roles["workhorse"]["id"], "gpt-8-worker")
-        self.assertEqual(roles["reader"]["id"], "gpt-8-reader")
+        self.assertEqual(roles["workhorse"]["id"], broker.CODEX_CHILD_MODEL)
+        self.assertEqual(roles["reader"]["id"], broker.CODEX_CHILD_MODEL)
 
     def test_cost_policies_use_dynamic_roles(self):
         with mock.patch.object(
@@ -166,7 +166,7 @@ class DynamicAntigravityRoleTests(unittest.TestCase):
         self.assertEqual(policy["failure_fallback"]["codex"], ["explorer", "worker"])
         self.assertEqual(policy["failure_fallback"]["claude"], ["Explore", "economy-worker"])
         self.assertTrue(policy["failure_fallback"]["record_fallback"])
-        self.assertIn("proactively consider", policy["rule"])
+        self.assertIn("only after explicit user authorization", policy["rule"])
         self.assertIn("not a native child agent", policy["rule"])
         self.assertIn("missing, quota-limited, times out, mismatches, or fails", policy["rule"])
         self.assertIn("concurrently only on independent packages", policy["rule"])
