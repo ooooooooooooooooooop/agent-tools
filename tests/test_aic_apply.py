@@ -128,42 +128,93 @@ class TestDshApply(unittest.TestCase):
 
     def test_agent_default_model_overlay_preserved_while_provider_drift_repairs(self):
         import yaml
+        f = self.home / ".dsh" / "settings.yaml"
         data = json.loads(json.dumps(self.expected))
         data["agent-default-model"] = {"provider": "cpa", "model": "gemini-3.7-flash-high",
                                        "reasoningEffort": "user-choice"}
         data["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"] = "__DRIFT__"
-        (self.dsh / "settings.yaml").write_text(
+        f.write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        with mock.patch.dict(os.environ, self.env):
-            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
-        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        with mock.patch.object(Path, "home", return_value=self.home):
+            rc, _ = aic._apply_dsh()
+        self.assertEqual(rc, 0)
+        back = yaml.safe_load(f.read_text(encoding="utf-8"))
         self.assertEqual(back["agent-default-model"], data["agent-default-model"])
         self.assertNotEqual(back["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"],
                             "__DRIFT__")
 
     def test_agent_default_model_luna_max_selection_preserved(self):
         import yaml
+        f = self.home / ".dsh" / "settings.yaml"
         data = json.loads(json.dumps(self.expected))
         data["agent-default-model"] = {"provider": "cpa", "model": "gpt-5.6-luna-max"}
         data["llm-pi-ai"]["providers"]["cpa"]["models"][0]["id"] = "__DRIFT__"
-        (self.dsh / "settings.yaml").write_text(
+        f.write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        with mock.patch.dict(os.environ, self.env):
-            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
-        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        with mock.patch.object(Path, "home", return_value=self.home):
+            rc, _ = aic._apply_dsh()
+        self.assertEqual(rc, 0)
+        back = yaml.safe_load(f.read_text(encoding="utf-8"))
         self.assertEqual(back["agent-default-model"], data["agent-default-model"])
 
     def test_agent_default_model_invalid_falls_back_to_main_default(self):
         import yaml
+        f = self.home / ".dsh" / "settings.yaml"
         data = dict(self.expected)
         data["agent-default-model"] = {"provider": "not-admitted", "model": "missing"}
-        (self.dsh / "settings.yaml").write_text(
+        f.write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        with mock.patch.dict(os.environ, self.env):
-            self.assertEqual(aic.cmd_apply(_Args("dsh")), 0)
-        back = yaml.safe_load((self.dsh / "settings.yaml").read_text(encoding="utf-8"))
+        with mock.patch.object(Path, "home", return_value=self.home):
+            rc, _ = aic._apply_dsh()
+        self.assertEqual(rc, 0)
+        back = yaml.safe_load(f.read_text(encoding="utf-8"))
         self.assertEqual(back["agent-default-model"],
-                         {"provider": "cpa", "model": "gpt-5.6-sol-xhigh"})
+                         {"provider": "cpa", "model": "gpt-5.6-luna-max"})
+
+    def test_agent_default_model_missing_falls_back_to_main_default(self):
+        import yaml
+        f = self.home / ".dsh" / "settings.yaml"
+        data = dict(self.expected)
+        data.pop("agent-default-model", None)
+        f.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        with mock.patch.object(Path, "home", return_value=self.home):
+            rc, _ = aic._apply_dsh()
+        self.assertEqual(rc, 0)
+        back = yaml.safe_load(f.read_text(encoding="utf-8"))
+        self.assertEqual(back["agent-default-model"],
+                         {"provider": "cpa", "model": "gpt-5.6-luna-max"})
+
+    def test_agent_default_model_admitted_selections_no_drift(self):
+        import yaml
+        f = self.home / ".dsh" / "settings.yaml"
+        selections = [
+            {"provider": "cpa", "model": "gpt-5.6-luna-max"},
+            {"provider": "cpa", "model": "gpt-5.6-sol-xhigh"},
+            {"provider": "cpa", "model": "gemini-3.7-flash-high"},
+        ]
+        canonical = aic.load_canonical()
+        # Verify canonical fallback is independently fixed to Luna-max
+        self.assertEqual(canonical["policy"]["rules"]["main_default"]["model"], "gpt-5.6-luna-max")
+        for sel in selections:
+            data = json.loads(json.dumps(self.expected))
+            data["agent-default-model"] = sel
+            f.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            with mock.patch.object(Path, "home", return_value=self.home):
+                overlay = aic.adapter_overlay()
+                current_actual = yaml.safe_load(f.read_text(encoding="utf-8"))
+                expected_rendered = aic.render_settings(canonical, overlay, current_actual)
+                diffs = []
+                aic.deep_diff(expected_rendered, current_actual, "", diffs)
+                self.assertEqual(diffs, [], f"Selection {sel} should produce NO DRIFT")
+                rc, _ = aic._apply_dsh()
+                self.assertEqual(rc, 0)
+                back = yaml.safe_load(f.read_text(encoding="utf-8"))
+                self.assertEqual(back["agent-default-model"], sel)
+                # Verify canonical policy was not mutated by user selection change
+                canon_after = aic.load_canonical()
+                self.assertEqual(canon_after["policy"]["rules"]["main_default"]["model"], "gpt-5.6-luna-max")
 
     def test_unknown_section_drift_review(self):
         import yaml

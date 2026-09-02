@@ -1,0 +1,1317 @@
+{
+  "families": [
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        1000000
+      ],
+      "current_output": [
+        128000
+      ],
+      "effective_context": [
+        1000000
+      ],
+      "effective_output": [
+        128000
+      ],
+      "family": "any:claude-opus-5",
+      "issues": [],
+      "provenance": [
+        "admitted[3]",
+        "providers[3]",
+        "runtime[3]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "any:claude-opus-5"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        1000000
+      ],
+      "truth_output": [
+        128000
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        128000
+      ],
+      "current_output": [
+        8192
+      ],
+      "effective_context": [
+        128000
+      ],
+      "effective_output": [
+        8192
+      ],
+      "family": "bai:deepseek-chat",
+      "issues": [],
+      "provenance": [
+        "admitted[2]",
+        "providers[2]",
+        "runtime[2]",
+        "runtime_observed[2]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "bai:deepseek-v4-flash"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        128000
+      ],
+      "truth_output": [
+        8192
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        200000
+      ],
+      "current_output": [
+        64000
+      ],
+      "effective_context": [
+        200000
+      ],
+      "effective_output": [
+        64000
+      ],
+      "family": "cpa:claude-opus-4-6",
+      "issues": [],
+      "provenance": [
+        "admitted[8]",
+        "providers[7]",
+        "runtime[7]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:claude-opus-4-6-thinking"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        200000
+      ],
+      "truth_output": [
+        64000
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        200000
+      ],
+      "current_output": [
+        64000
+      ],
+      "effective_context": [
+        200000
+      ],
+      "effective_output": [
+        64000
+      ],
+      "family": "cpa:claude-sonnet-4-6",
+      "issues": [],
+      "provenance": [
+        "admitted[7]",
+        "providers[5]",
+        "runtime[5]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:claude-sonnet-4-6"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        200000
+      ],
+      "truth_output": [
+        64000
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        1048576
+      ],
+      "current_output": [
+        65536
+      ],
+      "effective_context": [
+        1048576
+      ],
+      "effective_output": [
+        65536
+      ],
+      "family": "cpa:gemini-3.7-flash",
+      "issues": [],
+      "provenance": [
+        "admitted[5]",
+        "providers[4]",
+        "routing[3]",
+        "runtime[4]",
+        "runtime_observed[6]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:compaction_summary",
+        "cpa:gemini-3.7-flash-high"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        1048576
+      ],
+      "truth_output": [
+        65536
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        1050000
+      ],
+      "current_output": [
+        128000
+      ],
+      "effective_context": [
+        1050000
+      ],
+      "effective_output": [
+        128000
+      ],
+      "family": "cpa:gpt-5.6-luna",
+      "issues": [],
+      "provenance": [
+        "admitted[4]",
+        "providers[8]",
+        "routing[0]",
+        "routing[1]",
+        "routing[2]",
+        "runtime[8]",
+        "runtime_observed[3]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:gpt-5.6-luna-max",
+        "cpa:main_default",
+        "cpa:subagent_fork",
+        "cpa:subagent_spawn"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        1050000
+      ],
+      "truth_output": [
+        128000
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        1050000
+      ],
+      "current_output": [
+        128000
+      ],
+      "effective_context": [
+        1050000
+      ],
+      "effective_output": [
+        128000
+      ],
+      "family": "cpa:gpt-5.6-sol",
+      "issues": [],
+      "provenance": [
+        "admitted[6]",
+        "providers[9]",
+        "runtime[9]",
+        "runtime_observed[1]",
+        "runtime_observed[4]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:gpt-5.6-sol",
+        "cpa:gpt-5.6-sol-xhigh"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        1050000
+      ],
+      "truth_output": [
+        128000
+      ]
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "IMAGE_GENERATION"
+      ],
+      "current_context": [],
+      "current_output": [],
+      "effective_context": [],
+      "effective_output": [],
+      "family": "cpa:gpt-image-2",
+      "issues": [],
+      "provenance": [
+        "admitted[9]",
+        "providers[6]",
+        "runtime[6]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "cpa:gpt-image-2"
+      ],
+      "status": "SPECIALIZED_MODALITY",
+      "truth_context": [],
+      "truth_output": []
+    },
+    {
+      "action": "evidence-required",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [],
+      "current_output": [],
+      "effective_context": [],
+      "effective_output": [],
+      "family": "deepseek-official:deepseek-v4-flash",
+      "issues": [
+        "MISSING_METADATA",
+        "ROUTE_NOT_ADMITTED",
+        "UNKNOWN_NEEDS_EVIDENCE"
+      ],
+      "provenance": [
+        "runtime_observed[5]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "deepseek-official:deepseek-v4-flash"
+      ],
+      "status": "ROUTE_NOT_ADMITTED",
+      "truth_context": [],
+      "truth_output": []
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        262144
+      ],
+      "current_output": [],
+      "effective_context": [
+        262144
+      ],
+      "effective_output": [],
+      "family": "kimi-coding:k3",
+      "issues": [
+        "OUTPUT_SEMANTICS_DYNAMIC"
+      ],
+      "provenance": [
+        "admitted[0]",
+        "providers[1]",
+        "runtime[1]",
+        "runtime_observed[0]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "kimi-coding:k3-256k"
+      ],
+      "status": "OUTPUT_SEMANTICS_DYNAMIC",
+      "truth_context": [
+        262144
+      ],
+      "truth_output": []
+    },
+    {
+      "action": "none",
+      "capability_class": [
+        "TEXT_GENERATION"
+      ],
+      "current_context": [
+        1048576
+      ],
+      "current_output": [
+        393216
+      ],
+      "effective_context": [
+        1048576
+      ],
+      "effective_output": [
+        393216
+      ],
+      "family": "opencode-go:deepseek-v4-flash",
+      "issues": [],
+      "provenance": [
+        "admitted[1]",
+        "pressure[0]",
+        "providers[0]",
+        "runtime[0]",
+        "runtime_observed[7]"
+      ],
+      "reserved_output": [
+        "REQUEST_DYNAMIC"
+      ],
+      "routes": [
+        "opencode-go:deepseek-v4-flash"
+      ],
+      "status": "CORRECT",
+      "truth_context": [
+        1048576
+      ],
+      "truth_output": [
+        393216
+      ]
+    }
+  ],
+  "issue_vocabulary": [
+    "OUTPUT_AS_CONTEXT",
+    "ACCIDENTAL_262144_FALLBACK",
+    "STALE_CONTEXT_METADATA",
+    "ALIAS_CAPABILITY_MISMATCH",
+    "ALIAS_MISMATCH",
+    "OVERSTATED_CONTEXT",
+    "ROUTER_CLAMP",
+    "OUTPUT_LIMIT_MISMATCH",
+    "CAPABILITY_SOURCE_DIVERGENCE",
+    "MISSING_METADATA",
+    "UNKNOWN_NEEDS_EVIDENCE",
+    "UNAVAILABLE_ROUTE",
+    "PROVIDER_MODEL_MISSING",
+    "ROUTE_NOT_ADMITTED",
+    "SPECIALIZED_MODALITY",
+    "CAPABILITY_NOT_APPLICABLE",
+    "OUTPUT_SEMANTICS_DYNAMIC"
+  ],
+  "routes": [
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime"
+      ],
+      "category": "admitted",
+      "current_context": 1000000,
+      "current_output": 128000,
+      "effective_context": 1000000,
+      "effective_output": 128000,
+      "family": "any:claude-opus-5",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared with 1M-context beta headers",
+          "date": "2026-08-28"
+        },
+        "capacityEvidence": {
+          "contextWindow": 1000000,
+          "grade": "authoritative",
+          "maxOutputTokens": 128000,
+          "retrieved": "2026-08-31",
+          "source": "https://docs.anthropic.com/en/docs/about-claude/models",
+          "upstreamModel": "claude-opus-5"
+        },
+        "contextWindow": 1000000,
+        "id": "claude-opus-5",
+        "input": [
+          "text",
+          "image"
+        ],
+        "maxOutputTokens": 128000,
+        "name": "opus5",
+        "provider": "any",
+        "resolved": "claude-opus-5",
+        "roles": [],
+        "route": "claude-opus-5",
+        "runtime": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[3]",
+        "providers[3]",
+        "runtime[3]"
+      ],
+      "provider": "any",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "claude-opus-5",
+      "route": "claude-opus-5",
+      "status": "CORRECT",
+      "truth_context": 1000000,
+      "truth_output": 128000,
+      "variant": "claude-opus-5"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 128000,
+      "current_output": 8192,
+      "effective_context": 128000,
+      "effective_output": 8192,
+      "family": "bai:deepseek-chat",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared with compat/reasoning config",
+          "date": "2026-08-28"
+        },
+        "calls": 2757,
+        "capacityEvidence": {
+          "contextWindow": 128000,
+          "grade": "authoritative",
+          "maxOutputTokens": 8192,
+          "retrieved": "2026-08-31",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing",
+          "upstreamModel": "deepseek-chat"
+        },
+        "compat": {
+          "requiresReasoningContentOnAssistantMessages": true,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": false,
+          "thinkingFormat": "deepseek"
+        },
+        "contextWindow": 128000,
+        "id": "deepseek-v4-flash",
+        "inputTokens": 24390188,
+        "maxOutputTokens": 8192,
+        "outputTokens": 2701628,
+        "provider": "bai",
+        "reasoningEfforts": {
+          "high": "high"
+        },
+        "resolved": "deepseek-chat",
+        "roles": [],
+        "route": "deepseek-v4-flash",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[2]",
+        "providers[2]",
+        "runtime[2]",
+        "runtime_observed[2]"
+      ],
+      "provider": "bai",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "deepseek-chat",
+      "route": "deepseek-v4-flash",
+      "status": "CORRECT",
+      "truth_context": 128000,
+      "truth_output": 8192,
+      "variant": "deepseek-v4-flash"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime"
+      ],
+      "category": "admitted",
+      "current_context": 200000,
+      "current_output": 64000,
+      "effective_context": 200000,
+      "effective_output": 64000,
+      "family": "cpa:claude-opus-4-6",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared on cpa",
+          "date": "2026-08-28"
+        },
+        "capacityEvidence": {
+          "contextWindow": 200000,
+          "grade": "authoritative",
+          "maxOutputTokens": 64000,
+          "retrieved": "2026-08-31",
+          "source": "https://docs.anthropic.com/en/docs/about-claude/models",
+          "upstreamModel": "claude-opus-4-6"
+        },
+        "contextWindow": 200000,
+        "id": "claude-opus-4-6-thinking",
+        "input": [
+          "text",
+          "image"
+        ],
+        "maxOutputTokens": 64000,
+        "provider": "cpa",
+        "resolved": "claude-opus-4-6",
+        "roles": [],
+        "route": "claude-opus-4-6-thinking",
+        "runtime": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[8]",
+        "providers[7]",
+        "runtime[7]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "claude-opus-4-6",
+      "route": "claude-opus-4-6-thinking",
+      "status": "CORRECT",
+      "truth_context": 200000,
+      "truth_output": 64000,
+      "variant": "claude-opus-4-6-thinking"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime"
+      ],
+      "category": "admitted",
+      "current_context": 200000,
+      "current_output": 64000,
+      "effective_context": 200000,
+      "effective_output": 64000,
+      "family": "cpa:claude-sonnet-4-6",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared on cpa",
+          "date": "2026-08-28"
+        },
+        "capacityEvidence": {
+          "contextWindow": 200000,
+          "grade": "authoritative",
+          "maxOutputTokens": 64000,
+          "retrieved": "2026-08-31",
+          "source": "https://docs.anthropic.com/en/docs/about-claude/models",
+          "upstreamModel": "claude-sonnet-4-6"
+        },
+        "contextWindow": 200000,
+        "id": "claude-sonnet-4-6",
+        "input": [
+          "text",
+          "image"
+        ],
+        "maxOutputTokens": 64000,
+        "provider": "cpa",
+        "resolved": "claude-sonnet-4-6",
+        "roles": [],
+        "route": "claude-sonnet-4-6",
+        "runtime": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[7]",
+        "providers[5]",
+        "runtime[5]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "claude-sonnet-4-6",
+      "route": "claude-sonnet-4-6",
+      "status": "CORRECT",
+      "truth_context": 200000,
+      "truth_output": 64000,
+      "variant": "claude-sonnet-4-6"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "routing"
+      ],
+      "category": "routing",
+      "current_context": 1048576,
+      "current_output": 65536,
+      "effective_context": 1048576,
+      "effective_output": 65536,
+      "family": "cpa:gemini-3.7-flash",
+      "issues": [],
+      "metadata": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "model": "gemini-3.7-flash-high",
+        "provider": "cpa",
+        "resolved": "gemini-3.7-flash",
+        "route": "compaction_summary",
+        "source": ".agent-presets/cc/agent.cordis.yml row compaction-basic"
+      },
+      "provenance": [
+        "routing[3]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gemini-3.7-flash",
+      "route": "compaction_summary",
+      "status": "CORRECT",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gemini-3.7-flash-high"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 1048576,
+      "current_output": 65536,
+      "effective_context": 1048576,
+      "effective_output": 65536,
+      "family": "cpa:gemini-3.7-flash",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: compaction summarization model + agent-default-model (since 2026-08-28)",
+          "date": "2026-08-28"
+        },
+        "calls": 239,
+        "capacityEvidence": {
+          "contextWindow": 1048576,
+          "grade": "authoritative",
+          "maxOutputTokens": 65536,
+          "retrieved": "2026-08-31",
+          "source": "https://ai.google.dev/gemini-api/docs/models/gemini-v3",
+          "upstreamModel": "gemini-3.7-flash"
+        },
+        "contextWindow": 1048576,
+        "id": "gemini-3.7-flash-high",
+        "input": [
+          "text",
+          "image"
+        ],
+        "inputTokens": 1751920,
+        "maxOutputTokens": 65536,
+        "outputTokens": 73121,
+        "provider": "cpa",
+        "resolved": "gemini-3.7-flash",
+        "roles": [
+          "compaction",
+          "main_default"
+        ],
+        "route": "gemini-3.7-flash-high",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[5]",
+        "providers[4]",
+        "runtime[4]",
+        "runtime_observed[6]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gemini-3.7-flash",
+      "route": "gemini-3.7-flash-high",
+      "status": "CORRECT",
+      "truth_context": 1048576,
+      "truth_output": 65536,
+      "variant": "gemini-3.7-flash-high"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 1050000,
+      "current_output": 128000,
+      "effective_context": 1050000,
+      "effective_output": 128000,
+      "family": "cpa:gpt-5.6-luna",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: subagent spawn/fork default",
+          "date": "2026-08-28"
+        },
+        "calls": 1587,
+        "capabilityClass": "TEXT_GENERATION",
+        "capacityEvidence": {
+          "contextWindow": 1050000,
+          "grade": "authoritative",
+          "maxOutputTokens": 128000,
+          "retrieved": "2026-09-02",
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+          "upstreamModel": "gpt-5.6-luna"
+        },
+        "contextWindow": 1050000,
+        "id": "gpt-5.6-luna-max",
+        "input": [
+          "text",
+          "image"
+        ],
+        "inputTokens": 21662830,
+        "maxOutputTokens": 128000,
+        "outputTokens": 2186294,
+        "provider": "cpa",
+        "resolved": "gpt-5.6-luna",
+        "roles": [
+          "subagent_default"
+        ],
+        "route": "gpt-5.6-luna-max",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[4]",
+        "providers[8]",
+        "runtime[8]",
+        "runtime_observed[3]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-luna",
+      "route": "gpt-5.6-luna-max",
+      "status": "CORRECT",
+      "truth_context": 1050000,
+      "truth_output": 128000,
+      "variant": "gpt-5.6-luna-max"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "routing"
+      ],
+      "category": "routing",
+      "current_context": 1050000,
+      "current_output": 128000,
+      "effective_context": 1050000,
+      "effective_output": 128000,
+      "family": "cpa:gpt-5.6-luna",
+      "issues": [],
+      "metadata": {
+        "capabilityClass": "TEXT_GENERATION",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "model": "gpt-5.6-luna-max",
+        "provider": "cpa",
+        "resolved": "gpt-5.6-luna",
+        "route": "main_default",
+        "source": "canonical governance fallback if user-owned agent-default-model is absent or invalid"
+      },
+      "provenance": [
+        "routing[0]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-luna",
+      "route": "main_default",
+      "status": "CORRECT",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gpt-5.6-luna-max"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "routing"
+      ],
+      "category": "routing",
+      "current_context": 1050000,
+      "current_output": 128000,
+      "effective_context": 1050000,
+      "effective_output": 128000,
+      "family": "cpa:gpt-5.6-luna",
+      "issues": [],
+      "metadata": {
+        "capabilityClass": "TEXT_GENERATION",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "model": "gpt-5.6-luna-max",
+        "provider": "cpa",
+        "resolved": "gpt-5.6-luna",
+        "route": "subagent_fork",
+        "source": ".agent-presets/cc/agent.cordis.yml row tool-subagent-fork"
+      },
+      "provenance": [
+        "routing[2]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-luna",
+      "route": "subagent_fork",
+      "status": "CORRECT",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gpt-5.6-luna-max"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "routing"
+      ],
+      "category": "routing",
+      "current_context": 1050000,
+      "current_output": 128000,
+      "effective_context": 1050000,
+      "effective_output": 128000,
+      "family": "cpa:gpt-5.6-luna",
+      "issues": [],
+      "metadata": {
+        "capabilityClass": "TEXT_GENERATION",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "model": "gpt-5.6-luna-max",
+        "provider": "cpa",
+        "resolved": "gpt-5.6-luna",
+        "route": "subagent_spawn",
+        "source": ".agent-presets/cc/agent.cordis.yml row tool-subagent"
+      },
+      "provenance": [
+        "routing[1]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-luna",
+      "route": "subagent_spawn",
+      "status": "CORRECT",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gpt-5.6-luna-max"
+    },
+    {
+      "action": "evidence-required",
+      "alias": null,
+      "available": true,
+      "catalog_issues": [
+        "ROUTE_NOT_ADMITTED"
+      ],
+      "categories": [
+        "runtime_observed"
+      ],
+      "category": "runtime_observed",
+      "current_context": null,
+      "current_output": null,
+      "effective_context": null,
+      "effective_output": null,
+      "family": "cpa:gpt-5.6-sol",
+      "issues": [
+        "MISSING_METADATA",
+        "ROUTE_NOT_ADMITTED",
+        "UNKNOWN_NEEDS_EVIDENCE"
+      ],
+      "metadata": {
+        "calls": 1546,
+        "inputTokens": 6619837,
+        "outputTokens": 558047,
+        "provider": "cpa",
+        "resolved": "gpt-5.6-sol",
+        "route": "gpt-5.6-sol",
+        "runtimeObserved": true
+      },
+      "provenance": [
+        "runtime_observed[1]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-sol",
+      "route": "gpt-5.6-sol",
+      "status": "ROUTE_NOT_ADMITTED",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gpt-5.6-sol"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 1050000,
+      "current_output": 128000,
+      "effective_context": 1050000,
+      "effective_output": 128000,
+      "family": "cpa:gpt-5.6-sol",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared on cpa",
+          "date": "2026-08-28"
+        },
+        "calls": 323,
+        "capacityEvidence": {
+          "contextWindow": 1050000,
+          "grade": "authoritative",
+          "maxOutputTokens": 128000,
+          "retrieved": "2026-08-29",
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "upstreamModel": "gpt-5.6-sol"
+        },
+        "contextWindow": 1050000,
+        "id": "gpt-5.6-sol-xhigh",
+        "input": [
+          "text",
+          "image"
+        ],
+        "inputTokens": 2128228,
+        "maxOutputTokens": 128000,
+        "outputTokens": 223700,
+        "provider": "cpa",
+        "resolved": "gpt-5.6-sol",
+        "roles": [],
+        "route": "gpt-5.6-sol-xhigh",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[6]",
+        "providers[9]",
+        "runtime[9]",
+        "runtime_observed[4]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-5.6-sol",
+      "route": "gpt-5.6-sol-xhigh",
+      "status": "CORRECT",
+      "truth_context": 1050000,
+      "truth_output": 128000,
+      "variant": "gpt-5.6-sol-xhigh"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime"
+      ],
+      "category": "admitted",
+      "current_context": null,
+      "current_output": null,
+      "effective_context": null,
+      "effective_output": null,
+      "family": "cpa:gpt-image-2",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: declared on cpa (image)",
+          "date": "2026-08-28"
+        },
+        "capabilityClass": "IMAGE_GENERATION",
+        "id": "gpt-image-2",
+        "input": [
+          "text",
+          "image"
+        ],
+        "modality": "image_generation",
+        "modalityEvidence": {
+          "endpoints": [
+            "images",
+            "images.edits"
+          ],
+          "grade": "authoritative",
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ],
+          "retrieved": "2026-09-02",
+          "source": "OpenAI GPT-Image-2 image-generation contract (authoritative evidence supplied 2026-09-02)"
+        },
+        "provider": "cpa",
+        "resolved": "gpt-image-2",
+        "roles": [],
+        "route": "gpt-image-2",
+        "runtime": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[9]",
+        "providers[6]",
+        "runtime[6]"
+      ],
+      "provider": "cpa",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "gpt-image-2",
+      "route": "gpt-image-2",
+      "status": "SPECIALIZED_MODALITY",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "gpt-image-2"
+    },
+    {
+      "action": "evidence-required",
+      "alias": null,
+      "available": true,
+      "catalog_issues": [
+        "ROUTE_NOT_ADMITTED"
+      ],
+      "categories": [
+        "runtime_observed"
+      ],
+      "category": "runtime_observed",
+      "current_context": null,
+      "current_output": null,
+      "effective_context": null,
+      "effective_output": null,
+      "family": "deepseek-official:deepseek-v4-flash",
+      "issues": [
+        "MISSING_METADATA",
+        "ROUTE_NOT_ADMITTED",
+        "UNKNOWN_NEEDS_EVIDENCE"
+      ],
+      "metadata": {
+        "calls": 186,
+        "inputTokens": 452283,
+        "outputTokens": 94470,
+        "provider": "deepseek-official",
+        "resolved": "deepseek-v4-flash",
+        "route": "deepseek-v4-flash",
+        "runtimeObserved": true
+      },
+      "provenance": [
+        "runtime_observed[5]"
+      ],
+      "provider": "deepseek-official",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "deepseek-v4-flash",
+      "route": "deepseek-v4-flash",
+      "status": "ROUTE_NOT_ADMITTED",
+      "truth_context": null,
+      "truth_output": null,
+      "variant": "deepseek-v4-flash"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 262144,
+      "current_output": null,
+      "effective_context": 262144,
+      "effective_output": null,
+      "family": "kimi-coding:k3",
+      "issues": [
+        "OUTPUT_SEMANTICS_DYNAMIC"
+      ],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: kimi-coding provider 可选模型；2026-08-28 前为 main_default",
+          "date": "2026-08-28"
+        },
+        "calls": 2040,
+        "capabilityClass": "TEXT_GENERATION",
+        "capabilityEvidence": {
+          "contextWindow": 262144,
+          "grade": "authoritative",
+          "outputSemantics": "CONTEXT_REMAINDER",
+          "source": "https://platform.moonshot.cn/docs/pricing/chat"
+        },
+        "capacityEvidence": {
+          "contextWindow": 262144,
+          "grade": "authoritative",
+          "outputSemantics": "CONTEXT_REMAINDER",
+          "retrieved": "2026-09-02",
+          "source": "https://platform.moonshot.cn/docs/pricing/chat",
+          "upstreamModel": "k3"
+        },
+        "contextWindow": 262144,
+        "id": "k3-256k",
+        "inputTokens": 11734080,
+        "outputSemantics": "CONTEXT_REMAINDER",
+        "outputTokens": 973853,
+        "provider": "kimi-coding",
+        "resolved": "k3",
+        "roles": [],
+        "route": "k3-256k",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "admitted"
+      },
+      "provenance": [
+        "admitted[0]",
+        "providers[1]",
+        "runtime[1]",
+        "runtime_observed[0]"
+      ],
+      "provider": "kimi-coding",
+      "provider_attested_limit": null,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "k3",
+      "route": "k3-256k",
+      "status": "OUTPUT_SEMANTICS_DYNAMIC",
+      "truth_context": 262144,
+      "truth_output": null,
+      "variant": "k3-256k"
+    },
+    {
+      "action": "none",
+      "alias": null,
+      "available": true,
+      "categories": [
+        "admitted",
+        "pressure",
+        "providers",
+        "runtime",
+        "runtime_observed"
+      ],
+      "category": "admitted",
+      "current_context": 1048576,
+      "current_output": 393216,
+      "effective_context": 1048576,
+      "effective_output": 393216,
+      "family": "opencode-go:deepseek-v4-flash",
+      "issues": [],
+      "metadata": {
+        "admission": {
+          "basis": "in-use: OpenCode route pressure configuration and authoritative route evidence",
+          "date": "2026-09-02"
+        },
+        "calls": 114,
+        "capabilityClass": "TEXT_GENERATION",
+        "capabilityEvidence": {
+          "contextWindow": 1048576,
+          "grade": "authoritative",
+          "maxOutputTokens": 393216,
+          "source": "OpenCode route/model capability contract (authoritative evidence supplied 2026-09-02)"
+        },
+        "capacityEvidence": {
+          "contextWindow": 1048576,
+          "grade": "authoritative",
+          "maxOutputTokens": 393216,
+          "retrieved": "2026-09-02",
+          "source": "OpenCode route/model capability contract (authoritative evidence supplied 2026-09-02)",
+          "upstreamModel": "deepseek-v4-flash"
+        },
+        "contextWindow": 1048576,
+        "id": "deepseek-v4-flash",
+        "inputTokens": 601505,
+        "maxOutputTokens": 393216,
+        "model": "deepseek-v4-flash",
+        "outputTokens": 63496,
+        "plugin": "agent-loop-pressure-guard",
+        "provider": "opencode-go",
+        "providerAttestedLimit": 1048576,
+        "resolved": "deepseek-v4-flash",
+        "roles": [],
+        "route": "deepseek-v4-flash",
+        "runtime": true,
+        "runtimeObserved": true,
+        "status": "configured"
+      },
+      "provenance": [
+        "admitted[1]",
+        "pressure[0]",
+        "providers[0]",
+        "runtime[0]",
+        "runtime_observed[7]"
+      ],
+      "provider": "opencode-go",
+      "provider_attested_limit": 1048576,
+      "reserved_output": "REQUEST_DYNAMIC",
+      "resolved": "deepseek-v4-flash",
+      "route": "deepseek-v4-flash",
+      "status": "CORRECT",
+      "truth_context": 1048576,
+      "truth_output": 393216,
+      "variant": "deepseek-v4-flash"
+    }
+  ],
+  "schema_version": 2
+}

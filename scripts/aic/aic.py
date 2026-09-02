@@ -102,13 +102,22 @@ def render_settings(canonical: dict, overlay: dict, existing: dict | None = None
     providers = canonical["providers"]["providers"]
     models = canonical["models"]["models"]
     rendered_providers = json.loads(json.dumps(providers))
-    capacities = {(m["provider"], m["id"]): m["contextWindow"]
-                  for m in models if "contextWindow" in m}
+    capacities = {}
+    for model in models:
+        evidence = model.get("capacityEvidence") or {}
+        caps = {}
+        for key in ("contextWindow", "maxOutputTokens", "outputSemantics", "capabilityClass", "modality"):
+            if key in model:
+                caps[key] = model[key]
+            elif key in evidence:
+                caps[key] = evidence[key]
+        if caps:
+            capacities[(model["provider"], model["id"])] = caps
     for provider, pdef in rendered_providers.items():
         for model in pdef.get("models", []) or []:
-            context_window = capacities.get((provider, model["id"]))
-            if context_window is not None:
-                model["contextWindow"] = context_window
+            capability = capacities.get((provider, model["id"]))
+            if capability:
+                model.update(capability)
     out = {}
     out.update(overlay["overlay"]["settings"])  # ui-onboarding, agent-presets
     out["llm-pi-ai"] = {"providers": rendered_providers}
