@@ -1,4 +1,4 @@
-"""12-Scenario Regression Test Matrix for Exploration Deduplication and Lease State Machine."""
+"""Comprehensive Regression Test Matrix for Exploration Deduplication and Semantic Work Registry."""
 
 from __future__ import annotations
 
@@ -42,10 +42,10 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec1, lease1, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/core.py",
             intent="find authentication handler",
             evidence_domain="code",
+            lane="explore",
         )
         self.assertEqual(dec1, work_registry.ACTION_SPAWN_ALLOWED)
         self.assertEqual(lease1.state, work_registry.STATE_SPAWNING)
@@ -53,14 +53,14 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         # Agent starts
         work_registry.activate_lease(lease1.work_key, agent_id="agent-worker-1")
 
-        # Duplicate request with identical attributes
+        # Duplicate request with identical semantic attributes
         dec2, lease2, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/core.py",
             intent="find authentication handler",
             evidence_domain="code",
+            lane="explore",
         )
         self.assertEqual(dec2, work_registry.ACTION_SPAWN_SUPPRESSED_DUPLICATE)
         self.assertEqual(lease2.state, work_registry.STATE_ACTIVE)
@@ -73,10 +73,10 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec1, lease1, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/models.py",
             intent="inspect user schema",
             evidence_domain="ast",
+            lane="explore",
         )
         self.assertEqual(dec1, work_registry.ACTION_SPAWN_ALLOWED)
         work_registry.activate_lease(lease1.work_key, agent_id="agent-2")
@@ -88,10 +88,10 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec2, lease2, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/models.py",
             intent="inspect user schema",
             evidence_domain="ast",
+            lane="explore",
         )
         self.assertEqual(dec2, work_registry.ACTION_REUSE_COMPLETED)
         self.assertEqual(lease2.state, work_registry.STATE_COMPLETED)
@@ -104,18 +104,18 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec_a, lease_a, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/auth.py",
             intent="find token validator",
             evidence_domain="code",
+            lane="explore",
         )
         dec_b, lease_b, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/billing.py",
             intent="find token validator",
             evidence_domain="code",
+            lane="explore",
         )
         self.assertEqual(dec_a, work_registry.ACTION_SPAWN_ALLOWED)
         self.assertEqual(dec_b, work_registry.ACTION_SPAWN_ALLOWED)
@@ -127,53 +127,113 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec_ast, lease_ast, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/auth.py",
             intent="analyze call graph",
             evidence_domain="ast",
+            lane="explore",
         )
         dec_git, lease_git, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/auth.py",
             intent="analyze call graph",
             evidence_domain="git",
+            lane="explore",
         )
         self.assertEqual(dec_ast, work_registry.ACTION_SPAWN_ALLOWED)
         self.assertEqual(dec_git, work_registry.ACTION_SPAWN_ALLOWED)
         self.assertNotEqual(lease_ast.work_key, lease_git.work_key)
 
-    # 5. Legitimate parallelism: distinct lanes
-    def test_scenario_5_legitimate_parallelism_different_lanes(self):
+    # 5. Cross-lane regression 1: same semantic work with different lanes suppressed
+    def test_scenario_5_cross_lane_same_semantic_work_suppressed(self):
         session_id = "sess-5"
         dec_explore, lease_exp, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
+            target="src/auth.py",
+            intent="verify token signature",
+            evidence_domain="code",
             lane="explore",
-            target="src/auth.py",
-            intent="verify token signature",
-            evidence_domain="code",
-        )
-        dec_audit, lease_aud, _ = work_registry.request_work_lease(
-            parent_session=session_id,
-            task_scope="repo",
-            lane="audit",
-            target="src/auth.py",
-            intent="verify token signature",
-            evidence_domain="code",
         )
         self.assertEqual(dec_explore, work_registry.ACTION_SPAWN_ALLOWED)
-        self.assertEqual(dec_audit, work_registry.ACTION_SPAWN_ALLOWED)
-        self.assertNotEqual(lease_exp.work_key, lease_aud.work_key)
+        work_registry.activate_lease(lease_exp.work_key, agent_id="agent-explore-1")
 
-    # 6. Retry within budget after failure
-    def test_scenario_6_retry_within_budget_after_failure(self):
+        # Second request with lane='audit' but SAME semantic target and intent must be SUPPRESSED
+        dec_audit, lease_aud, reason = work_registry.request_work_lease(
+            parent_session=session_id,
+            task_scope="repo",
+            target="src/auth.py",
+            intent="verify token signature",
+            evidence_domain="code",
+            lane="audit",
+        )
+        self.assertEqual(dec_audit, work_registry.ACTION_SPAWN_SUPPRESSED_DUPLICATE)
+        self.assertEqual(lease_exp.work_key, lease_aud.work_key)
+        self.assertIn("Duplicate active work in-flight", reason)
+
+    # 6. Cross-lane regression 2: same task with distinct explicit independence roles allowed
+    def test_scenario_6_distinct_roles_allowed_parallelism(self):
         session_id = "sess-6"
+        dec_src, lease_src, _ = work_registry.request_work_lease(
+            parent_session=session_id,
+            task_scope="wp-audit",
+            target="src/auth.py",
+            intent="security audit",
+            evidence_domain="code",
+            explicit_independence_role="source-inspection",
+        )
+        dec_opp, lease_opp, _ = work_registry.request_work_lease(
+            parent_session=session_id,
+            task_scope="wp-audit",
+            target="src/auth.py",
+            intent="security audit",
+            evidence_domain="code",
+            explicit_independence_role="opposite-review",
+        )
+        self.assertEqual(dec_src, work_registry.ACTION_SPAWN_ALLOWED)
+        self.assertEqual(dec_opp, work_registry.ACTION_SPAWN_ALLOWED)
+        self.assertNotEqual(lease_src.work_key, lease_opp.work_key)
+
+    # 7. Cross-lane regression 3: different provider and model with same semantic work deduped
+    def test_scenario_7_different_provider_model_same_semantic_work_deduped(self):
+        session_id = "sess-7"
+        dec_claude, lease_claude, _ = work_registry.request_work_lease(
+            parent_session=session_id,
+            task_scope="wp-review",
+            target="src/crypto.py",
+            intent="verify cipher implementation",
+            evidence_domain="code",
+            provider="claude",
+            model="claude-haiku-4-5",
+            agent_type="Explore",
+            lane="explore",
+        )
+        self.assertEqual(dec_claude, work_registry.ACTION_SPAWN_ALLOWED)
+        work_registry.activate_lease(lease_claude.work_key, agent_id="agent-claude-haiku")
+
+        # Second request from Codex Luna with same semantic identity must be SUPPRESSED
+        dec_codex, lease_codex, reason = work_registry.request_work_lease(
+            parent_session=session_id,
+            task_scope="wp-review",
+            target="src/crypto.py",
+            intent="verify cipher implementation",
+            evidence_domain="code",
+            provider="codex",
+            model="gpt-5.6-luna",
+            agent_type="explorer",
+            lane="worker",
+        )
+        self.assertEqual(dec_codex, work_registry.ACTION_SPAWN_SUPPRESSED_DUPLICATE)
+        self.assertEqual(lease_claude.work_key, lease_codex.work_key)
+        self.assertEqual(lease_codex.agent_id, "agent-claude-haiku")
+        self.assertIn("Duplicate active work in-flight", reason)
+
+    # 8. Retry within budget after failure
+    def test_scenario_8_retry_within_budget_after_failure(self):
+        session_id = "sess-8"
         _, lease1, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/db.py",
             intent="check pool connections",
             max_retries=3,
@@ -184,7 +244,6 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec2, lease2, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/db.py",
             intent="check pool connections",
             max_retries=3,
@@ -194,15 +253,14 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertEqual(lease2.state, work_registry.STATE_SPAWNING)
         self.assertIn("Retry attempt 1/3 granted", reason)
 
-    # 7. Retry budget exhausted
-    def test_scenario_7_retry_budget_exhausted(self):
-        session_id = "sess-7"
+    # 9. Retry budget exhausted
+    def test_scenario_9_retry_budget_exhausted(self):
+        session_id = "sess-9"
         # Initial attempt (attempt 0) + 3 retries (attempts 1, 2, 3) = 4 failures
         for i in range(1, 5):
             dec, lease, _ = work_registry.request_work_lease(
                 parent_session=session_id,
                 task_scope="repo",
-                lane="explore",
                 target="src/err.py",
                 intent="reproduce crash",
                 max_retries=3,
@@ -214,7 +272,6 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec_exhausted, lease_exhausted, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/err.py",
             intent="reproduce crash",
             max_retries=3,
@@ -224,13 +281,12 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertEqual(lease_exhausted.state, work_registry.STATE_FAILED)
         self.assertIn("Retry budget exhausted", reason)
 
-    # 8. Lease timeout recovery
-    def test_scenario_8_lease_timeout_recovery(self):
-        session_id = "sess-8"
+    # 10. Lease timeout recovery
+    def test_scenario_10_lease_timeout_recovery(self):
+        session_id = "sess-10"
         dec1, lease1, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/slow.py",
             intent="indexing",
             ttl_seconds=0.1,
@@ -246,7 +302,6 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec2, lease2, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="repo",
-            lane="explore",
             target="src/slow.py",
             intent="indexing",
             ttl_seconds=60.0,
@@ -256,17 +311,17 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertEqual(lease2.retry_count, 1)
         self.assertIn("Retry attempt 1/2 granted", reason)
 
-    # 9. Stream dropout reconciliation
-    def test_scenario_9_stream_dropout_reconciliation(self):
-        session_id = "sess-9"
+    # 11. Stream dropout reconciliation (Cross-lane regression 5)
+    def test_scenario_11_stream_dropout_reconciliation(self):
+        session_id = "sess-11"
         # Create two active leases
         _, lease_alive, _ = work_registry.request_work_lease(
-            parent_session=session_id, task_scope="s", lane="explore", target="alive.py", intent="i1"
+            parent_session=session_id, task_scope="s", target="alive.py", intent="i1"
         )
         work_registry.activate_lease(lease_alive.work_key, agent_id="agent-alive", ttl_seconds=300)
 
         _, lease_dead, _ = work_registry.request_work_lease(
-            parent_session=session_id, task_scope="s", lane="explore", target="dead.py", intent="i2",
+            parent_session=session_id, task_scope="s", target="dead.py", intent="i2",
             ttl_seconds=0.1
         )
         work_registry.activate_lease(lease_dead.work_key, agent_id="agent-dead", ttl_seconds=0.1)
@@ -280,9 +335,9 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertEqual(states["alive.py"], work_registry.STATE_ACTIVE)
         self.assertEqual(states["dead.py"], work_registry.STATE_FAILED)
 
-    # 10. Turn restart and replay deduplication
-    def test_scenario_10_restart_replay_dedup(self):
-        session_id = "sess-10"
+    # 12. Turn restart and replay deduplication
+    def test_scenario_12_restart_replay_dedup(self):
+        session_id = "sess-12"
         # Turn 1: request and start agent
         payload1 = {
             "session_id": session_id,
@@ -327,14 +382,13 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertIn("identical exploration has already COMPLETED",
                       res3.get("hookSpecificOutput", {}).get("permissionDecisionReason", ""))
 
-    # 11. Brain vs Orchestrator ownership boundaries
-    def test_scenario_11_brain_vs_orchestrator_ownership(self):
-        session_id = "sess-11"
+    # 13. Brain vs Orchestrator ownership boundaries (Cross-lane regression 3)
+    def test_scenario_13_brain_vs_orchestrator_ownership(self):
+        session_id = "sess-13"
         # Brain initiates brain-owned lease
         dec1, lease1, _ = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="wp1",
-            lane="explore",
             target="spec.md",
             intent="review spec",
             brain_owned=True,
@@ -348,7 +402,6 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         dec2, _, reason = work_registry.request_work_lease(
             parent_session=session_id,
             task_scope="wp1",
-            lane="explore",
             target="spec.md",
             intent="review spec",
             brain_owned=False,
@@ -357,16 +410,15 @@ class ExplorationDedupMatrixTests(unittest.TestCase):
         self.assertEqual(dec2, work_registry.ACTION_OWNERSHIP_CONFLICT)
         self.assertIn("Ownership conflict: existing lease owned by brain", reason)
 
-    # 12. Concurrent lease acquisition race condition
-    def test_scenario_12_concurrent_lease_acquisition_race(self):
-        session_id = "sess-12"
+    # 14. Concurrent lease acquisition race condition
+    def test_scenario_14_concurrent_lease_acquisition_race(self):
+        session_id = "sess-14"
         results = []
 
         def _worker(thread_id: int):
             dec, lease, _ = work_registry.request_work_lease(
                 parent_session=session_id,
                 task_scope="repo",
-                lane="explore",
                 target="race.py",
                 intent="parallel search",
             )

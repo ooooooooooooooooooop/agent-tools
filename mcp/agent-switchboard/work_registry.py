@@ -76,20 +76,36 @@ def normalize_target(target: str) -> str:
 
 def compute_work_key(
     parent_session: str,
-    task_scope: str,
-    lane: str,
-    target: str,
-    intent: str,
-    evidence_domain: str,
+    task_scope: str = "",
+    target: str = "",
+    intent: str = "",
+    evidence_domain: str = "code",
+    explicit_independence_role: str = "",
+    lane: str = "",  # execution metadata (ignored in semantic work_key)
+    **kwargs: Any,
 ) -> str:
-    """Compute canonical 64-char sha256 work_key from orthogonal work dimensions."""
+    """Compute canonical 64-char sha256 semantic work_key.
+
+    Semantic work identity is determined by what work needs to be done and its
+    declared semantic role, NOT by execution mechanisms (lane, agent_type,
+    provider, model, or caller).
+
+    Legitimate parallelism requires a distinct explicit_independence_role
+    (e.g., 'source-inspection' vs 'opposite-review' vs 'runtime-validation').
+    """
     p_sess = str(parent_session or "").strip()
     scope = str(task_scope or "").strip().lower()
-    l_lane = str(lane or "").strip().lower()
     tgt = normalize_target(target)
     itn = normalize_intent(intent)
     dom = str(evidence_domain or "").strip().lower()
-    raw = f"{p_sess}:{scope}:{l_lane}:{tgt}:{itn}:{dom}"
+    role = str(
+        explicit_independence_role
+        or kwargs.get("independence_role")
+        or kwargs.get("role")
+        or kwargs.get("semantic_role")
+        or ""
+    ).strip().lower()
+    raw = f"{p_sess}:{scope}:{tgt}:{itn}:{dom}:{role}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -99,12 +115,17 @@ class WorkLease:
     lease_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_session: str = ""
     task_scope: str = ""
-    lane: str = "explore"
     target: str = ""
     intent: str = ""
     evidence_domain: str = "code"
-    state: str = STATE_SPAWNING
+    explicit_independence_role: str = ""
+    # Execution metadata (not part of semantic deduplication identity)
+    lane: str = "explore"
     agent_id: str = ""
+    agent_type: str = ""
+    provider: str = ""
+    model: str = ""
+    state: str = STATE_SPAWNING
     brain_owned: bool = False
     orchestrator_owned: bool = True
     retry_count: int = 0
@@ -187,15 +208,21 @@ def _update_lease_atomically(
 
 def request_work_lease(
     parent_session: str,
-    task_scope: str,
-    lane: str,
-    target: str,
-    intent: str,
+    task_scope: str = "",
+    target: str = "",
+    intent: str = "",
     evidence_domain: str = "code",
+    explicit_independence_role: str = "",
+    lane: str = "explore",
+    agent_id: str = "",
+    agent_type: str = "",
+    provider: str = "",
+    model: str = "",
     brain_owned: bool = False,
     orchestrator_owned: bool = True,
     ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    **kwargs: Any,
 ) -> tuple[str, WorkLease | None, str]:
     """Request a lease for exploration or delegated work.
 
@@ -209,7 +236,14 @@ def request_work_lease(
         - ACTION_OWNERSHIP_CONFLICT: conflicting ownership boundaries
     """
     work_key = compute_work_key(
-        parent_session, task_scope, lane, target, intent, evidence_domain
+        parent_session=parent_session,
+        task_scope=task_scope,
+        target=target,
+        intent=intent,
+        evidence_domain=evidence_domain,
+        explicit_independence_role=explicit_independence_role,
+        lane=lane,
+        **kwargs,
     )
 
     def _eval(current: WorkLease | None) -> tuple[str, WorkLease | None, str]:
@@ -219,10 +253,15 @@ def request_work_lease(
                 work_key=work_key,
                 parent_session=parent_session,
                 task_scope=task_scope,
-                lane=lane,
                 target=target,
                 intent=intent,
                 evidence_domain=evidence_domain,
+                explicit_independence_role=explicit_independence_role,
+                lane=lane,
+                agent_id=agent_id,
+                agent_type=agent_type,
+                provider=provider,
+                model=model,
                 state=STATE_SPAWNING,
                 brain_owned=brain_owned,
                 orchestrator_owned=orchestrator_owned,
