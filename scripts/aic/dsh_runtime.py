@@ -379,6 +379,17 @@ def _node_runtime(stage: Path, home: Path, cfg: dict[str, Any]) -> tuple[Path, s
     dirname = f"node-{version}-win-x64"
     target = stage / "runtime" / dirname
     source_env = os.environ.get("DSH_NODE_SOURCE")
+    if not source_env:
+        candidates = []
+        if home:
+            candidates.append(home / "runtime" / dirname)
+        fallback_home = Path(os.environ.get("DSH_HOME", Path.home() / ".dsh"))
+        if fallback_home != home:
+            candidates.append(fallback_home / "runtime" / dirname)
+        for cand in candidates:
+            if (cand / "node.exe").is_file():
+                source_env = str(cand)
+                break
     if source_env:
         source = Path(source_env)
         source = source.parent if source.is_file() else source
@@ -414,17 +425,24 @@ def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any], hom
     base_cfg = cfg["base"]
     base_root = stage_profile / f"base-dsh-{base_cfg['version']}"
     source_env = os.environ.get("DSH_BASE_SOURCE")
-    if not source_env and home:
-        live_base = home / cfg["profile"]["relative_to_dsh_home"] / f"base-dsh-{base_cfg['version']}"
-        cand_pkg = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
-        cand_entry = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
-        if cand_pkg.is_file() and cand_entry.is_file():
-            try:
-                pkg_data = json.loads(cand_pkg.read_text(encoding="utf-8-sig"))
-                if pkg_data.get("name") == base_cfg["package"] and pkg_data.get("version") == base_cfg["version"]:
-                    source_env = str(live_base)
-            except Exception:
-                pass
+    if not source_env:
+        candidates = []
+        if home:
+            candidates.append(home / cfg["profile"]["relative_to_dsh_home"] / f"base-dsh-{base_cfg['version']}")
+        fallback_home = Path(os.environ.get("DSH_HOME", Path.home() / ".dsh"))
+        if fallback_home != home:
+            candidates.append(fallback_home / cfg["profile"]["relative_to_dsh_home"] / f"base-dsh-{base_cfg['version']}")
+        for live_base in candidates:
+            cand_pkg = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
+            cand_entry = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+            if cand_pkg.is_file() and cand_entry.is_file():
+                try:
+                    pkg_data = json.loads(cand_pkg.read_text(encoding="utf-8-sig"))
+                    if pkg_data.get("name") == base_cfg["package"] and pkg_data.get("version") == base_cfg["version"]:
+                        source_env = str(live_base)
+                        break
+                except Exception:
+                    pass
     if source_env:
         source = Path(source_env)
         package_json = source / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
