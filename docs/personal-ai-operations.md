@@ -102,7 +102,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 ## 11. Future Change Management
 
-`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 复用该入口，不给 AIC 增加 scheduler。
+`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `C:\Desktop\skills` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
 
 未来一切基础设施变化 = 独立 change，走：
 

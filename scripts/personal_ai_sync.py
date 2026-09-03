@@ -29,8 +29,21 @@ CHECKPOINT = Path.home() / ".dsh" / ".personal-ai-sync" / "status.json"
 AIC = REPO / "scripts" / "aic" / "aic.py"
 SYNC_SKILLS = REPO / "scripts" / "sync_skills.py"
 GOVERNANCE_TASKS = REPO / "scripts" / "governance" / "register_governance_tasks.ps1"
+CANONICAL_GOVERNANCE_ROOT = Path(r"C:\Desktop\skills")
 PROVIDER_DIR = REPO / "scripts" / "memory"
 SETTINGS = Path.home() / ".dsh" / "settings.yaml"
+
+
+def _is_canonical_governance_repo(repo: Path) -> bool:
+    """Allow Task Scheduler registration only from the live canonical checkout."""
+    if os.name != "nt":
+        return False
+    try:
+        actual = os.path.normcase(str(repo.resolve()))
+        expected = os.path.normcase(str(CANONICAL_GOVERNANCE_ROOT.resolve()))
+        return actual == expected
+    except OSError:
+        return False
 
 # 状态枚举（§6）
 IN_SYNC = "IN_SYNC"
@@ -1290,9 +1303,13 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 step("harness diff", True, "skipped by test/embedded restore caller")
         governance_tasks = repo / "scripts" / "governance" / "register_governance_tasks.ps1"
         if governance_tasks.is_file() and os.name == "nt":
-            rc, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                           "-File", str(governance_tasks)], timeout=120)
-            step("governance tasks", rc == 0, out.splitlines()[-1] if out else "")
+            if _is_canonical_governance_repo(repo):
+                rc, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                               "-File", str(governance_tasks)], timeout=120)
+                step("governance tasks", rc == 0, out.splitlines()[-1] if out else "")
+            else:
+                step("governance tasks", True,
+                     "skipped: non-canonical restore source; scheduler registration requires C:\\Desktop\\skills")
         if (state_repo / "memory").is_dir():
             v = memory_merge_verify(state_repo)
             step("memory loadable", v["ok"], f"records={v.get('records')}")

@@ -141,7 +141,7 @@ runtime_composition:
         entry_relative: lib/index.js
         config:
           summarizationProvider: cpa
-          summarizationModel: gemini-3.7-flash-high
+          summarizationModel: gemini-3.8-flash-high
           maxTokens: 2048
           maxOverflowRetries: 2
           maxConsecutiveFailures: 3

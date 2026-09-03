@@ -96,6 +96,75 @@ test('6. provider failure usage 0/0 does not replace the meter anchor', () => {
   assert.equal(after, before);
 });
 
+test('6b. surface replacement applies a signed delta without discarding the usage anchor', () => {
+  const ctx = new Context();
+  const meter = new TokenMeter(ctx, {});
+  const session = pressureSession();
+  const before = meter.measure(session);
+  const oldNode = before.nodes[0];
+  assert.ok(oldNode);
+
+  const replacement = session.append('user/message', {
+    content: [{ type: 'text', text: 'short' }],
+    source: { kind: 'user' },
+    role: 'user',
+    id: 'u1-replacement',
+  }, { surfaceOp: { op: 'replace', start: oldNode.seq, end: oldNode.seq }, sourceEventSeqs: [oldNode.seq] });
+  const after = meter.measure(session);
+  const newNode = after.nodes.find((node) => node.seq === replacement.seq);
+  assert.ok(newNode);
+  assert.equal(after.baseline.kind, 'usage');
+  assert.equal(after.surfaceTokens, before.surfaceTokens - oldNode.tokens + newNode.tokens);
+  assert.equal(after.totalTokens - before.totalTokens, newNode.tokens - oldNode.tokens);
+});
+
+test('6c. unpaired append assistant messages remain estimated and untrusted', () => {
+  const ctx = new Context();
+  const meter = new TokenMeter(ctx, {});
+  const session = pressureSession();
+  meter.measure(session);
+  session.append('turn/start', { turn: 2 });
+  const appended = session.append('assistant/message', {
+    turn: 2,
+    step: 1,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'historical' }], source: { kind: 'model' }, id: 'a2' },
+    usage: { inputTokens: 900000, outputTokens: 9000 },
+  }, { surfaceOp: 'append', sourceEventSeqs: [] });
+
+  const after = meter.measure(session);
+  assert.ok(after.nodes.some((node) => node.seq === appended.seq));
+  assert.equal(after.baseline.kind, 'estimated');
+  assert.equal(Object.hasOwn(after.baseline, 'usage'), false);
+});
+
+test('6d. malformed provider references fail closed and remain unread on retry', () => {
+  const ctx = new Context();
+  const meter = new TokenMeter(ctx, {});
+  const session = pressureSession();
+  meter.measure(session);
+  session.append('turn/start', { turn: 2 });
+  session.append('step/start', { turn: 2, step: 1 });
+  const chunk = session.append('assistant/chunk', { turn: 2, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial' } });
+  // Session.append rejects malformed provenance before it reaches the meter;
+  // inject a frozen-log tail to exercise the replay guard itself.
+  session.log.push({
+    seq: session.log.length,
+    type: 'assistant/message',
+    data: {
+      turn: 2,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'final' }], source: { kind: 'model' }, id: 'a2-malformed' },
+      usage: { inputTokens: 100000, outputTokens: 1000 },
+    },
+    surfaceOp: 'append',
+    sourceEventSeqs: [chunk.seq, chunk.seq],
+  });
+  session.eventsSnapshot = undefined;
+
+  assert.throws(() => meter.measure(session), /repeats source seq/);
+  assert.throws(() => meter.measure(session), /repeats source seq/);
+});
+
 test('7. final admission is recalculated after a late instruction injection', () => {
   const before = admissionDecision({ configuredLimit: 1000000, estimatedInput: 800000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 65536 });
   const after = admissionDecision({ configuredLimit: 1000000, estimatedInput: 920000, inputMultiplier: 1.08, safetyMargin: 16384, operationalMaxOutput: 65536 });

@@ -267,11 +267,57 @@ def _strip_legacy_blocks(text: str, known_ids: set[str]) -> str:
     return prefix + "".join(kept)
 
 
+def _extract_existing_configs(text: str) -> dict[str, dict[str, Any]]:
+    """Parse the existing managed block and return a mapping of plugin id -> config."""
+    block = _managed_block(text)
+    if not block:
+        return {}
+    # Strip the sentinel lines before parsing
+    inner = block.replace(MANAGED_BEGIN, "").replace(MANAGED_END, "").strip()
+    if not inner:
+        return {}
+    try:
+        entries = yaml.safe_load(inner)
+    except Exception:
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    configs: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if isinstance(entry, dict) and "id" in entry and "config" in entry:
+            configs[entry["id"]] = entry["config"]
+        if isinstance(entry, dict) and "insert" in entry:
+            for sub in entry["insert"]:
+                if isinstance(sub, dict) and "id" in sub and "config" in sub:
+                    configs[sub["id"]] = sub["config"]
+    return configs
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merge override into base recursively. override values take precedence."""
+    result = dict(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
 def render_patch(existing: Path | None, cfg: dict[str, Any]) -> tuple[str, str]:
     old = existing.read_text(encoding="utf-8-sig") if existing and existing.is_file() else ""
+    # Extract user-modified plugin configs from the existing managed block
+    # so that manual changes (e.g. switching summarizationModel) survive re-apply.
+    existing_configs = _extract_existing_configs(old)
     known_ids = {r["id"] for r in _managed_rows(cfg)}
     base = _strip_legacy_blocks(old, known_ids).rstrip()
     rows = _managed_rows(cfg)
+    # Merge: start from the default config (from dsh.yaml), then overlay with
+    # any user-modified values found in the existing cordis.patch.yml.
+    for row in rows:
+        row_id = row.get("id", "")
+        if row_id in existing_configs and row.get("config"):
+            row["config"] = _deep_merge(row["config"], existing_configs[row_id])
     disable_ids = {r["id"] for r in cfg["managed_rows"]["disable"]}
     managed_rows = [r for r in rows if r["id"] in disable_ids]
     managed_rows.append({"insert": [r for r in rows if r["id"] not in disable_ids]})
@@ -310,12 +356,15 @@ def _copy_directory(source: Path, destination: Path) -> None:
     if os.name == "nt" and shutil.which("robocopy"):
         destination.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(
-            ["robocopy", str(source), str(destination), "/E", "/COPY:DAT",
-             "/DCOPY:DAT", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS"],
+            ["robocopy", str(source), str(destination), "/E", "/XJ", "/COPY:DAT",
+             "/DCOPY:DAT", "/R:0", "/W:0", "/NFL", "/NDL", "/NJH", "/NJS",
+             "/XD", "web", "dsh-agent-loop-pressure-guard",
+             "dsh-compaction-basic-convergence", "dsh-token-meter-pressure-guard",
+             "dsh-tool-result-pruner-pressure-guard"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=1800,
         )
-        if proc.returncode > 7:
+        if proc.returncode >= 16:
             raise DshCompositionError(
                 f"offline base snapshot copy failed ({proc.returncode}): "
                 f"{(proc.stdout + proc.stderr)[-2000:]}"
@@ -1034,7 +1083,9 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
                         client_dest = live_client
                         web_dest = live_dist
                         web_hash = dist_hash
-                        source_state = live_manifest.get("ui", {}).get("sourceState", str(ui_cfg["baseline_commit"]))
+                        expected_states = _expected_ui_source_states(ui_cfg)
+                        cand_state = live_manifest.get("ui", {}).get("sourceState")
+                        source_state = cand_state if cand_state in expected_states else expected_states[0]
                         reused_ui = True
             except Exception:
                 pass
@@ -1101,10 +1152,14 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
         }
         base_manifest_stage = stage_profile / cfg["profile"]["base_distribution_file"]
         base_manifest_stage.write_text(json.dumps(base_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        entries: list[tuple[str, Path]] = [
-            (cfg["node"]["relative_to_dsh_home"], node_root),
-            (str(profile_rel / base_root.name), base_root),
-        ]
+        entries: list[tuple[str, Path]] = []
+        live_node = home / cfg["node"]["relative_to_dsh_home"]
+        if not (live_node / "node.exe").is_file():
+            entries.append((cfg["node"]["relative_to_dsh_home"], node_root))
+        live_base = home / profile_rel / base_root.name
+        live_base_pkg = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
+        if not live_base_pkg.is_file():
+            entries.append((str(profile_rel / base_root.name), base_root))
         for plugin in cfg["managed_rows"]["plugins"]:
             entries.append((str(profile_rel / "plugins" / plugin["plugin_directory"]),
                             stage_profile / "plugins" / plugin["plugin_directory"]))
