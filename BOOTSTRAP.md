@@ -66,9 +66,9 @@
    |---|---|
    | IN_SYNC | NO ACTION |
    | REMOTE_AHEAD + clean | fast-forward PULL → 受影响面 refresh |
-   | LOCAL_AHEAD + 验证通过 + privacy scan PASS | PUSH |
+   | LOCAL_AHEAD + 显式 `push` 模式 + ownership receipt + 验证通过 + privacy scan PASS | PUSH |
    | personal-ai-state 仅 memory 路径不相交 | 确定性 MERGE（MemoryProvider 冻结契约） |
-   | dirty / diverged curated / 隐私命中 | 不碰，转 §5 REVIEW |
+   | dirty / 未授权 ahead / diverged curated / 隐私命中 | 不碰，转 §5 REVIEW |
 
    随后自动完成受影响 Harness runtime refresh 与派生索引重建，并写 machine-local checkpoint。
 3. 结果 `PASS` → §4 收尾；`REVIEW` / `BLOCKED` → §5。

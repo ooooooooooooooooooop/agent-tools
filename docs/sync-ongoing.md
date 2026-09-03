@@ -25,12 +25,13 @@
     └─ 如果改 ~/.dsh 配置，需同步更新仓库归档或走 dsh-config-sync
     └─ DSH runtime/base/UI/overlay 改动统一走 `aic apply dsh`，不走手工复制
 
-[2] 本地跑门禁
-    └─ git add ...; .githooks/pre-commit
+[2] 本地跑门禁（必须在 canonical writer lease 内）
+    └─ 只 stage 声明的 owned paths；禁止 git add . / git add -A
     └─ （或手动：validate_repo + quality_report + unittest + evals + diff-check）
     └─ 全部 PASS 才能提交
 
-[3] git commit → git push（到私有远程）
+[3] 显式 push 模式
+    └─ 仅发布有 ownership receipt 的已提交 canonical 变化；禁止隐式 commit/push
 
 [4] 本机安装目录刷新（如果改了 skill 包）
     └─ python scripts/sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profile core --check
@@ -68,12 +69,12 @@ python scripts\publish_check.py
 ### 增量同步（日常优化后）
 
 ```powershell
-# A 机：提交并推送
-git add . && git commit -m "feat: ..."
-git push
+# A 机：通过 canonical owned-commit 入口提交；不要在 dirty checkout 中自动收敛
+# 只有取得 ownership receipt 后，才显式执行：
+python scripts\personal_ai_sync.py push
 
 # B 机：拉取 + 同步
-git pull
+python scripts\personal_ai_sync.py pull
 python scripts\sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profile full --check
 python scripts\sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profile full --apply
 # 配置变更：重新 export → copy → check → apply

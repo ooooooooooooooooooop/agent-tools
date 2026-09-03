@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +34,243 @@ GOVERNANCE_TASKS = REPO / "scripts" / "governance" / "register_governance_tasks.
 CANONICAL_GOVERNANCE_ROOT = Path(r"C:\Desktop\skills")
 PROVIDER_DIR = REPO / "scripts" / "memory"
 SETTINGS = Path.home() / ".dsh" / "settings.yaml"
+MUTATION_LOCK_ROOT = Path.home() / ".dsh" / ".personal-ai-mutation"
+MUTATION_LOCK_STALE_SECONDS = 6 * 60 * 60
+MUTATION_LOCK_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_LOCK_V1"
+MUTATION_RECEIPT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_RECEIPT_V1"
+
+
+class MutationOwnershipError(RuntimeError):
+    """Raised when a canonical mutation cannot prove exclusive ownership."""
+
+    def __init__(self, code: str, message: str, metadata: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.metadata = metadata or {}
+
+
+def _path_key(path: Path) -> str:
+    """Return a stable, case-insensitive absolute path key."""
+    return os.path.normcase(str(path.resolve(strict=False)))
+
+
+def _canonical_repository_roots() -> tuple[Path, ...]:
+    return (CANONICAL_GOVERNANCE_ROOT, STATE_REPO)
+
+
+def _is_canonical_mutation_repo(repo: Path, canonical_root: Path | None = None) -> bool:
+    """Require an exact canonical checkout identity before acquiring a writer lease."""
+    actual = _path_key(repo)
+    roots = (canonical_root,) if canonical_root is not None else _canonical_repository_roots()
+    return any(actual == _path_key(root) for root in roots)
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+    return True
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+class CanonicalMutationLock:
+    """Crash-detectable, one-writer lease for a canonical repository."""
+
+    def __init__(
+        self,
+        repo: Path,
+        *,
+        actor: str,
+        trigger: str,
+        task_id: str | None = None,
+        operation: str,
+        scope: list[str] | None = None,
+        run_id: str | None = None,
+        lock_root: Path | None = None,
+        receipt_root: Path | None = None,
+        canonical_root: Path | None = None,
+        stale_after: int = MUTATION_LOCK_STALE_SECONDS,
+    ):
+        self.repo = repo.resolve(strict=False)
+        self.actor = actor
+        self.trigger = trigger
+        self.task_id = task_id or "personal-ai-sync"
+        self.operation = operation
+        self.scope = sorted(scope or [])
+        self.run_id = run_id or uuid.uuid4().hex
+        self.lock_root = (lock_root or MUTATION_LOCK_ROOT).resolve(strict=False)
+        self.receipt_root = (receipt_root or (self.lock_root / "receipts")).resolve(strict=False)
+        self.canonical_root = canonical_root
+        self.stale_after = stale_after
+        digest = hashlib.sha256(_path_key(self.repo).encode("utf-8")).hexdigest()[:24]
+        self.lock_path = self.lock_root / f"{digest}.lock.json"
+        self.metadata = {
+            "schema": MUTATION_LOCK_SCHEMA,
+            "actor": actor,
+            "pid": os.getpid(),
+            "run_id": self.run_id,
+            "task_id": self.task_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "operation": operation,
+            "repo": str(self.repo),
+            "scope": self.scope,
+        }
+        self._held = False
+
+    def _read_existing(self) -> dict:
+        try:
+            value = json.loads(self.lock_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise MutationOwnershipError(
+                "UNKNOWN_LOCK",
+                f"DEFER: mutation lock is unreadable: {self.lock_path}",
+            ) from exc
+        if not isinstance(value, dict):
+            raise MutationOwnershipError(
+                "UNKNOWN_LOCK",
+                f"DEFER: mutation lock is not an object: {self.lock_path}",
+            )
+        if value.get("schema") != MUTATION_LOCK_SCHEMA:
+            raise MutationOwnershipError(
+                "UNKNOWN_LOCK",
+                f"DEFER: mutation lock schema is unknown: {self.lock_path}",
+                value,
+            )
+        recorded_repo = value.get("repo")
+        if not isinstance(recorded_repo, str) or not recorded_repo \
+                or _path_key(Path(recorded_repo)) != _path_key(self.repo):
+            raise MutationOwnershipError(
+                "LOCK_REPO_MISMATCH",
+                f"DEFER: mutation lock belongs to another repository: {self.lock_path}",
+                value,
+            )
+        return value
+
+    def acquire(self) -> "CanonicalMutationLock":
+        if not _is_canonical_mutation_repo(self.repo, self.canonical_root):
+            raise MutationOwnershipError(
+                "NON_CANONICAL",
+                f"DEFER: writer ownership is denied for non-canonical restore/source {self.repo}",
+            )
+        self.lock_root.mkdir(parents=True, exist_ok=True)
+        for _ in range(3):
+            try:
+                fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(fd, (json.dumps(self.metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+                finally:
+                    os.close(fd)
+                self._held = True
+                return self
+            except FileExistsError:
+                existing = self._read_existing()
+                pid = existing.get("pid")
+                started = _parse_timestamp(existing.get("started_at"))
+                if not isinstance(pid, int) or isinstance(pid, bool) or started is None:
+                    raise MutationOwnershipError(
+                        "UNKNOWN_LOCK",
+                        f"DEFER: mutation lock metadata is incomplete: {self.lock_path}",
+                        existing,
+                    )
+                if _pid_is_alive(pid):
+                    raise MutationOwnershipError(
+                        "FOREIGN_LOCK",
+                        f"DEFER: active mutation owner pid={pid} run_id={existing.get('run_id')}",
+                        existing,
+                    )
+                age = (datetime.now(timezone.utc) - started).total_seconds()
+                if age < self.stale_after:
+                    raise MutationOwnershipError(
+                        "RECENT_DEAD_LOCK",
+                        f"DEFER: dead mutation owner lock is not stale yet (age={age:.1f}s)",
+                        existing,
+                    )
+                try:
+                    self.lock_path.unlink()
+                except FileNotFoundError:
+                    continue
+        raise MutationOwnershipError("LOCK_RACE", f"DEFER: mutation lock acquisition raced: {self.lock_path}")
+
+    def release(self) -> None:
+        if not self._held:
+            return
+        try:
+            existing = json.loads(self.lock_path.read_text(encoding="utf-8"))
+            if existing.get("run_id") == self.run_id and existing.get("pid") == os.getpid():
+                self.lock_path.unlink(missing_ok=True)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+        finally:
+            self._held = False
+
+    def __enter__(self) -> "CanonicalMutationLock":
+        return self.acquire()
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.release()
+
+
+def write_mutation_receipt(
+    lock: CanonicalMutationLock,
+    *,
+    base: str,
+    result: str,
+    staged: list[str],
+    changed: list[str],
+    commit: str,
+) -> Path:
+    """Persist mutation evidence outside the canonical checkout."""
+    payload = {
+        "schema": MUTATION_RECEIPT_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "actor": lock.actor,
+        "trigger": lock.trigger,
+        "task_id": lock.task_id,
+        "run_id": lock.run_id,
+        "base": base,
+        "result": result,
+        "staged": sorted(staged),
+        "changed": sorted(changed),
+        "commit": commit,
+        "repo": str(lock.repo),
+        "ownership": {
+            "canonical": True,
+            "repo": str(lock.repo),
+            "scope": lock.scope,
+            "lock_path": str(lock.lock_path),
+            "lock_run_id": lock.run_id,
+        },
+    }
+    path = lock.receipt_root / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{lock.run_id}.json"
+    _write_json_atomic(path, payload)
+    return path
 
 
 def _is_canonical_governance_repo(repo: Path) -> bool:
@@ -348,7 +587,8 @@ def _is_sync_eligible(repo: Path, rel_path: str, repo_name: str = "") -> bool:
     if repo_name == "personal-ai-state" or repo.name == "personal-ai-state":
         return norm.startswith(("state/", "sync/", "memory/", "projects/", "README"))
     if repo_name == "agent-tools" or repo == REPO or (repo / "registry").is_dir():
-        if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/", "state/", "tools/", "config/", "dsh-config/")):
+        if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/",
+                            "state/", "tools/", "config/", "dsh-config/")):
             return True
         if norm in ("README.md", "SKILLS.md", "AGENTS.md", "package.json", "pnpm-lock.yaml", "LICENSE", ".gitignore"):
             return True
@@ -380,36 +620,216 @@ def remote_changed_files(repo: Path, branch: str) -> set[str]:
     return {l.strip() for l in out.splitlines() if l.strip()}
 
 
-def auto_commit_eligible(repo: Path, c: dict) -> tuple[bool, str]:
-    """为 dirty working tree 中的 sync-eligible canonical 变更执行自动校验与 commit。"""
-    eligible = c.get("eligible_canonical_changes", [])
-    if not eligible:
-        return False, "no eligible canonical changes"
-    # 隐私扫描
-    for f in eligible:
-        full = repo / f
-        if full.is_file():
-            try:
-                text = full.read_text(encoding="utf-8", errors="ignore")
-                for pat in PRIVACY_PATTERNS:
-                    if re.search(pat, text):
-                        return False, f"privacy scan hit in {f}: {pat}"
-            except Exception:
-                pass
-    # 若存在 validate_repo.py 则校验
-    vscript = repo / "scripts" / "validate_repo.py"
-    if vscript.is_file():
-        rc, out = run([sys.executable, str(vscript), "--strict"], cwd=repo)
-        if rc != 0:
-            return False, f"canonical validation failed: {out[-200:]}"
-    # 确定性逐个 add 准入路径（严禁 git add -A / git add . 扫入未准入缓存）
-    for f in eligible:
-        git(repo, "add", "--", f)
-    idargs = _identity_args(repo)
-    rc, out = git(repo, *idargs, "commit", "-m", "sync: auto-converge canonical state")
+def _normalise_scope_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
+    normalised = []
+    for raw in paths:
+        value = str(raw).replace("\\", "/").strip()
+        if not value or value.startswith("/") or re.match(r"^[A-Za-z]:/", value):
+            raise ValueError(f"invalid owned path: {raw}")
+        parts = value.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise ValueError(f"invalid owned path: {raw}")
+        normalised.append(value)
+    return sorted(set(normalised))
+
+
+def _path_in_scope(path: str, scope: list[str] | tuple[str, ...]) -> bool:
+    value = path.replace("\\", "/")
+    for owned in scope:
+        prefix = owned[:-3] if owned.endswith("/**") else None
+        if prefix is not None and (value == prefix or value.startswith(prefix + "/")):
+            return True
+        if value == owned:
+            return True
+    return False
+
+
+def _staged_paths(repo: Path) -> list[str]:
+    rc, out = git(repo, "diff", "--cached", "--name-only", "--diff-filter=ACMRTUXB")
+    return sorted({line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()}) if rc == 0 else []
+
+
+def _mutation_lock_root_for_repo(repo: Path) -> Path:
+    if _is_canonical_mutation_repo(repo):
+        return MUTATION_LOCK_ROOT
+    return repo.resolve(strict=False).parent / f".{repo.name}.personal-ai-mutation"
+
+
+def _mutation_root_for_plane(name: str, repo: Path) -> Path | None:
+    if name == "agent-tools":
+        return CANONICAL_GOVERNANCE_ROOT if _path_key(repo) == _path_key(REPO) else repo
+    if name == "personal-ai-state":
+        return STATE_REPO if _path_key(repo) == _path_key(STATE_REPO) else repo
+    if name.startswith("project:"):
+        return repo
+    return repo
+
+
+def _mutation_lock_for_plane(
+    name: str,
+    repo: Path,
+    results: dict,
+    *,
+    operation: str,
+    scope: list[str],
+) -> CanonicalMutationLock:
+    return CanonicalMutationLock(
+        repo,
+        actor=results.get("actor", "personal-ai-sync"),
+        trigger=results.get("trigger", "personal_ai_sync"),
+        task_id=results.get("task_id", "personal-ai-sync"),
+        run_id=results.get("run_id"),
+        operation=operation,
+        scope=scope,
+        lock_root=_mutation_lock_root_for_repo(repo),
+        canonical_root=_mutation_root_for_plane(name, repo),
+    )
+
+
+def _owned_commit_receipt(repo: Path, commit: str, receipt_root: Path | None = None) -> bool:
+    root = receipt_root or MUTATION_LOCK_ROOT / "receipts"
+    if not root.is_dir():
+        return False
+    for path in root.glob("*.json"):
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        ownership = receipt.get("ownership") or {}
+        recorded_repo = receipt.get("repo")
+        if (receipt.get("schema") == MUTATION_RECEIPT_SCHEMA
+                and receipt.get("commit") == commit
+                and isinstance(recorded_repo, str)
+                and recorded_repo
+                and _path_key(Path(recorded_repo)) == _path_key(repo)
+                and receipt.get("result") in ("COMMITTED", "MERGED")
+                and ownership.get("canonical") is True):
+            changed = receipt.get("changed") or []
+            scope = ownership.get("scope") or []
+            if isinstance(changed, list) and isinstance(scope, list) \
+                    and all(_path_in_scope(str(item), [str(x) for x in scope]) for item in changed):
+                return True
+    return False
+
+
+def _local_ahead_commits(repo: Path, branch: str) -> list[str]:
+    rc, out = git(repo, "rev-list", "--reverse", f"origin/{branch}..HEAD")
+    return [line.strip() for line in out.splitlines() if line.strip()] if rc == 0 else []
+
+
+def _commit_owned_files_locked(
+    lock: CanonicalMutationLock,
+    owned: list[str],
+    *,
+    allow_foreign_dirty: bool,
+    message: str,
+    validate: bool,
+) -> tuple[bool, str]:
+    entries = uncommitted_files(lock.repo)
+    staged_before = set(_staged_paths(lock.repo))
+    foreign_staged = sorted(path for path in staged_before if not _path_in_scope(path, owned))
+    if foreign_staged:
+        return False, f"DEFER: foreign staged paths present: {foreign_staged}"
+    foreign_dirty = sorted(path for _, path in entries if not _path_in_scope(path, owned))
+    if foreign_dirty and not allow_foreign_dirty:
+        return False, f"DEFER: worktree contains foreign dirty paths: {foreign_dirty}"
+    if not any(_path_in_scope(path, owned) for _, path in entries):
+        return False, "no owned changes"
+
+    rc, base = git(lock.repo, "rev-parse", "HEAD")
+    if rc != 0:
+        return False, f"cannot resolve mutation base: {base}"
+
+    if validate:
+        vscript = lock.repo / "scripts" / "validate_repo.py"
+        if vscript.is_file():
+            rc, out = run([sys.executable, str(vscript), "--strict"], cwd=lock.repo)
+            if rc != 0:
+                return False, f"canonical validation failed: {out[-200:]}"
+
+    rc, out = git(lock.repo, "add", "--", *owned)
+    if rc != 0:
+        return False, f"owned staging failed: {out}"
+    staged_after = _staged_paths(lock.repo)
+    if not staged_after:
+        return False, "no owned staged changes"
+    foreign_after = sorted(path for path in staged_after if not _path_in_scope(path, owned))
+    if foreign_after:
+        return False, f"ABORT: staged scope violation: {foreign_after}"
+
+    rc, diff = git(lock.repo, "diff", "--cached")
+    if rc != 0:
+        return False, f"staged diff failed: {diff}"
+    for pattern in PRIVACY_PATTERNS:
+        if re.search(pattern, diff):
+            return False, f"privacy scan hit in staged diff: {pattern}"
+
+    idargs = _identity_args(lock.repo)
+    rc, out = git(lock.repo, *idargs, "commit", "-m", message)
     if rc != 0:
         return False, f"commit failed: {out}"
-    return True, "committed"
+    rc, commit = git(lock.repo, "rev-parse", "HEAD")
+    if rc != 0:
+        return False, f"cannot resolve committed revision: {commit}"
+    changed = changed_paths(lock.repo, f"{base.strip()}..{commit.strip()}")
+    if any(not _path_in_scope(path, owned) for path in changed):
+        write_mutation_receipt(lock, base=base.strip(), result="SCOPE_VIOLATION",
+                               staged=staged_after, changed=changed, commit=commit.strip())
+        return False, f"ABORT: committed scope violation: {changed}"
+    receipt = write_mutation_receipt(lock, base=base.strip(), result="COMMITTED",
+                                     staged=staged_after, changed=changed, commit=commit.strip())
+    return True, f"committed {commit.strip()} receipt={receipt}"
+
+
+def commit_owned_files(
+    repo: Path,
+    owned_files: list[str],
+    *,
+    actor: str = "personal-ai-sync",
+    trigger: str = "explicit-owned-commit",
+    task_id: str = "personal-ai-sync",
+    operation: str = "owned-commit",
+    allow_foreign_dirty: bool = False,
+    validate: bool = True,
+    message: str = "sync: commit owned canonical files",
+    lock_root: Path | None = None,
+    receipt_root: Path | None = None,
+    canonical_root: Path | None = None,
+    stale_after: int = MUTATION_LOCK_STALE_SECONDS,
+) -> tuple[bool, str]:
+    """Commit only an explicit owned-file scope while preserving foreign work."""
+    try:
+        owned = _normalise_scope_paths(owned_files)
+    except ValueError as exc:
+        return False, f"DEFER: {exc}"
+    if not owned:
+        return False, "DEFER: empty owned scope"
+    lock = CanonicalMutationLock(
+        repo,
+        actor=actor,
+        trigger=trigger,
+        task_id=task_id,
+        operation=operation,
+        scope=owned,
+        lock_root=lock_root,
+        receipt_root=receipt_root,
+        canonical_root=canonical_root,
+        stale_after=stale_after,
+    )
+    try:
+        with lock:
+            return _commit_owned_files_locked(lock, owned,
+                                              allow_foreign_dirty=allow_foreign_dirty,
+                                              message=message, validate=validate)
+    except MutationOwnershipError as exc:
+        return False, f"{exc.code}: {exc}"
+
+
+def auto_commit_eligible(repo: Path, c: dict) -> tuple[bool, str]:
+    """Compatibility guard: AUTO_COMMIT is never an implicit dirty-tree action."""
+    if c.get("dirty") or uncommitted_files(repo):
+        return False, "DEFER: automatic commit requires a clean worktree; explicit owned commit required"
+    return False, "DEFER: AUTO_COMMIT is disabled; use explicit owned commit policy"
 
 
 def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
@@ -841,42 +1261,27 @@ def plan_actions(classifications: dict, state_repo: Path | None,
     for name, c in classifications.items():
         graph = c.get("graph_state", c.get("state", UNKNOWN))
         worktree = c.get("worktree_state", WORKTREE_CLEAN if not c.get("dirty") else WORKTREE_DIRTY_SAFE)
-        eligible = c.get("eligible_canonical_changes", [])
 
         if graph == BLOCKED_AUTH:
             plan.append({"plane": name, "action": "REVIEW", "state": BLOCKED_AUTH,
                          "reason": c.get("reason", "auth blocked")})
-        elif worktree == WORKTREE_DIRTY_BLOCKED:
-            plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_BLOCKED,
-                         "reason": "unresolved merge conflict in working tree"})
+        elif c.get("dirty") or worktree != WORKTREE_CLEAN:
+            reason = "DEFER: canonical worktree is dirty; no pull/push/merge/commit/overwrite"
+            if worktree == WORKTREE_DIRTY_BLOCKED:
+                reason = "DEFER: unresolved merge conflict in canonical worktree"
+            plan.append({"plane": name, "action": "REVIEW", "state": worktree,
+                         "reason": reason})
         elif graph == REMOTE_AHEAD:
-            if worktree in (WORKTREE_DIRTY_CONFLICT, WORKTREE_DIRTY_SAFE) and c.get("dirty"):
-                if name == "agent-tools":
-                    # Developer workspace dirty does not block production deployment!
-                    # Production deploys from clean mirror; developer workspace is kept untouched.
-                    plan.append({"plane": name, "action": "DEPLOY_FROM_MIRROR", "state": REMOTE_AHEAD,
-                                 "reason": "developer workspace dirty; remote updates deployed via clean mirror"})
-                elif worktree == WORKTREE_DIRTY_CONFLICT:
-                    plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_CONFLICT,
-                                 "reason": f"remote changes overlap with uncommitted local modifications: {c.get('conflict_files', [])}"})
-                else:
-                    plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
-            else:
-                # Case C (CLEAN)
-                plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
+            plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
         elif graph == LOCAL_AHEAD:
-            # Case F
-            plan.append({"plane": name, "action": "PUSH", "state": LOCAL_AHEAD})
-        elif graph == IN_SYNC:
-            if worktree == WORKTREE_DIRTY_SAFE and eligible:
-                # Case B with eligible canonical changes
-                plan.append({"plane": name, "action": "AUTO_COMMIT", "state": IN_SYNC,
-                             "eligible": eligible})
+            if mode == "push":
+                plan.append({"plane": name, "action": "PUSH", "state": LOCAL_AHEAD})
             else:
-                # Case A (CLEAN) or Case B (DIRTY_SAFE with non-canonical/machine-local dirty only)
-                plan.append({"plane": name, "action": "NO ACTION", "state": IN_SYNC})
+                plan.append({"plane": name, "action": "REVIEW", "state": LOCAL_AHEAD,
+                             "reason": "DEFER: push requires explicit push mode and ownership receipts"})
+        elif graph == IN_SYNC:
+            plan.append({"plane": name, "action": "NO ACTION", "state": IN_SYNC})
         elif graph == DIVERGED:
-            # Case G
             plan.append({"plane": name, "action": "REVIEW", "state": DIVERGED,
                          "reason": "history diverged"})
         else:
@@ -889,6 +1294,14 @@ def execute_plan(plan: list[dict], classifications: dict,
                  state_repo: Path | None, mode: str,
                  results: dict) -> None:
     """只执行确定安全动作（§22）；其余保持 REVIEW。全部幂等可重跑（§36）。"""
+
+    def review(item: dict, reason: str, state: str | None = None) -> None:
+        item["action"] = "REVIEW"
+        item["executed"] = False
+        item["reason"] = reason
+        if state is not None:
+            item["state"] = state
+
     for item in plan:
         name, action = item["plane"], item["action"]
         c = classifications[name]
@@ -898,134 +1311,126 @@ def execute_plan(plan: list[dict], classifications: dict,
             continue
         if action == "PULL":
             if mode == "push":
-                item["action"] = "REVIEW"
-                item["reason"] = "push-only 模式"
+                review(item, "push-only mode")
                 continue
-            # 安全 fast-forward（不覆盖未冲突的 local dirty）
-            rc, out = git(repo, "merge", "--ff-only", f"origin/{c['branch']}")
-            if rc != 0:
-                rc, out = git(repo, "pull", "--ff-only", "origin", c["branch"])
-            item["executed"] = rc == 0
-            item["state"] = "PULLED" if rc == 0 else item["state"]
-            if rc != 0:
-                item["action"] = "REVIEW"
-                item["reason"] = out.splitlines()[-1] if out else "pull failed"
-            else:
-                c["graph_state"] = IN_SYNC
-                c["sync_state"] = IN_SYNC
-                c["state"] = IN_SYNC
-                c["pending_sync_changes"] = False
-                if c["worktree_state"] == WORKTREE_DIRTY_SAFE and not c.get("eligible_canonical_changes"):
-                    c["local_only_preserved"] = True
-                # Pull 成功后，若在 sync 模式且有 local eligible canonical changes，执行 auto-commit + push
-                if mode == "sync" and c.get("eligible_canonical_changes"):
-                    ok, msg = auto_commit_eligible(repo, c)
-                    if ok:
-                        hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD") if name == "agent-tools" else []
-                        if not hits:
-                            prc, pout = git(repo, "push", "origin", c["branch"])
-                            if prc == 0:
-                                item["state"] = "PULLED_AND_PUSHED"
-                                c["eligible_canonical_changes"] = []
-                                if c["worktree_state"] == WORKTREE_DIRTY_SAFE:
-                                    c["local_only_preserved"] = True
+            try:
+                lock = _mutation_lock_for_plane(
+                    name, repo, results, operation="fast-forward-pull", scope=["git-history"])
+                with lock:
+                    if uncommitted_files(repo):
+                        review(item, "DEFER: worktree became dirty before fast-forward pull",
+                               WORKTREE_DIRTY_SAFE)
+                        continue
+                    current = classify_repo(repo, fetch=True, repo_name=name)
+                    if current.get("graph_state") != REMOTE_AHEAD or current.get("dirty"):
+                        review(item, "DEFER: repository state changed before locked fast-forward",
+                               current.get("worktree_state", WORKTREE_CLEAN))
+                        continue
+                    base_rc, base = git(repo, "rev-parse", "HEAD")
+                    rc, out = git(repo, "merge", "--ff-only", f"origin/{current['branch']}")
+                    if rc != 0:
+                        review(item, out.splitlines()[-1] if out else "fast-forward pull failed")
+                        continue
+                    head_rc, head = git(repo, "rev-parse", "HEAD")
+                    changed = (changed_paths(repo, f"{base.strip()}..{head.strip()}")
+                               if base_rc == 0 and head_rc == 0 else [])
+                    write_mutation_receipt(lock, base=base.strip(), result="PULLED",
+                                           staged=[], changed=changed, commit=head.strip())
+                    item["executed"] = True
+                    item["state"] = "PULLED"
+                    c.update({"graph_state": IN_SYNC, "sync_state": IN_SYNC, "state": IN_SYNC,
+                              "pending_sync_changes": False, "dirty": False,
+                              "worktree_state": WORKTREE_CLEAN, "uncommitted_files": [],
+                              "eligible_canonical_changes": []})
+            except MutationOwnershipError as exc:
+                review(item, f"{exc.code}: {exc}")
         elif action == "PUSH":
             if mode == "pull":
-                item["action"] = "REVIEW"
-                item["reason"] = "pull-only 模式不 push"
+                review(item, "pull-only mode does not push")
                 continue
-            if mode == "sync" and c.get("eligible_canonical_changes"):
-                auto_commit_eligible(repo, c)
-            if name == "agent-tools":
-                hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD")
-                if hits:
-                    item["action"] = "REVIEW"
-                    item["state"] = BLOCKED_PRIVACY
-                    item["reason"] = f"privacy scan hit: {hits}"
-                    c["sync_state"] = BLOCKED
-                    c["state"] = BLOCKED
-                    continue
-            if name.startswith("project:") and classifications[name].get("privacy_blocked"):
-                item["action"] = "REVIEW"
-                item["state"] = BLOCKED_PRIVACY
-                item["reason"] = "public/privacy-blocked 项目不自动 push"
-                c["sync_state"] = BLOCKED
-                c["state"] = BLOCKED
+            if mode != "push":
+                review(item, "DEFER: push requires explicit push mode")
                 continue
-            rc, out = git(repo, "push", "origin", c["branch"])
-            item["executed"] = rc == 0
-            item["state"] = "PUSHED" if rc == 0 else item["state"]
-            if rc != 0:
-                item["action"] = "REVIEW"
-                item["reason"] = out.splitlines()[-1] if out else "push failed"
-            else:
-                c["graph_state"] = IN_SYNC
-                c["sync_state"] = IN_SYNC
-                c["state"] = IN_SYNC
-                c["pending_sync_changes"] = False
-                if c["worktree_state"] == WORKTREE_DIRTY_SAFE and not c.get("eligible_canonical_changes"):
-                    c["local_only_preserved"] = True
-        elif action == "AUTO_COMMIT":
-            if mode in ("sync", "push"):
-                ok, msg = auto_commit_eligible(repo, c)
-                if not ok:
-                    if "privacy" in msg:
-                        item["action"] = "REVIEW"
-                        item["state"] = BLOCKED_PRIVACY
-                        item["reason"] = msg
-                        c["sync_state"] = BLOCKED
-                        c["state"] = BLOCKED
-                    else:
-                        item["action"] = "REVIEW"
-                        item["reason"] = msg
-                    continue
-                if name == "agent-tools":
-                    hits = privacy_scan(repo, f"origin/{c['branch']}..HEAD")
-                    if hits:
-                        item["action"] = "REVIEW"
-                        item["state"] = BLOCKED_PRIVACY
-                        item["reason"] = f"privacy scan hit: {hits}"
+            try:
+                lock = _mutation_lock_for_plane(
+                    name, repo, results, operation="explicit-push", scope=["git-history"])
+                with lock:
+                    if uncommitted_files(repo):
+                        review(item, "DEFER: worktree is dirty; explicit push is blocked",
+                               WORKTREE_DIRTY_SAFE)
+                        continue
+                    current = classify_repo(repo, fetch=True, repo_name=name)
+                    if current.get("graph_state") != LOCAL_AHEAD or current.get("dirty"):
+                        review(item, "DEFER: repository is no longer clean and local-ahead",
+                               current.get("worktree_state", WORKTREE_CLEAN))
+                        continue
+                    commits = _local_ahead_commits(repo, current["branch"])
+                    receipt_root = _mutation_lock_root_for_repo(repo) / "receipts"
+                    unowned = [commit for commit in commits
+                               if not _owned_commit_receipt(repo, commit, receipt_root)]
+                    if unowned:
+                        review(item, f"DEFER: local commits lack canonical ownership receipts: {unowned}")
+                        continue
+                    if name == "agent-tools":
+                        hits = privacy_scan(repo, f"origin/{current['branch']}..HEAD")
+                        if hits:
+                            review(item, f"privacy scan hit: {hits}", BLOCKED_PRIVACY)
+                            c["sync_state"] = BLOCKED
+                            c["state"] = BLOCKED
+                            continue
+                    if name.startswith("project:") and classifications[name].get("privacy_blocked"):
+                        review(item, "public/privacy-blocked project cannot be pushed automatically", BLOCKED_PRIVACY)
                         c["sync_state"] = BLOCKED
                         c["state"] = BLOCKED
                         continue
-                rc, out = git(repo, "push", "origin", c["branch"])
-                item["executed"] = rc == 0
-                item["state"] = "PUSHED" if rc == 0 else item["state"]
-                if rc != 0:
-                    item["action"] = "REVIEW"
-                    item["reason"] = out.splitlines()[-1] if out else "push failed"
-                else:
-                    c["graph_state"] = IN_SYNC
-                    c["sync_state"] = IN_SYNC
-                    c["state"] = IN_SYNC
-                    c["pending_sync_changes"] = False
-                    c["eligible_canonical_changes"] = []
-                    if c["worktree_state"] == WORKTREE_DIRTY_SAFE:
-                        c["local_only_preserved"] = True
-            else:
-                item["action"] = "NO ACTION"
+                    base_rc, base = git(repo, "rev-parse", f"origin/{current['branch']}")
+                    rc, out = git(repo, "push", "origin", current["branch"])
+                    if rc != 0:
+                        review(item, out.splitlines()[-1] if out else "push failed")
+                        continue
+                    head_rc, head = git(repo, "rev-parse", "HEAD")
+                    changed = (changed_paths(repo, f"{base.strip()}..{head.strip()}")
+                               if base_rc == 0 and head_rc == 0 else [])
+                    write_mutation_receipt(lock, base=base.strip(), result="PUSHED",
+                                           staged=[], changed=changed, commit=head.strip())
+                    item["executed"] = True
+                    item["state"] = "PUSHED"
+                    c.update({"graph_state": IN_SYNC, "sync_state": IN_SYNC, "state": IN_SYNC,
+                              "pending_sync_changes": False})
+            except MutationOwnershipError as exc:
+                review(item, f"{exc.code}: {exc}")
+        elif action == "AUTO_COMMIT":
+            review(item, "DEFER: implicit AUTO_COMMIT is disabled; use explicit owned commit")
         elif action == "DEPLOY_FROM_MIRROR":
-            # Developer workspace is left untouched; mirror pulls remote and prepares candidate
-            try:
-                sys.path.insert(0, str(REPO / "scripts" / "aic"))
-                import dsh_lifecycle
-                mirror = dsh_lifecycle.ensure_deployment_mirror(source_repo=repo)
-                item["executed"] = True
-                item["state"] = "DEPLOYED_FROM_MIRROR"
-                c["developer_dirty_preserved"] = True
-                c["graph_state"] = IN_SYNC
-                c["sync_state"] = IN_SYNC
-                c["pending_sync_changes"] = False
-            except Exception as exc:
-                item["executed"] = False
-                item["action"] = "REVIEW"
-                item["reason"] = f"mirror deployment failed: {exc}"
+            review(item, "DEFER: dirty canonical source cannot be bypassed through a deployment mirror")
         elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-state":
             _handle_state_divergence(item, repo, c, mode, results)
 
 
 def _handle_state_divergence(item: dict, repo: Path, c: dict,
                              mode: str, results: dict) -> None:
+    """Run the only allowed automatic merge behind the canonical writer lease."""
+    scope = ["memory/records/**"]
+    try:
+        lock = _mutation_lock_for_plane(
+            "personal-ai-state", repo, results,
+            operation="deterministic-memory-merge", scope=scope)
+        with lock:
+            if uncommitted_files(repo):
+                item["action"] = "REVIEW"
+                item["reason"] = "DEFER: personal-ai-state became dirty before deterministic merge"
+                item["executed"] = False
+                return
+            _handle_state_divergence_locked(item, repo, c, mode, results, lock)
+    except MutationOwnershipError as exc:
+        item["action"] = "REVIEW"
+        item["executed"] = False
+        item["reason"] = f"{exc.code}: {exc}"
+
+
+def _handle_state_divergence_locked(item: dict, repo: Path, c: dict,
+                                    mode: str, results: dict,
+                                    lock: CanonicalMutationLock) -> None:
     """personal-ai-state DIVERGED（§9/§10/§11）。
 
     git 只做 transport；语义判定复用 MemoryProvider 冻结契约
@@ -1056,6 +1461,10 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
         item["reason"] = "diverged（pull/push-only 模式不自动 merge）"
         return
 
+    base_rc, base = git(repo, "rev-parse", "HEAD")
+    if base_rc != 0:
+        item["reason"] = f"cannot resolve merge base revision: {base}"
+        return
     idargs = _identity_args(repo)
     rc, _ = git(repo, *idargs, "merge", "--no-commit", "--no-ff",
                 f"origin/{c['branch']}")
@@ -1097,6 +1506,11 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
             git(repo, "add", "--", f"{MEMORY_PREFIX}{rid}/state.yaml")
             flagged.append({"id": rid, "kind": state["conflict"]})
 
+    staged = _staged_paths(repo)
+    if any(not _path_in_scope(path, ["memory/records/**"]) for path in staged):
+        git(repo, "merge", "--abort")
+        item["reason"] = f"ABORT: merge staged paths outside memory scope: {staged}"
+        return
     rc, out = git(repo, *idargs, "commit", "--no-edit")
     if rc != 0:
         git(repo, "merge", "--abort")
@@ -1104,28 +1518,44 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
         return
 
     v = memory_merge_verify(repo)
-    # 合并结果推送回 remote（private repo，确定性合并已验证），让其他设备收敛
-    prc, pout = git(repo, "push", "origin", c["branch"])
+    head_rc, head = git(repo, "rev-parse", "HEAD")
+    changed = changed_paths(repo, f"{base.strip()}..{head.strip()}") if head_rc == 0 else []
+    if any(not _path_in_scope(path, ["memory/records/**"]) for path in changed):
+        write_mutation_receipt(lock, base=base.strip(), result="SCOPE_VIOLATION",
+                               staged=staged, changed=changed, commit=head.strip())
+        item["action"] = "REVIEW"
+        item["reason"] = f"ABORT: deterministic merge changed paths outside memory scope: {changed}"
+        return
+    receipt = write_mutation_receipt(lock, base=base.strip(), result="MERGED",
+                                     staged=staged, changed=changed, commit=head.strip())
     item["executed"] = True
     item["state"] = "MERGED"
     item["memory"] = v
-    item["pushed"] = prc == 0
+    item["pushed"] = False
+    item["push_required"] = True
+    item["receipt"] = str(receipt)
     item["conflict_flags"] = flagged
     results["memory_merge"] = v
-    if prc != 0:
-        item["action"] = "REVIEW"
-        item["reason"] = f"merge 成功但 push 失败: {pout.splitlines()[-1] if pout else prc}"
-    elif flagged:
+    if flagged:
         item["action"] = "REVIEW"
         item["reason"] = (f"CONFLICT_CONCURRENT_REVISION: {flagged}"
                           "（双方 revision 均保留并标记，后续 supersede 消解）")
     else:
-        item["action"] = "MERGED"
+        item["action"] = "REVIEW"
+        item["reason"] = "deterministic memory merge committed locally; explicit push mode required"
 
 
 # --------------------------------------------------------------------- sync
 def run_sync(mode: str, detail: bool = False) -> dict:
-    results: dict = {"mode": mode, "planes": {}, "actions": []}
+    results: dict = {
+        "mode": mode,
+        "planes": {},
+        "actions": [],
+        "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
+        "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_sync"),
+        "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-sync"),
+        "run_id": uuid.uuid4().hex,
+    }
     writable = mode in ("sync", "pull", "push", "restore")
 
     classifications: dict = {}
@@ -1227,7 +1657,9 @@ def run_sync(mode: str, detail: bool = False) -> dict:
             "last_sync": datetime.now(timezone.utc).isoformat(),
             "last_mode": mode,
             "per_repo_head": {n: _head(Path(c["path"])) for n, c in classifications.items()},
-            "per_repo_sync_state": {n: c.get("sync_state", c.get("state", IN_SYNC)) for n, c in classifications.items()},
+            "per_repo_sync_state": {
+                n: c.get("sync_state", c.get("state", IN_SYNC)) for n, c in classifications.items()
+            },
             "per_repo_worktree_state": {n: c.get("worktree_state", WORKTREE_CLEAN) for n, c in classifications.items()},
             "last_result": _overall(plan, results),
         })
@@ -1256,7 +1688,9 @@ def _overall(plan: list[dict], results: dict) -> str:
     if results.get("runtime", {}).get("status") == "DRIFT" \
             or results.get("runtime", {}).get("review"):
         return "REVIEW"
-    if results.get("dsh_composition") == "DRIFT" or (isinstance(results.get("dsh_composition"), str) and results["dsh_composition"].startswith("FAIL")):
+    if results.get("dsh_composition") == "DRIFT" or (
+            isinstance(results.get("dsh_composition"), str)
+            and results["dsh_composition"].startswith("FAIL")):
         return "REVIEW"
     if isinstance(results.get("skill_sync"), str) and results["skill_sync"].startswith("FAIL"):
         return "REVIEW"
@@ -1278,21 +1712,46 @@ def run_restore(detail: bool = False, repo: Path = REPO,
     DSH_SESSION_HISTORY plane 默认解析 live ~/.dsh/sessions 与 durability backup
     root（this-device.yaml）；测试注入空 root 得到 NOT_APPLICABLE。
     """
-    results = {"mode": "restore", "steps": []}
+    results = {
+        "mode": "restore",
+        "steps": [],
+        "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
+        "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_restore"),
+        "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-restore"),
+        "run_id": uuid.uuid4().hex,
+    }
 
     def step(name: str, ok: bool, note: str = "") -> None:
         results["steps"].append({"step": name, "ok": ok, "note": note})
 
-    if not (repo / ".git").exists():
-        rc, out = run(["git", "clone", agent_tools_remote, str(repo)], timeout=300)
-        step("clone agent-tools", rc == 0, out[-200:] if rc else "")
-    else:
-        step("clone agent-tools", True, "already present")
-    if not (state_repo / ".git").exists():
-        rc, out = run(["git", "clone", state_remote, str(state_repo)], timeout=300)
-        step("clone personal-ai-state", rc == 0, out[-200:] if rc else "")
-    else:
-        step("clone personal-ai-state", True, "already present")
+    def clone_if_missing(target: Path, remote: str, label: str) -> None:
+        if (target / ".git").exists():
+            step(label, True, "already present")
+            return
+        try:
+            if _is_canonical_mutation_repo(target):
+                lock = CanonicalMutationLock(
+                    target,
+                    actor=results["actor"],
+                    trigger=results["trigger"],
+                    task_id=results["task_id"],
+                    run_id=results["run_id"],
+                    operation="restore-clone",
+                    scope=["repository"],
+                )
+                with lock:
+                    rc, out = run(["git", "clone", remote, str(target)], timeout=300)
+            else:
+                rc, out = run(["git", "clone", remote, str(target)], timeout=300)
+            step(label, rc == 0, out[-200:] if rc else "")
+        except MutationOwnershipError as exc:
+            step(label, False, f"{exc.code}: {exc}")
+
+    if not _is_canonical_mutation_repo(repo):
+        step("canonical mutation ownership", True,
+             "non-canonical restore source has no canonical writer identity")
+    clone_if_missing(repo, agent_tools_remote, "clone agent-tools")
+    clone_if_missing(state_repo, state_remote, "clone personal-ai-state")
 
     if (repo / ".git").exists():
         vscript = repo / "scripts" / "validate_repo.py"
@@ -1330,9 +1789,25 @@ def run_restore(detail: bool = False, repo: Path = REPO,
         governance_tasks = repo / "scripts" / "governance" / "register_governance_tasks.ps1"
         if governance_tasks.is_file() and os.name == "nt":
             if _is_canonical_governance_repo(repo):
-                rc, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                               "-File", str(governance_tasks)], timeout=120)
-                step("governance tasks", rc == 0, out.splitlines()[-1] if out else "")
+                try:
+                    lock = CanonicalMutationLock(
+                        repo,
+                        actor=results["actor"],
+                        trigger=results["trigger"],
+                        task_id=results["task_id"],
+                        run_id=results["run_id"],
+                        operation="scheduler-registration",
+                        scope=["scheduler:PersonalAI-Governance-Frequent",
+                               "scheduler:PersonalAI-Governance-Weekly",
+                               "scheduler:PersonalAI-Durability-Nightly",
+                               "scheduler:PersonalAI-Sync-Check"],
+                    )
+                    with lock:
+                        rc, out = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                                       "-File", str(governance_tasks)], timeout=120)
+                    step("governance tasks", rc == 0, out.splitlines()[-1] if out else "")
+                except MutationOwnershipError as exc:
+                    step("governance tasks", False, f"{exc.code}: {exc}")
             else:
                 step("governance tasks", True,
                      "skipped: non-canonical restore source; scheduler registration requires C:\\Desktop\\skills")
@@ -1367,11 +1842,14 @@ def print_human(results: dict, detail: bool = False) -> None:
         import dsh_lifecycle
         lc = dsh_lifecycle.get_runtime_lifecycle(live_smoke=False)
         print(f"  CODE_REMOTE_SYNC             {lc.get('sourceRemote', {}).get('status', UNKNOWN)}")
-        print(f"  DEPLOYMENT_SOURCE_SYNC       {lc.get('deploymentSource', {}).get('status', UNKNOWN)} (clean={lc.get('deploymentSource', {}).get('clean', True)})")
+        print(f"  DEPLOYMENT_SOURCE_SYNC       {lc.get('deploymentSource', {}).get('status', UNKNOWN)} "
+              f"(clean={lc.get('deploymentSource', {}).get('clean', True)})")
         print(f"  DESIRED_STATE                {lc.get('desiredVsDeployed', UNKNOWN)}")
         print(f"  DEPLOYMENT_STATE             {lc.get('deployedReady', {}).get('status', UNKNOWN)}")
         print(f"  ACTIVE_PROCESS_STATE         {lc.get('deployedVsActive', UNKNOWN)}")
-        print(f"  RESTART_REQUIRED             {lc.get('restartRequired', 'NO')}" + (f" ({lc.get('restartReason')})" if lc.get('restartReason') and lc.get('restartReason') != 'NONE' else ""))
+        restart = (f" ({lc.get('restartReason')})"
+                   if lc.get('restartReason') and lc.get('restartReason') != 'NONE' else "")
+        print(f"  RESTART_REQUIRED             {lc.get('restartRequired', 'NO')}{restart}")
         print(f"  LIVE_VALIDATION              {lc.get('liveValidation', {}).get('status', 'NOT_RUN')}")
         print()
     except Exception:
@@ -1381,7 +1859,8 @@ def print_human(results: dict, detail: bool = False) -> None:
         wt = c.get("worktree_state", WORKTREE_CLEAN)
         note = c.get("note") or c.get("reason") or ""
         details = []
-        if wt == WORKTREE_DIRTY_SAFE and c.get("local_only_preserved", True) and not c.get("eligible_canonical_changes"):
+        if (wt == WORKTREE_DIRTY_SAFE and c.get("local_only_preserved", True)
+                and not c.get("eligible_canonical_changes")):
             details.append("worktree: DIRTY_SAFE, local-only preserved")
         elif wt == WORKTREE_DIRTY_SAFE:
             details.append("worktree: DIRTY_SAFE")

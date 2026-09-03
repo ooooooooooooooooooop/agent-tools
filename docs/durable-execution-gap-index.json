@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "audit_id": "PERSONAL_AI_DURABLE_EXECUTION_GAP_AUDIT",
+  "audit_date": "2026-09-03",
+  "architecture_freeze": {
+    "personal_ai_deep_control": "DSH_ONLY",
+    "claude_code": "NATIVE_INDEPENDENT",
+    "codex": "NATIVE_INDEPENDENT",
+    "gemini": "NATIVE_INDEPENDENT",
+    "switchboard": "OPTIONAL_TOOL",
+    "personal_ai_state": "HARNESS_INDEPENDENT"
+  },
+  "state_domains": {
+    "orchestration_state": {
+      "implemented": true,
+      "owner": "DSH (dsh-agent, cordis fiber, goal-round-driver, autonomous-execution-governor)",
+      "states": ["RUNNING", "WAITING", "ROUND_LIMIT", "ENDED", "BLOCKED"],
+      "collision": "Conflated with business Job lifecycle; agent round termination triggers goal block even if worker is still alive"
+    },
+    "job_state": {
+      "implemented": false,
+      "owner": "FRAGMENTED (dsh-goal status ACTIVE/BLOCKED/COMPLETE vs work_registry SPAWNING/ACTIVE/COMPLETED)",
+      "states_needed": ["PENDING", "READY", "RUNNING", "CHECKPOINTED", "WAITING_EVENT", "RECOVERING", "COMPLETED", "FAILED", "CANCELLED"],
+      "durable_registry_status": "MISSING"
+    },
+    "worker_state": {
+      "implemented": "PARTIAL_IN_MEMORY",
+      "owner": "dsh-jobs-local (in-memory Map), managed_claude (PID tracking)",
+      "states_needed": ["STARTING", "ALIVE", "HEARTBEAT_LOST", "EXITED_0", "EXITED_ERROR", "KILLED", "UNKNOWN"],
+      "durable": false,
+      "survives_dsh_restart": false
+    },
+    "validation_state": {
+      "implemented": "PARTIAL",
+      "owner": "scripts/structured_output/validator.py (PASS, FAIL, NOT_RUN, NOT_APPLICABLE)",
+      "states_needed": ["NOT_STARTED", "RUNNING", "PASS", "REVIEW_REQUIRED", "FAIL"],
+      "gap": "Self-certification risk; agents often claim PASS without independent validator invocation"
+    }
+  },
+  "gaps": [
+    {
+      "id": "GAP-P0-01",
+      "priority": "P0",
+      "category": "CONCURRENCY_CONTROL",
+      "title": "Single Writer Mutual Exclusion Enforced by Policy Only",
+      "symptom": "Two agents can simultaneously run the same job and collide on files/worktrees",
+      "current_mechanism": "POLICY_ONLY (natural language prompts in AGENTS.md / governance docs)",
+      "required_mechanism": "Atomic file/sqlite lease with compare-and-swap acquire, renew, release"
+    },
+    {
+      "id": "GAP-P0-02",
+      "priority": "P0",
+      "category": "LIFECYCLE_SUPERVISION",
+      "title": "Silent Permanent Job Stall on Agent Round Limit or Crash",
+      "symptom": "When an agent hits round limit or exits, background workers are orphaned or forgotten",
+      "current_mechanism": "RECOVERY_SUPERVISOR=MISSING (relies on human returning to prompt the agent)",
+      "required_mechanism": "Dead worker / unfinished job detection via Task Scheduler recovery tick"
+    },
+    {
+      "id": "GAP-P0-03",
+      "priority": "P0",
+      "category": "STATE_MANAGEMENT",
+      "title": "Absence of Central Durable Job Registry",
+      "symptom": "No component can answer: 'Which jobs are currently unfinished and what is their status?'",
+      "current_mechanism": "DURABLE_JOB_REGISTRY=MISSING (dsh-jobs is in-memory; checkpoints only store manual snapshots)",
+      "required_mechanism": "Minimal durable job registry tracking job_id, attempt_id, state, lease, checkpoint"
+    },
+    {
+      "id": "GAP-P0-04",
+      "priority": "P0",
+      "category": "EVIDENCE_INTEGRITY",
+      "title": "Multiple State Authorities and Self-Certified Completion",
+      "symptom": "receipt.json, validation.json, PRE_STATE.json can independently claim READY=true without L3/L4 proof",
+      "current_mechanism": "MULTIPLE_STATE_AUTHORITIES=YES (no single final adjudication funnel)",
+      "required_mechanism": "Final Adjudicator validating facts against contract before mutating canonical state"
+    },
+    {
+      "id": "GAP-P1-01",
+      "priority": "P1",
+      "category": "EXECUTION_EFFICIENCY",
+      "title": "Token and Turn Waste via Process and File Polling",
+      "symptom": "Agents spend 60-70% of conversation rounds polling PIDs, file timestamps, and grep outputs",
+      "current_mechanism": "Ad-hoc bash/pwsh polling in agent loop",
+      "required_mechanism": "Durable event notification and settlement triggers"
+    },
+    {
+      "id": "GAP-P1-02",
+      "priority": "P1",
+      "category": "CHECKPOINTING",
+      "title": "Checkpoints are Narrative-Oriented Rather than Machine-Resumable",
+      "symptom": "checkpoints/<task_id>.json stores natural language strings, lacking exact cursor, partition, and hashes",
+      "current_mechanism": "LLM-oriented narrative checkpoint (checkpoint.py)",
+      "required_mechanism": "Machine checkpoint schema with deterministic resume vectors"
+    },
+    {
+      "id": "GAP-P1-03",
+      "priority": "P1",
+      "category": "PROVENANCE",
+      "title": "Artifact Lineage Incomplete",
+      "symptom": "Cannot prove which job, attempt, writer, and input hashes created a specific output file",
+      "current_mechanism": "PARTIAL (worktrees track task_id, ResultEnvelope tracks artifacts without attempt/input links)",
+      "required_mechanism": "Full artifact lineage record (job_id, attempt_id, writer_id, input_hashes, output_hash)"
+    },
+    {
+      "id": "GAP-P2-01",
+      "priority": "P2",
+      "category": "USER_EXPERIENCE",
+      "title": "CLI / Web UI Lack Real-Time Job Registry Inspection",
+      "symptom": "Users must inspect raw jsonl files or process tables to observe job state",
+      "current_mechanism": "Ad-hoc PowerShell scripts and json inspection",
+      "required_mechanism": "Standardized inspect command / UI tab"
+    }
+  ],
+  "reuse_matrix": {
+    "structured_output_envelope": {
+      "component": "scripts/structured_output/contract.py",
+      "action": "REUSE",
+      "covers": ["JOB_STATUS", "BLOCKERS", "ARTIFACTS", "VALIDATIONS", "PROVENANCE"]
+    },
+    "workspace_isolation": {
+      "component": "scripts/workspace/execution_contract.py & provisioner.py",
+      "action": "REUSE",
+      "covers": ["ISOLATED_WORKTREE", "AUTHORIZED_ROOT", "WRITE_SCOPES", "PRE_SNAPSHOT", "POST_SNAPSHOT"]
+    },
+    "context_governance_and_handoff": {
+      "component": "dsh/context-pressure-guard & dsh-context-lifecycle",
+      "action": "REUSE",
+      "covers": ["PREFLIGHT_ADMISSION", "DSH_HANDOFF_V1", "READ_ONLY_CONTEXT_EXHAUSTED", "TOKEN_METER"]
+    },
+    "checkpoint_protocol": {
+      "component": "registry/checkpoint-schema.yaml & scripts/autonomy/checkpoint.py",
+      "action": "EXTEND",
+      "covers": ["DURABLE_CHECKPOINT_STORAGE", "EXTEND_WITH_MACHINE_VECTORS"]
+    },
+    "work_lease_pattern": {
+      "component": "mcp/agent-switchboard/work_registry.py",
+      "action": "EXTEND",
+      "covers": ["ATOMIC_FILE_LOCK", "EXTEND_TO_HARNESS_NEUTRAL_LEASES"]
+    },
+    "recovery_trigger": {
+      "component": "scripts/governance/register_governance_tasks.ps1",
+      "action": "MERGE",
+      "covers": ["WINDOWS_TASK_SCHEDULER_FREQUENT_TICK", "DEAD_JOB_SCAN"]
+    }
+  },
+  "minimal_architecture": {
+    "daemon_required": false,
+    "event_bus_required": false,
+    "components_count": 4,
+    "components": [
+      "1. Minimal Durable Job Registry (JSON/SQLite at ~/.personal-ai/jobs/)",
+      "2. Atomic Work Lease & Single Writer Lock (File lock with TTL)",
+      "3. Machine-Extended Checkpoint Vector (Building on checkpoint.py)",
+      "4. Task Scheduler Recovery Tick (Piggybacking on existing frequent runner)"
+    ]
+  }
+}

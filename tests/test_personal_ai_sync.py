@@ -83,7 +83,7 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(pas._overall(plan, results), "PASS")
 
     def test_scenario_2_in_sync_dirty_safe_canonical_eligible(self):
-        """Scenario 2: IN_SYNC + DIRTY_SAFE (canonical eligible) -> auto-commit + push, PASS."""
+        """Scenario 2: IN_SYNC + DIRTY_SAFE (canonical eligible) -> REVIEW, no mutation."""
         (self.work / "scripts").mkdir(exist_ok=True)
         (self.work / "scripts" / "tool.py").write_text("print('canonical')", encoding="utf-8")
         c = pas.classify_repo(self.work, repo_name="agent-tools")
@@ -91,31 +91,33 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertIn("scripts/tool.py", c["eligible_canonical_changes"])
         plan = pas.plan_actions({"agent-tools": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "AUTO_COMMIT")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
-        self.assertEqual(plan[0]["state"], "PUSHED")
-        self.assertEqual(pas._overall(plan, results), "PASS")
-        # 远端验证已同步到 origin
+        self.assertEqual(plan[0]["state"], pas.WORKTREE_DIRTY_SAFE)
+        self.assertEqual(pas._overall(plan, results), "REVIEW")
+        self.assertTrue((self.work / "scripts" / "tool.py").is_file())
+        # The dirty worktree is preserved and no remote commit is created.
         other = self.td / "verify"
         subprocess.run(["git", "clone", str(self.remote), str(other)],
                        capture_output=True, check=True, env=GIT_ENV)
-        self.assertTrue((other / "scripts" / "tool.py").is_file())
+        self.assertFalse((other / "scripts" / "tool.py").is_file())
 
     def test_scenario_3_in_sync_dirty_safe_non_canonical_local_only(self):
-        """Scenario 3: IN_SYNC + DIRTY_SAFE (non-canonical local only) -> NO ACTION, dirty preserved, PASS."""
+        """Scenario 3: IN_SYNC + DIRTY_SAFE (non-canonical local only) -> REVIEW, dirty preserved."""
         (self.work / ".verify-surface.mjs").write_text("local-only inspection", encoding="utf-8")
         c = pas.classify_repo(self.work, repo_name="agent-tools")
         self.assertEqual(c["graph_state"], pas.IN_SYNC)
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertEqual(c["eligible_canonical_changes"], [])
         plan = pas.plan_actions({"agent-tools": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "NO ACTION")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
-        # 本地非 canonical 脏工作区保留且不阻断总体 PASS
+        # Any dirty canonical worktree is deferred, even when the path is local-only.
         self.assertEqual((self.work / ".verify-surface.mjs").read_text(), "local-only inspection")
-        self.assertEqual(pas._overall(plan, results), "PASS")
+        self.assertEqual(plan[0]["action"], "REVIEW")
+        self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_4_remote_ahead_clean(self):
         """Scenario 4: REMOTE_AHEAD + CLEAN -> PULL (ff-only), PASS."""
@@ -137,7 +139,7 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(pas._overall(plan, results), "PASS")
 
     def test_scenario_5_remote_ahead_dirty_safe_non_overlapping(self):
-        """Scenario 5: REMOTE_AHEAD + DIRTY_SAFE (non-overlapping) -> PULL (ff-only), local dirty intact, PASS."""
+        """Scenario 5: REMOTE_AHEAD + DIRTY_SAFE (non-overlapping) -> REVIEW, local dirty intact."""
         other = self.td / "other"
         subprocess.run(["git", "clone", str(self.remote), str(other)],
                        capture_output=True, check=True, env=GIT_ENV)
@@ -152,13 +154,13 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertEqual(c["conflict_files"], [])
         plan = pas.plan_actions({"r": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "PULL")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"r": c}, None, "sync", results)
-        self.assertEqual(plan[0]["state"], "PULLED")
-        self.assertTrue((self.work / "remote_feature.txt").is_file())
+        self.assertEqual(plan[0]["state"], pas.WORKTREE_DIRTY_SAFE)
+        self.assertFalse((self.work / "remote_feature.txt").is_file())
         self.assertEqual((self.work / "local_draft.txt").read_text(), "local draft content")
-        self.assertEqual(pas._overall(plan, results), "PASS")
+        self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_6_remote_ahead_dirty_conflict_overlapping(self):
         """Scenario 6: REMOTE_AHEAD + DIRTY_CONFLICT (overlapping) -> REVIEW, no overwrite, no data loss."""
@@ -185,35 +187,35 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_7_local_ahead_clean(self):
-        """Scenario 7: LOCAL_AHEAD + CLEAN -> PUSH, PASS."""
+        """Scenario 7: LOCAL_AHEAD + CLEAN -> REVIEW until explicit push with a receipt."""
         commit_file(self.work, "local_commit.txt", "local commit content")
         c = pas.classify_repo(self.work)
         self.assertEqual(c["graph_state"], pas.LOCAL_AHEAD)
         self.assertEqual(c["worktree_state"], pas.WORKTREE_CLEAN)
         plan = pas.plan_actions({"r": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "PUSH")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"r": c}, None, "sync", results)
-        self.assertEqual(plan[0]["state"], "PUSHED")
-        self.assertEqual(pas._overall(plan, results), "PASS")
+        self.assertEqual(plan[0]["state"], pas.LOCAL_AHEAD)
+        self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_8_local_ahead_dirty_safe(self):
-        """Scenario 8: LOCAL_AHEAD + DIRTY_SAFE -> PUSH, local dirty preserved, PASS."""
+        """Scenario 8: LOCAL_AHEAD + DIRTY_SAFE -> REVIEW, local dirty preserved."""
         commit_file(self.work, "local_commit.txt", "local commit content")
         (self.work / "scratch.log").write_text("scratch", encoding="utf-8")
         c = pas.classify_repo(self.work)
         self.assertEqual(c["graph_state"], pas.LOCAL_AHEAD)
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         plan = pas.plan_actions({"r": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "PUSH")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"r": c}, None, "sync", results)
-        self.assertEqual(plan[0]["state"], "PUSHED")
+        self.assertEqual(plan[0]["state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertTrue((self.work / "scratch.log").is_file())
-        self.assertEqual(pas._overall(plan, results), "PASS")
+        self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_9_diverged_memory_mergeable(self):
-        """Scenario 9: DIVERGED + memory mergeable -> MERGED + PUSH, PASS."""
+        """Scenario 9: DIVERGED + memory mergeable -> local MERGED, explicit push still required."""
         f = StateRepoFixture(self.td)
         state_provider(f.devA, "A").write(
             scope="global", type="note", content="A memory", provenance={"source": "test"})
@@ -248,7 +250,8 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         plan = pas.plan_actions({"agent-tools": c}, None, "sync")
         results: dict = {}
         pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
-        self.assertEqual(plan[0]["state"], pas.BLOCKED_PRIVACY)
+        self.assertEqual(plan[0]["state"], pas.LOCAL_AHEAD)
+        self.assertIn("explicit", plan[0]["reason"])
         self.assertEqual(pas._overall(plan, results), "REVIEW")
 
     def test_scenario_12_blocked_auth_on_fetch(self):
@@ -285,8 +288,7 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         commit_file(self.work, "local.txt", "local")
         c = pas.classify_repo(self.work)
         plan = pas.plan_actions({"x": c}, None, "pull")
-        self.assertEqual(plan[0]["action"], "PUSH")
-        plan = [{**i, "action": "REVIEW", "reason": "pull-only 模式"} if i["action"] == "PUSH" else i for i in plan]
+        self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
         pas.execute_plan(plan, {"x": c}, None, "pull", results)
         self.assertEqual(plan[0]["action"], "REVIEW")
@@ -333,10 +335,10 @@ class TestGitClassification(unittest.TestCase):
         self.assertEqual(c["graph_state"], pas.LOCAL_AHEAD)
         self.assertEqual(c["sync_state"], pas.LOCAL_PENDING)
         plan = pas.plan_actions({"x": c}, None, "sync")
-        self.assertEqual(plan[0]["action"], "PUSH")
+        self.assertEqual(plan[0]["action"], "REVIEW")
         pas.execute_plan(plan, {"x": c}, None, "sync", {})
-        self.assertEqual(plan[0]["state"], "PUSHED")
-        self.assertEqual(pas.classify_repo(self.work)["sync_state"], pas.IN_SYNC)
+        self.assertEqual(plan[0]["state"], pas.LOCAL_AHEAD)
+        self.assertEqual(pas.classify_repo(self.work)["sync_state"], pas.LOCAL_PENDING)
 
     def test_local_dirty_preserved_safe(self):
         (self.work / "seed.txt").write_text("dirty", encoding="utf-8")
@@ -344,6 +346,7 @@ class TestGitClassification(unittest.TestCase):
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         plan = pas.plan_actions({"x": c}, None, "sync")
         pas.execute_plan(plan, {"x": c}, None, "sync", {})
+        self.assertEqual(plan[0]["action"], "REVIEW")
         self.assertEqual((self.work / "seed.txt").read_text(), "dirty")  # 未被覆盖
 
     def test_diverged_review(self):
@@ -489,7 +492,9 @@ class TestMultiDeviceMemoryMerge(unittest.TestCase):
             # 幂等重跑：不制造 duplicate
             n1 = len(bundle["records"])
             r2 = f.sync_on(f.devB)
-            self.assertEqual(r2["plan"]["state"], pas.IN_SYNC)
+            self.assertEqual(r2["plan"]["state"], pas.LOCAL_AHEAD)
+            self.assertEqual(r2["plan"]["action"], "REVIEW")
+            self.assertIn("explicit push", r2["plan"]["reason"])
             bundle2 = state_provider(f.devB, "v").export()
             self.assertEqual(len(bundle2["records"]), n1)
 
