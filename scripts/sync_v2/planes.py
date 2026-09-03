@@ -279,21 +279,29 @@ def evaluate_mcp_plane(home: Path) -> PlaneResult:
             stderr=subprocess.PIPE,
             text=True,
         )
-        init_req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "sync_probe"}}}) + "\n"
-        p.stdin.write(init_req)
-        p.stdin.flush()
-        line1 = p.stdout.readline()
-        if '"protocolVersion"' in line1:
-            init_pass = True
-            tools_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
-            p.stdin.write(tools_req)
+        try:
+            init_req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "sync_probe"}}}) + "\n"
+            p.stdin.write(init_req)
             p.stdin.flush()
-            line2 = p.stdout.readline()
-            data2 = json.loads(line2)
-            tools = data2.get("result", {}).get("tools", [])
-            tools_count = len(tools)
-        p.terminate()
-        p.wait(timeout=2)
+            line1 = p.stdout.readline()
+            if '"protocolVersion"' in line1:
+                init_pass = True
+                tools_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
+                p.stdin.write(tools_req)
+                p.stdin.flush()
+                line2 = p.stdout.readline()
+                data2 = json.loads(line2)
+                tools = data2.get("result", {}).get("tools", [])
+                tools_count = len(tools)
+        finally:
+            if p.stdin:
+                p.stdin.close()
+            if p.stdout:
+                p.stdout.close()
+            if p.stderr:
+                p.stderr.close()
+            p.terminate()
+            p.wait(timeout=2)
     except Exception:
         pass
 
