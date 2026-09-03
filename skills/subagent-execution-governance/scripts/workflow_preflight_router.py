@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Workflow Pre-flight Router & Governance Engine
 
@@ -66,10 +66,36 @@ EXPLICIT_FALLBACK_RULES = {
 }
 
 
+# 0. 语义边界与模型分类状态 (Semantic Model Categories)
+CONFIGURED_MODEL = "CONFIGURED_MODEL"
+USER_SELECTED_MODEL = "USER_SELECTED_MODEL"
+DISCOVERED_MODEL = "DISCOVERED_MODEL"
+RUNTIME_ADMITTED_MODEL = "RUNTIME_ADMITTED_MODEL"
+
+# 元数据来源标准 (Metadata Provenance Standards)
+PROVIDER_ATTESTED = "PROVIDER_ATTESTED"
+PROVIDER_DISCOVERED = "PROVIDER_DISCOVERED"
+CANONICAL_VERIFIED = "CANONICAL_VERIFIED"
+USER_DECLARED = "USER_DECLARED"
+UNKNOWN = "UNKNOWN"
+
 class ModelInventory:
     """Represents the multi-layer model catalog facts."""
-    def __init__(self, dsh_settings_path: str = DEFAULT_SETTINGS_PATH, custom_dsh_models: Optional[Dict[str, List[str]]] = None):
+    def __init__(
+        self,
+        dsh_settings_path: str = DEFAULT_SETTINGS_PATH,
+        custom_dsh_models: Optional[Dict[str, List[str]]] = None,
+        custom_discovered_models: Optional[Dict[str, List[str]]] = None,
+        custom_canonical_models: Optional[Dict[str, List[str]]] = None,
+        custom_context_limits: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+        custom_user_selected: Optional[List[str]] = None
+    ):
         self.dsh_models: Dict[str, List[str]] = {}
+        self.discovered_models: Optional[Dict[str, List[str]]] = custom_discovered_models
+        self.canonical_models: Dict[str, List[str]] = custom_canonical_models or {}
+        self.context_limits: Dict[Tuple[str, str], Dict[str, Any]] = custom_context_limits or {}
+        self.user_selected_models: List[str] = custom_user_selected or []
+
         if custom_dsh_models is not None:
             self.dsh_models = custom_dsh_models
         else:
@@ -86,11 +112,45 @@ class ModelInventory:
                 if not isinstance(prov_conf, dict):
                     continue
                 models_list = prov_conf.get("models", [])
-                self.dsh_models[prov_name] = [
-                    m.get("id") for m in models_list if isinstance(m, dict) and "id" in m
-                ]
+                m_ids = []
+                for m in models_list:
+                    if isinstance(m, dict) and "id" in m:
+                        mid = m["id"]
+                        m_ids.append(mid)
+                        if "contextWindow" in m and (prov_name, mid) not in self.context_limits:
+                            self.context_limits[(prov_name, mid)] = {
+                                "limit": m["contextWindow"],
+                                "provenance": USER_DECLARED,
+                                "trusted": False,
+                                "conservative_limit": 128000
+                            }
+                self.dsh_models[prov_name] = m_ids
+            def_m = data.get("agent-default-model", {})
+            if isinstance(def_m, dict) and "model" in def_m:
+                self.user_selected_models.append(def_m["model"])
         except Exception:
             pass
+
+    def resolve_context_limit(self, provider: str, model: str) -> Dict[str, Any]:
+        """Resolves context window with provenance. USER_DECLARED is not elevated to trusted hard limit."""
+        key = (provider, model)
+        entry = self.context_limits.get(key)
+        if not entry:
+            return {
+                "limit": 128000,
+                "provenance": UNKNOWN,
+                "trusted": False,
+                "effective_limit": 128000
+            }
+        prov = entry.get("provenance", UNKNOWN)
+        limit = entry.get("limit", 128000)
+        trusted = prov in (PROVIDER_ATTESTED, PROVIDER_DISCOVERED, CANONICAL_VERIFIED)
+        return {
+            "limit": limit,
+            "provenance": prov,
+            "trusted": trusted,
+            "effective_limit": limit if trusted else entry.get("conservative_limit", 128000)
+        }
 
 
 class WorkflowPreflightRouter:
@@ -103,10 +163,14 @@ class WorkflowPreflightRouter:
         """
         Resolves a logical role or model ID to an exact { provider, model } tuple.
         Returns a rich resolution descriptor with provenance and fallback tracking.
+        Enforces:
+        - CONFIGURED_MODEL in settings.yaml != automatically RUNTIME_ADMITTED
+        - Dynamic provider discovery grants RUNTIME_ADMITTED_MODEL without manual static admission
+        - If provider cannot confirm: fails closed (NOT_ADMITTED), but user config is preserved
         """
         requested = role_or_model.strip()
 
-        # 1. 妫€鏌ユ槸鍚︿负閫昏緫瑙掕壊
+        # 1. 检查是否为逻辑角色
         if requested in LOGICAL_ROLES:
             role_def = LOGICAL_ROLES[requested]
             target_prov = explicit_provider or role_def["provider"]
@@ -125,12 +189,21 @@ class WorkflowPreflightRouter:
                     "provenance": "LOGICAL_ROLE_DIRECT"
                 }
 
-        # 2. 妫€鏌ュ叿浣撴ā鍨?ID
+        # 2. 检查具体模型 ID
         provider = explicit_provider or "cpa"
         declared_models = self.inventory.dsh_models.get(provider, [])
+        is_configured = requested in declared_models
 
-        # 2.1 鐩存帴鍛戒腑 DSH 鍑嗗叆澹版槑
-        if requested in declared_models:
+        # 检查 provider 真实 discovery
+        is_discovered = None
+        if self.inventory.discovered_models is not None:
+            discovered_list = self.inventory.discovered_models.get(provider, [])
+            is_discovered = requested in discovered_list
+
+        ctx_limit = self.inventory.resolve_context_limit(provider, requested)
+
+        # 2.1 Provider Discovery 动态准入 (Dynamic Provider Admission)
+        if is_discovered is True:
             return {
                 "status": "resolved",
                 "requested": requested,
@@ -138,10 +211,66 @@ class WorkflowPreflightRouter:
                 "resolved_provider": provider,
                 "resolved_model": requested,
                 "fallback_applied": False,
-                "provenance": "DECLARED_EXACT"
+                "provenance": "DYNAMIC_PROVIDER_ADMISSION",
+                "model_classification": RUNTIME_ADMITTED_MODEL,
+                "context_limit": ctx_limit,
+                "static_manual_admission_required": False
             }
 
-        # 2.2 鏈洿鎺ュ懡涓紝妫€鏌ユ樉寮?Fallback 绛栫暐瑙勫垯
+        # 2.2 用户已配置但当前 Provider 未能确认 (Fail closed, config preserved)
+        if is_configured and is_discovered is False:
+            if allow_fallback and requested in EXPLICIT_FALLBACK_RULES:
+                rule = EXPLICIT_FALLBACK_RULES[requested]
+                fb_model = rule["fallback_model"]
+                fb_prov = rule["fallback_provider"]
+                fb_disc = self.inventory.discovered_models.get(fb_prov, [])
+                if fb_model in fb_disc or fb_model in self.inventory.dsh_models.get(fb_prov, []):
+                    return {
+                        "status": "resolved",
+                        "requested": requested,
+                        "is_logical_role": False,
+                        "resolved_provider": fb_prov,
+                        "resolved_model": fb_model,
+                        "fallback_applied": True,
+                        "fallback_details": {
+                            "original_requested": requested,
+                            "fallback_model": fb_model,
+                            "reason_code": rule["reason_code"],
+                            "policy_rule": rule["policy_rule"],
+                            "mapping_type": rule.get("mapping_type", "EXPLICIT_COMPATIBILITY_MAPPING"),
+                            "quality_tier_impact": rule["quality_tier_impact"]
+                        },
+                        "provenance": "EXPLICIT_POLICY_FALLBACK",
+                        "model_classification": RUNTIME_ADMITTED_MODEL,
+                        "config_preserved": True
+                    }
+
+            return {
+                "status": "unresolved",
+                "requested": requested,
+                "provider": provider,
+                "error_code": "NOT_ADMITTED",
+                "error_message": f"Model '{requested}' is configured in settings.yaml ({CONFIGURED_MODEL}) but not confirmed by current provider discovery. Fail closed at execution preflight.",
+                "fallback_applied": False,
+                "model_classification": CONFIGURED_MODEL,
+                "config_preserved": True
+            }
+
+        # 2.3 兼容既有无 mock discovery 的已配置直连
+        if is_configured and is_discovered is None:
+            return {
+                "status": "resolved",
+                "requested": requested,
+                "is_logical_role": False,
+                "resolved_provider": provider,
+                "resolved_model": requested,
+                "fallback_applied": False,
+                "provenance": "DECLARED_EXACT",
+                "model_classification": RUNTIME_ADMITTED_MODEL,
+                "context_limit": ctx_limit
+            }
+
+        # 2.4 未直接命中，检查显式 Fallback 策略规则
         if allow_fallback and requested in EXPLICIT_FALLBACK_RULES:
             rule = EXPLICIT_FALLBACK_RULES[requested]
             fb_model = rule["fallback_model"]
@@ -166,7 +295,7 @@ class WorkflowPreflightRouter:
                     "provenance": "EXPLICIT_POLICY_FALLBACK"
                 }
 
-        # 2.3 鏃犲彲鐢?fallback锛屽繀椤?FAIL CLOSED
+        # 2.5 无可用 fallback，必须 FAIL CLOSED
         return {
             "status": "unresolved",
             "requested": requested,
