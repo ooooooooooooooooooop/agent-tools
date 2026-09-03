@@ -56,3 +56,10 @@ dsh/compaction-convergence/test/.last-deploy-marker.json
 .incident-tmp/
 .recovery-snapshots-*/
 .stability-closure-*/
+
+# Device-local deployment mirror + runtime lifecycle state (rebuilt locally, never canonical)
+dsh-config/profiles/web/base-dsh-*/
+dsh-config/profiles/web/.dsh-context-lifecycle/
+
+# One-off verification scripts (repo root only) — never publish
+/.verify-surface.mjs
