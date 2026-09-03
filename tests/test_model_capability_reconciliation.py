@@ -74,7 +74,7 @@ class TestModelCapabilityReconciliation(unittest.TestCase):
         sources = mcr.canonical_sources(canonical)
         report = mcr.reconcile_catalog(sources=sources)
         admitted = [row for row in report["routes"] if "admitted" in row["categories"]]
-        self.assertEqual(len(admitted), 10)
+        self.assertEqual(len(admitted), 11)
         self.assertTrue(all(row["provenance"] for row in admitted))
         self.assertIn("kimi-coding:k3-256k", {route for family in report["families"] for route in family["routes"]})
 

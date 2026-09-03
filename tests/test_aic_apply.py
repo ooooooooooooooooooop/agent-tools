@@ -216,6 +216,23 @@ class TestDshApply(unittest.TestCase):
                 canon_after = aic.load_canonical()
                 self.assertEqual(canon_after["policy"]["rules"]["main_default"]["model"], "gpt-5.6-luna-max")
 
+    def test_user_custom_model_preserved_on_apply(self):
+        import yaml
+        f = self.home / ".dsh" / "settings.yaml"
+        data = json.loads(json.dumps(self.expected))
+        # User adds a brand new future model not in canonical
+        custom_model = {"id": "gemini-4.0-ultra", "input": ["text", "image"], "contextWindow": 2000000}
+        data["llm-pi-ai"]["providers"]["cpa"]["models"].append(custom_model)
+        data["agent-default-model"] = {"provider": "cpa", "model": "gemini-4.0-ultra"}
+        f.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        with mock.patch.object(Path, "home", return_value=self.home):
+            rc, _ = aic._apply_dsh()
+            self.assertEqual(rc, 0)
+            back = yaml.safe_load(f.read_text(encoding="utf-8"))
+            back_models = {m["id"]: m for m in back["llm-pi-ai"]["providers"]["cpa"]["models"]}
+            self.assertIn("gemini-4.0-ultra", back_models)
+            self.assertEqual(back["agent-default-model"], {"provider": "cpa", "model": "gemini-4.0-ultra"})
+
     def test_unknown_section_drift_review(self):
         import yaml
         f = self.home / ".dsh" / "settings.yaml"
