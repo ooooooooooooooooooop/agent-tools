@@ -850,11 +850,19 @@ def plan_actions(classifications: dict, state_repo: Path | None,
             plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_BLOCKED,
                          "reason": "unresolved merge conflict in working tree"})
         elif graph == REMOTE_AHEAD:
-            if worktree == WORKTREE_DIRTY_CONFLICT:
-                plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_CONFLICT,
-                             "reason": f"remote changes overlap with uncommitted local modifications: {c.get('conflict_files', [])}"})
+            if worktree in (WORKTREE_DIRTY_CONFLICT, WORKTREE_DIRTY_SAFE) and c.get("dirty"):
+                if name == "agent-tools":
+                    # Developer workspace dirty does not block production deployment!
+                    # Production deploys from clean mirror; developer workspace is kept untouched.
+                    plan.append({"plane": name, "action": "DEPLOY_FROM_MIRROR", "state": REMOTE_AHEAD,
+                                 "reason": "developer workspace dirty; remote updates deployed via clean mirror"})
+                elif worktree == WORKTREE_DIRTY_CONFLICT:
+                    plan.append({"plane": name, "action": "REVIEW", "state": WORKTREE_DIRTY_CONFLICT,
+                                 "reason": f"remote changes overlap with uncommitted local modifications: {c.get('conflict_files', [])}"})
+                else:
+                    plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
             else:
-                # Case C (CLEAN) or Case D (DIRTY_SAFE non-overlapping)
+                # Case C (CLEAN)
                 plan.append({"plane": name, "action": "PULL", "state": REMOTE_AHEAD})
         elif graph == LOCAL_AHEAD:
             # Case F
@@ -996,6 +1004,22 @@ def execute_plan(plan: list[dict], classifications: dict,
                         c["local_only_preserved"] = True
             else:
                 item["action"] = "NO ACTION"
+        elif action == "DEPLOY_FROM_MIRROR":
+            # Developer workspace is left untouched; mirror pulls remote and prepares candidate
+            try:
+                sys.path.insert(0, str(REPO / "scripts" / "aic"))
+                import dsh_lifecycle
+                mirror = dsh_lifecycle.ensure_deployment_mirror(source_repo=repo)
+                item["executed"] = True
+                item["state"] = "DEPLOYED_FROM_MIRROR"
+                c["developer_dirty_preserved"] = True
+                c["graph_state"] = IN_SYNC
+                c["sync_state"] = IN_SYNC
+                c["pending_sync_changes"] = False
+            except Exception as exc:
+                item["executed"] = False
+                item["action"] = "REVIEW"
+                item["reason"] = f"mirror deployment failed: {exc}"
         elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-state":
             _handle_state_divergence(item, repo, c, mode, results)
 
@@ -1223,7 +1247,9 @@ def _overall(plan: list[dict], results: dict) -> str:
     actions = [i.get("action", "") for i in plan]
     if any(s == BLOCKED_AUTH for s in states):
         return "BLOCKED"
-    if any(s in (CONFLICT, BLOCKED_PRIVACY, WORKTREE_DIRTY_CONFLICT, WORKTREE_DIRTY_BLOCKED) for s in states):
+    if any(s in (CONFLICT, BLOCKED_PRIVACY, WORKTREE_DIRTY_BLOCKED) for s in states):
+        return "REVIEW"
+    if any(s == WORKTREE_DIRTY_CONFLICT and i.get("action") != "DEPLOY_FROM_MIRROR" for s, i in zip(states, plan)):
         return "REVIEW"
     if "REVIEW" in actions:
         return "REVIEW"
@@ -1336,6 +1362,20 @@ def run_restore(detail: bool = False, repo: Path = REPO,
 # --------------------------------------------------------------------- output
 def print_human(results: dict, detail: bool = False) -> None:
     print("Personal AI Sync\n")
+    try:
+        sys.path.insert(0, str(REPO / "scripts" / "aic"))
+        import dsh_lifecycle
+        lc = dsh_lifecycle.get_runtime_lifecycle(live_smoke=False)
+        print(f"  CODE_REMOTE_SYNC             {lc.get('sourceRemote', {}).get('status', UNKNOWN)}")
+        print(f"  DEPLOYMENT_SOURCE_SYNC       {lc.get('deploymentSource', {}).get('status', UNKNOWN)} (clean={lc.get('deploymentSource', {}).get('clean', True)})")
+        print(f"  DESIRED_STATE                {lc.get('desiredVsDeployed', UNKNOWN)}")
+        print(f"  DEPLOYMENT_STATE             {lc.get('deployedReady', {}).get('status', UNKNOWN)}")
+        print(f"  ACTIVE_PROCESS_STATE         {lc.get('deployedVsActive', UNKNOWN)}")
+        print(f"  RESTART_REQUIRED             {lc.get('restartRequired', 'NO')}" + (f" ({lc.get('restartReason')})" if lc.get('restartReason') and lc.get('restartReason') != 'NONE' else ""))
+        print(f"  LIVE_VALIDATION              {lc.get('liveValidation', {}).get('status', 'NOT_RUN')}")
+        print()
+    except Exception:
+        pass
     for name, c in results.get("planes", {}).items():
         st = c.get("sync_state", c.get("state", UNKNOWN))
         wt = c.get("worktree_state", WORKTREE_CLEAN)
