@@ -153,6 +153,10 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             self.assertTrue(steps["validate canonical"], r["steps"])
             self.assertTrue(steps["skills restore (apply)"], r["steps"])
             self.assertTrue(steps["memory loadable"], r["steps"])
+            if os.name == "nt":
+                governance = [s for s in r["steps"] if s["step"] == "governance tasks"]
+                self.assertEqual(len(governance), 1, r["steps"])
+                self.assertIn("non-canonical restore source", governance[0]["note"])
             v2 = pas.memory_merge_verify(dest_state)
             self.assertTrue(v2["ok"])
             self.assertEqual(v2["records"], 1)

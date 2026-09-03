@@ -89,6 +89,15 @@ class LauncherVersionAgnosticTests(unittest.TestCase):
         self.assertIn("$package.version -ne $baseVersion", text)
 
 
+class DesktopRestartLauncherTests(unittest.TestCase):
+    def test_desktop_restart_uses_the_managed_launcher(self):
+        text = (REPO / "scripts" / "aic" / "dsh_desktop_restart.ps1").read_text(encoding="utf-8")
+        self.assertIn("dsh-launch-web.ps1", text)
+        self.assertIn("DSH_HOME", text)
+        self.assertIn("powershell.exe", text)
+        self.assertNotIn("npx", text.lower())
+
+
 class LockGateTests(unittest.TestCase):
     def test_check_lock_false_skips_runtime_lock(self):
         contract = aic.adapter_contract()

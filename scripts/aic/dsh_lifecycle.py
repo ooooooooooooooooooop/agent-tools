@@ -274,7 +274,7 @@ def cmd_adopt_current(args) -> int:
     if not manifest_path.is_file():
         print("NO_COMPOSITION_MANIFEST")
         return 1
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     st["current"] = {
         "version": manifest["base"]["version"],
         "compositionHash": manifest["profileCombinationHash"],
@@ -350,7 +350,7 @@ def cmd_observe(args) -> int:
         report["UPSTREAM_VERSION"] = st["current"].get("version")
         report["MANAGED_LAUNCH"] = "DETECTED" if _managed_process(home) else "NOT_RUNNING"
     if manifest_path.is_file():
-        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        m = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         report["ACTIVE_COMPOSITION"] = m.get("profileCombinationHash")
     report["AIC_VALIDATE"] = _run_aic("validate")["exit"]
     report["AIC_DIFF_DSH"] = _run_aic("diff", "dsh")["exit"]

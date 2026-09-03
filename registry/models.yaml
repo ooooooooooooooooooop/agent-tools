@@ -88,6 +88,19 @@ models:
       maxOutputTokens: 65536
       retrieved: "2026-08-31"
     roles: [compaction, main_default]
+  - id: gemini-3.8-flash-high
+    provider: cpa
+    status: admitted
+    admission: {date: "2026-09-03", basis: "in-use: admitted model on CPA provider"}
+    contextWindow: 1048576
+    capacityEvidence:
+      grade: authoritative
+      source: "https://ai.google.dev/gemini-api/docs/models/gemini-v3"
+      upstreamModel: gemini-3.8-flash
+      contextWindow: 1048576
+      maxOutputTokens: 65536
+      retrieved: "2026-09-03"
+    roles: [compaction, main_default]
   - id: gpt-5.6-sol-xhigh
     provider: cpa
     status: admitted

@@ -65,6 +65,8 @@ providers:
     models:
       - id: gemini-3.7-flash-high
         input: [ text, image ]
+      - id: gemini-3.8-flash-high
+        input: [ text, image ]
       - id: claude-sonnet-4-6
         input: [ text, image ]
       - id: gpt-image-2

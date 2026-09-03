@@ -5,9 +5,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $DshUrl = 'http://127.0.0.1:3080/'
-$WorkingDirectory = [Environment]::GetFolderPath('UserProfile')
 $LogPath = Join-Path $env:TEMP 'dsh-web-shortcut.log'
-$NpxPath = Join-Path ${env:ProgramFiles} 'nodejs\npx.cmd'
+$DshHome = if ([string]::IsNullOrWhiteSpace($env:DSH_HOME)) {
+    Join-Path $env:USERPROFILE '.dsh'
+} else {
+    $env:DSH_HOME
+}
+$LauncherPath = Join-Path $DshHome 'profiles\web\dsh-launch-web.ps1'
 
 function Write-Log {
     param([string]$Message)
@@ -70,7 +74,7 @@ function Stop-DshWeb {
 
     $dshProcesses = @(Get-DshWebProcesses -Snapshot $Snapshot)
     if ($dshProcesses.Count -eq 0) {
-        Write-Log 'No existing DSH Web process matched the npx command line.'
+        Write-Log 'No existing DSH Web process matched the managed launcher command line.'
         return
     }
 
@@ -114,25 +118,61 @@ function Test-DshReady {
     }
 }
 
+function Show-ErrorBalloon {
+    param([string]$Text)
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $notify = New-Object System.Windows.Forms.NotifyIcon
+        $notify.Icon = [System.Drawing.SystemIcons]::Error
+        $notify.Visible = $true
+        $notify.ShowBalloonTip(10000, 'DSH Web', $Text, [System.Windows.Forms.ToolTipIcon]::Error)
+        Start-Sleep -Seconds 6
+        $notify.Dispose()
+    } catch {}
+}
+
+function Wait-PortFree {
+    param([int]$Port, [int]$TimeoutMs = 15000)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+        $inUse = netstat -ano 2>$null | Select-String ":$Port\s" | Select-String 'LISTENING|ESTABLISHED|TIME_WAIT'
+        if (-not $inUse -or $inUse.Count -eq 0) {
+            Write-Log "Port $Port is free."
+            return
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Log "Warning: port $Port still has residual connections after ${TimeoutMs}ms, proceeding anyway."
+}
+
 try {
     Write-Log 'Starting silent DSH Web restart.'
 
-    if (-not (Test-Path -LiteralPath $NpxPath)) {
-        $npxCommand = Get-Command npx.cmd -ErrorAction Stop
-        $NpxPath = $npxCommand.Path
+    if (-not (Test-Path -LiteralPath $LauncherPath)) {
+        throw "Managed DSH launcher not found: $LauncherPath"
     }
 
     Stop-DshWeb -Snapshot (Get-ProcessSnapshot)
 
-    $launchProcess = Start-Process -FilePath $NpxPath `
-        -ArgumentList @('@deepseek-ai/dsh', 'web', '--no-open') `
-        -WorkingDirectory $WorkingDirectory `
-        -WindowStyle Hidden `
-        -PassThru
-    Write-Log ("Started npx DSH Web process with launcher PID {0}." -f $launchProcess.Id)
+    # Wait for port 3080 to be fully released before starting the new process
+    Wait-PortFree -Port 3080
+
+    # Use WMI Win32_Process.Create to launch a fully detached process that is
+    # not part of this process's Windows Job Object. This prevents Windows from
+    # killing the DSH Web node process when the shortcut's shell process exits.
+    $launcherDir = Split-Path -Parent $LauncherPath
+    $cmdLine = "powershell.exe -NoProfile -WindowStyle Hidden -File `"$LauncherPath`""
+    $startInfo = ([wmiclass]"Win32_ProcessStartup").CreateInstance()
+    $startInfo.ShowWindow = 0  # SW_HIDE
+    $result = ([wmiclass]"Win32_Process").Create($cmdLine, $launcherDir, $startInfo)
+    if ($result.ReturnValue -ne 0) {
+        throw "WMI Win32_Process.Create failed with return value $($result.ReturnValue)"
+    }
+    $launchPid = $result.ProcessId
+    Write-Log ("Started managed DSH Web process with launcher PID {0} (detached via WMI)." -f $launchPid)
 
     $ready = $false
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    for ($attempt = 0; $attempt -lt 90; $attempt++) {
         if (Test-DshReady) {
             $ready = $true
             break
@@ -141,7 +181,7 @@ try {
     }
 
     if (-not $ready) {
-        throw "DSH Web did not become ready at $DshUrl. See $LogPath"
+        throw "DSH Web did not become ready at $DshUrl within 45s. See $LogPath"
     }
 
     Write-Log 'DSH Web is ready; opening the local page.'
@@ -150,5 +190,6 @@ try {
     exit 0
 } catch {
     Write-Log ("ERROR: {0}" -f $_.Exception.Message)
+    Show-ErrorBalloon $_.Exception.Message
     exit 1
 }

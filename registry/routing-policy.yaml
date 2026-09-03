@@ -16,7 +16,7 @@ rules:
     evidence: ".agent-presets/cc/agent.cordis.yml row tool-subagent-fork"
   compaction_summary:
     provider: cpa
-    model: gemini-3.7-flash-high
+    model: gemini-3.8-flash-high
     evidence: ".agent-presets/cc/agent.cordis.yml row compaction-basic"
   broker_preferences:
     coding: [ cpa, codex_cli ]
