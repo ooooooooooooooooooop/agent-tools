@@ -112,3 +112,12 @@ python scripts\sync_skills.py --destination "%USERPROFILE%\.dsh\skills" --profil
 - ✅ 设备路径模板化：`sync_dsh_config.py --template` 处理
 - ✅ 不删目标额外文件：`sync_skills.py` 和 `sync_dsh_config.py` 都遵守
 - ✅ SHA-256 校验：export 记录，apply 后验，模板化文件只验存在性
+
+## Canonical writer provenance（2026-09-03）
+
+canonical 写入必须能从 actor/task/run/thread 追到进程 PID/PPID/启动时间、entrypoint、mutation lease、commit、
+receipt 和 push receipt。receipt 固定记录 `base_head / result_head / remote_before / remote_after / owned_scope /
+changed_files / push_target / mutation_lease_id` 等字段；未知值写 `UNKNOWN`。Frequent、Sync-Check 与 sync mutation
+按上次 audited HEAD 检查新 commit，无有效 receipt 就记录
+`UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION` 并转人工 REVIEW，禁止 reset/revert。现有历史 HEAD 若无 receipt
+只标记 `LEGACY_UNATTRIBUTED_COMMIT`，不补造历史证据。

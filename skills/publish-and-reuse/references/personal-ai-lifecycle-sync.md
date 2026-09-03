@@ -266,3 +266,32 @@ restart, or machine restore:
 The implementation entrypoints are `scripts/personal_ai_sync.py` (`CanonicalMutationLock`,
 `commit_owned_files`, and the locked plan executor). The contract deliberately does not expand raw Git permissions
 for arbitrary agents; unproven raw writers remain a review item until they are routed through this entrypoint.
+
+## 20. Canonical Writer Provenance and Commit Audit (2026-09-03)
+
+Every future canonical mutation receipt is a machine-local record outside Git. Its required fields are:
+`schema`, `timestamp`, `repo`, `actor`, `actor_type`, `task_id`, `run_id`, `thread_id`, `pid`, `ppid`,
+`process_start_time`, `entrypoint`, `operation`, `base_head`, `result_head`, `remote_before`, `remote_after`,
+`owned_scope`, `changed_files`, `commit`, `push_target`, and `mutation_lease_id`. A field that the runtime cannot
+reliably observe is recorded as `UNKNOWN`; it is never inferred from commit author, prompt text, or timing alone.
+
+The provenance chain is:
+
+```text
+actor → task/run/thread → process(PID/PPID/start) → mutation lease → commit → receipt → push receipt
+```
+
+`commit_owned_files`, locked pull/merge, and explicit push write the receipt after the Git operation and validate the
+commit linkage. Push receipts additionally require `remote_before`, `remote_after`, and `push_target`. A receipt is
+valid only when its schema, repository, canonical ownership, scope, result, and commit linkage all match; a legacy
+receipt without the provenance fields is not evidence for a post-contract push.
+
+`PersonalAI-Governance-Frequent`, `PersonalAI-Sync-Check`, and every `personal_ai_sync` mutation audit new commits
+since the last audited HEAD. A new commit without a valid receipt is recorded as
+`UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION` with commit timestamp, author, affected files, previous HEAD, and
+current HEAD, and the audit stops at `REVIEW_ONLY_NO_RESET_NO_REVERT`. It never resets, reverts, force-pushes, or
+rewrites the foreign commit. The first audit baseline may classify an existing no-receipt HEAD as
+`LEGACY_UNATTRIBUTED_COMMIT`; that classification is historical evidence, not a forged receipt.
+
+Audit state and events remain machine-local under `~/.dsh/.personal-ai-mutation/provenance-audit/`. The audit is
+observational and introduces no hook, ACL, daemon, scheduler, model, provider, or routing change.
