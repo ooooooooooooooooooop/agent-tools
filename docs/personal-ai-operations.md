@@ -44,6 +44,21 @@ python C:\Users\admin\Desktop\skills\scripts\governance\gov_status.py       # �
 - **Privacy blocker**（如 NOVEL_REPO_DURABILITY）：有意不 push，保护隐私优先。需要时走 §9 的 resolution plan。
 - **Actual infrastructure failure**：`gov_status.py` 的 Harnesses/Control Plane 变 DEGRADED 且带具体 file/field——这才是要修的。
 
+## 5.1 Automation result semantics（2026-09-03）
+
+治理检查的子进程退出码保留原有含义：非零可以表示 DRIFT、RPO BREACHED、provider 不可达或其他治理 finding，
+不自动等价于 runner 没有执行。Windows Task Scheduler 使用 `scripts/governance/runner_adapter.py` 作为边界，
+记录两个独立维度：
+
+| 字段 | 含义 |
+|---|---|
+| `execution_status` | `SUCCESS` 表示所有必需检查完成且日志、receipt、ledger 证据已写入；`FAILED`、`TIMEOUT`、`ENVIRONMENT_ERROR`、`ENTRYPOINT_ERROR`、`EVIDENCE_WRITE_ERROR` 表示执行完整性失败 |
+| `governance_status` | `PASS`、`REVIEW`、`WARN`、`DEGRADED`、`BLOCKED`，表示检查发现，不表示 runner 崩溃 |
+| scheduler process exit | 仅 execution failure 返回非零；完成但有 governance finding 的 Frequent/Weekly 返回 0，原始 child exit 和 finding 保存在 receipt/log/ledger |
+
+`personal_ai_sync.py check` 的直接 CLI 契约仍是 `PASS=0`、`REVIEW=1`、`BLOCKED=2`；`run_sync_check.ps1` 只在
+Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` only，不执行 pull/push/sync/resolve。
+
 ## 6. Proposals —— 怎么审
 
 所有治理提案在：`C:\Users\admin\.dsh\.evolution-inbox\proposals\gov-*.json`
