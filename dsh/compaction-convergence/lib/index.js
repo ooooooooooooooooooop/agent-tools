@@ -797,6 +797,10 @@ const modelPolicy = z.object({
 * token meter.
 */
 var BasicCompactionEngine = class extends CompactionEngine {
+	// NOTE: the vendor base class pins the registered name via
+	// `super(ctx, "compaction")`, which wins over any static `provide` here.
+	// Sibling plugins (model-switch-controller) therefore reuse this engine via
+	// ctx.get("compaction") — one owner, never a second compaction worker.
 	static inject = [
 		"llm",
 		"tokenMeter",

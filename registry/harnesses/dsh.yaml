@@ -135,7 +135,7 @@ runtime_composition:
           tailChars: 1024
       - id: compaction-basic-convergence
         package: '@deepseek-ai/dsh-compaction-basic'
-        version: 0.1.1-rc.2+pressure.2
+        version: 0.1.1-rc.2+pressure.4
         source_relative: dsh/compaction-convergence
         plugin_directory: dsh-compaction-convergence
         entry_relative: lib/index.js
@@ -154,6 +154,18 @@ runtime_composition:
         config:
           archiveThresholdTokens: 800000
           sidecarDir: ./.dsh-context-lifecycle
+      - id: model-switch-controller
+        package: '@deepseek-ai/dsh-model-switch-controller'
+        version: 0.1.1-rc.2+switch.2
+        source_relative: dsh/model-switch-controller
+        plugin_directory: dsh-model-switch-controller
+        entry_relative: lib/index.js
+        config:
+          safetyMargin: 16384
+          requiredOutputBudget: 65536
+          inputMultiplier: 1.08
+          conservativeFallbackLimit: 262144
+          maxCompactionAttempts: 2
       - id: workflow-model-preflight-gate
         package: '@deepseek-ai/dsh-workflow-model-preflight-gate'
         version: 0.1.1-rc.2+workflow.1

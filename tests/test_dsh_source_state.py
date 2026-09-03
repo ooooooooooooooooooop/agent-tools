@@ -161,11 +161,19 @@ class DshSourceStateMatrixTests(unittest.TestCase):
 
         overlays = []
         for order, plugin in enumerate(cfg["managed_rows"]["plugins"], start=1):
-            source = REPO / plugin["source_relative"] / plugin["entry_relative"]
+            source_root = REPO / plugin["source_relative"]
+            source = source_root / plugin["entry_relative"]
             destination = profile / "plugins" / plugin["plugin_directory"] / plugin["entry_relative"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
             source_hash = dsh_runtime.sha256_file(source)
+            # Mirror the production overlay: ship every manifest-listed file so
+            # per-file inspect verification sees no drift.
+            pkg = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
+            for rel in dsh_runtime._shipped_files(plugin, pkg):
+                dst = profile / "plugins" / plugin["plugin_directory"] / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_root / rel, dst)
             row = {
                 "id": plugin["id"], "package": plugin["package"],
                 "version": plugin["version"], "loadOrder": order,

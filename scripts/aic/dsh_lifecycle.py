@@ -328,6 +328,7 @@ def run_live_smoke(home: Path | None = None, base_url: str = "http://127.0.0.1:3
         "dsh-tool-result-pruner-pressure-guard",
         "dsh-compaction-convergence",
         "dsh-context-lifecycle",
+        "dsh-model-switch-controller",
         "dsh-workflow-model-preflight-gate",
         "dsh-autonomous-execution-governor",
     ]

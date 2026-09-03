@@ -792,6 +792,24 @@ def _copy_ui(base_root: Path, client: Path, web_dist: Path) -> tuple[Path, Path,
     return client_dest, frontend_dest, sha256_tree(frontend_dest)
 
 
+def _shipped_files(plugin: dict[str, Any], source_package: dict[str, Any]) -> list[str]:
+    """Ordered unique file list deployed for an overlay: the manifest, the
+    load entry, and (npm pack semantics) every file the package declares.
+    Declared entries may be glob patterns (lib/types/**/*.js)."""
+    import glob as _glob
+
+    shipped: list[str] = ["package.json", plugin["entry_relative"]]
+    for rel in source_package.get("files") or []:
+        if any(ch in rel for ch in "*?["):
+            matches = sorted(_glob.glob(str(ROOT / plugin["source_relative"] / rel), recursive=True))
+            shipped.extend(
+                str(Path(m).relative_to(ROOT / plugin["source_relative"])).replace("\\", "/")
+                for m in matches if Path(m).is_file())
+        else:
+            shipped.append(rel)
+    return list(dict.fromkeys(shipped))
+
+
 def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for order, plugin in enumerate(cfg["managed_rows"]["plugins"], start=1):
@@ -800,9 +818,18 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
         destination = stage_profile / "plugins" / plugin["plugin_directory"]
         deployed_entry = destination / plugin["entry_relative"]
         deployed_entry.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_entry, deployed_entry)
-        shutil.copy2(source_root / "package.json", destination / "package.json")
         source_package = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
+        # Multi-file overlays: when the manifest declares a "files" list (npm
+        # pack semantics), ship every listed file, not just the entry. The
+        # entry remains the load/identity anchor.
+        shipped = _shipped_files(plugin, source_package)
+        for rel in shipped:
+            src = source_root / rel
+            if not src.is_file():
+                raise DshCompositionError(f"overlay file missing: {plugin['id']}: {rel}")
+            dst = destination / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
         if source_package.get("name") != plugin["package"] or source_package.get("version") != plugin["version"]:
             raise DshCompositionError(f"overlay package identity mismatch: {plugin['id']}")
         record = {
@@ -815,6 +842,7 @@ def _copy_overlays(stage_profile: Path, cfg: dict[str, Any]) -> list[dict[str, A
             "deploymentRelative": str(Path(cfg["profile"]["relative_to_dsh_home"]) / "plugins" /
                                         plugin["plugin_directory"] / plugin["entry_relative"]).replace("\\", "/"),
             "deploymentSha256": sha256_file(deployed_entry),
+            "files": [{"relative": rel, "sha256": sha256_file(destination / rel)} for rel in shipped],
         }
         if plugin["id"] == "compaction-basic-convergence":
             marker = {
@@ -998,6 +1026,24 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             finding("DEPLOYMENT_DRIFT", plugin["id"], "present", "missing")
         elif sha256_file(dest) != source_hash:
             finding("DEPLOYMENT_DRIFT", plugin["id"], source_hash, sha256_file(dest))
+        # Full shipped-file verification (entry + manifest "files" list): a
+        # missing helper module must surface as drift, not a silent NO_DRIFT.
+        pkg_path = ROOT / plugin["source_relative"] / "package.json"
+        try:
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8")) if pkg_path.is_file() else {}
+        except Exception:
+            pkg = {}
+        plugin_root = profile / "plugins" / plugin["plugin_directory"]
+        for rel in _shipped_files(plugin, pkg):
+            src_f = ROOT / plugin["source_relative"] / rel
+            dst_f = plugin_root / rel
+            if not src_f.is_file():
+                finding("SOURCE_DRIFT", f"{plugin['id']}:{rel}", "present", "missing")
+            elif not dst_f.is_file():
+                finding("DEPLOYMENT_DRIFT", f"{plugin['id']}:{rel}", "present", "missing")
+            elif sha256_file(dst_f) != sha256_file(src_f):
+                finding("DEPLOYMENT_DRIFT", f"{plugin['id']}:{rel}",
+                        sha256_file(src_f), sha256_file(dst_f))
         if plugin["id"] == "compaction-basic-convergence":
             marker_path = dest.parent / ".dsh-convergence.json"
             expected_marker = deployed.get(plugin["id"], {}).get("markerSha256")
