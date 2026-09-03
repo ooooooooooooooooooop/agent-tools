@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -177,7 +178,15 @@ def frequent_specs() -> list[dict[str, Any]]:
     py = sys.executable
     aic = str(ROOT / "scripts" / "aic" / "aic.py")
     gov = str(ROOT / "scripts" / "governance")
+    personal = str(ROOT / "scripts" / "personal_ai_sync.py")
     specs = [
+        _spec("canonical_writer_provenance", [py, personal, "audit", "--json"],
+              r'"result"\s*:\s*"(?:PASS|REVIEW)"', expected={0, 1, 3},
+              subsystem="canonical-writer-provenance", classification="REAL_ACTION_REQUIRED",
+              nonzero_status="REVIEW", review_patterns=[
+                  r'"result"\s*:\s*"REVIEW"',
+                  r"UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION",
+              ], timeout=600),
         _spec("aic.validate", [py, aic, "validate"], r"\bVALID\b|\bINVALID:",
               subsystem="control-plane", classification="UNKNOWN"),
     ]
@@ -240,7 +249,8 @@ def sync_specs() -> list[dict[str, Any]]:
     }]
 
 
-def _step_result(spec: dict[str, Any], log_path: Path, evidence_errors: list[str]) -> dict[str, Any]:
+def _step_result(spec: dict[str, Any], log_path: Path, evidence_errors: list[str],
+                 env: dict[str, str] | None = None) -> dict[str, Any]:
     started = time.monotonic()
     command = [str(x) for x in spec["argv"]]
     try:
@@ -252,6 +262,7 @@ def _step_result(spec: dict[str, Any], log_path: Path, evidence_errors: list[str
             encoding="utf-8",
             errors="replace",
             timeout=spec["timeout"],
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         output = _redact((exc.stdout or "") + (exc.stderr or ""))
@@ -370,9 +381,24 @@ def run_lane(lane: str) -> int:
         print(f"EVIDENCE_WRITE_ERROR: cannot initialize runner evidence: {exc}")
         return EXIT_CODES["EVIDENCE_WRITE_ERROR"]
 
+    run_id = uuid.uuid4().hex
+    task_ids = {
+        "frequent": "PersonalAI-Governance-Frequent",
+        "weekly": "PersonalAI-Governance-Weekly",
+        "sync-check": "PersonalAI-Sync-Check",
+    }
+    child_env = os.environ.copy()
+    child_env.update({
+        "PERSONAL_AI_RUN_ID": run_id,
+        "PERSONAL_AI_TASK_ID": os.environ.get("PERSONAL_AI_TASK_ID", task_ids[lane]),
+        "PERSONAL_AI_TRIGGER": os.environ.get("PERSONAL_AI_TRIGGER", "windows-task-scheduler"),
+        "PERSONAL_AI_ACTOR": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-scheduler"),
+        "PERSONAL_AI_ACTOR_TYPE": os.environ.get("PERSONAL_AI_ACTOR_TYPE", "automated"),
+        "PERSONAL_AI_ENTRYPOINT": str(Path(__file__).resolve()),
+    })
     steps = []
     for spec in specs:
-        step = _step_result(spec, log_path, evidence_errors)
+        step = _step_result(spec, log_path, evidence_errors, env=child_env)
         steps.append(step)
         _append_log(log_path, f"STEP {spec['name']} execution={step['execution_status']} "
                              f"domain={step['domain_status']} child_rc={step['process_exit']}", evidence_errors)
@@ -421,6 +447,13 @@ def run_lane(lane: str) -> int:
         "runner": str(Path(__file__)),
         "root": str(ROOT),
         "python": sys.executable,
+        "run_id": run_id,
+        "task_id": child_env["PERSONAL_AI_TASK_ID"],
+        "actor": child_env["PERSONAL_AI_ACTOR"],
+        "actor_type": child_env["PERSONAL_AI_ACTOR_TYPE"],
+        "entrypoint": str(Path(__file__).resolve()),
+        "pid": os.getpid(),
+        "ppid": os.getppid() if hasattr(os, "getppid") else "UNKNOWN",
         "started_at": started_at,
         "finished_at": finished_at,
         "execution_status": execution_status,

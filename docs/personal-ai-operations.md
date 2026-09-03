@@ -116,7 +116,23 @@ lease，再重新检查工作区。只要 working tree 不是 `CLEAN`，自动 p
 `~/.dsh/.personal-ai-mutation/receipts/`，不写入 canonical repo。`SYNC` 不隐式 commit/push；只有显式
 `push` 模式且所有 ahead commits 都有有效 ownership receipt 才允许 push。临时/测试 restore 源不得取得
 canonical writer identity，也不得注册 live Scheduler。完整协议以已加载的
-`skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md` §19 为准。
+`skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md` §19–§20 为准。
+
+### 11.0.1 Canonical Writer Provenance
+
+从本轮起，所有新 canonical mutation receipt 还必须带上：
+`schema / timestamp / repo / actor / actor_type / task_id / run_id / thread_id / pid / ppid /
+process_start_time / entrypoint / operation / base_head / result_head / remote_before / remote_after /
+owned_scope / changed_files / commit / push_target / mutation_lease_id`。无法可靠观察的字段写 `UNKNOWN`，不从
+commit author、时间相近或 prompt 反推。
+
+`commit_owned_files`、锁内 pull/merge、显式 push 都按
+`actor → task/run/thread → process → lease → commit → receipt → push receipt` 写机器本地证据。
+Frequent、Sync-Check 和 sync mutation 每次检查上次 audited HEAD 之后的新 commit；没有有效 receipt 的新 commit
+记录为 `UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION`，包含 commit 时间、author、affected files、previous /
+current HEAD，并只转 `REVIEW`，不 reset/revert/force-push。首次建立基线时，已有的无 receipt HEAD 只能标记为
+`LEGACY_UNATTRIBUTED_COMMIT`，不得补造 receipt。审计状态位于
+`~/.dsh/.personal-ai-mutation/provenance-audit/`，不进入 canonical Git，也不新增 hook、ACL、daemon 或 scheduler。
 
 未来一切基础设施变化 = 独立 change，走：
 

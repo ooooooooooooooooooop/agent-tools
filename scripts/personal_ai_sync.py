@@ -22,7 +22,7 @@ import re
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -38,6 +38,17 @@ MUTATION_LOCK_ROOT = Path.home() / ".dsh" / ".personal-ai-mutation"
 MUTATION_LOCK_STALE_SECONDS = 6 * 60 * 60
 MUTATION_LOCK_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_LOCK_V1"
 MUTATION_RECEIPT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_RECEIPT_V1"
+MUTATION_AUDIT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_AUDIT_V1"
+PROVENANCE_UNKNOWN = "UNKNOWN"
+UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION = \
+    "UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION"
+LEGACY_UNATTRIBUTED_COMMIT = "LEGACY_UNATTRIBUTED_COMMIT"
+PROVENANCE_REQUIRED_FIELDS = (
+    "schema", "timestamp", "repo", "actor", "actor_type", "task_id", "run_id",
+    "thread_id", "pid", "ppid", "process_start_time", "entrypoint", "operation",
+    "base_head", "result_head", "remote_before", "remote_after", "owned_scope",
+    "changed_files", "commit", "push_target", "mutation_lease_id",
+)
 
 
 class MutationOwnershipError(RuntimeError):
@@ -87,6 +98,81 @@ def _parse_timestamp(value: object) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _provenance_value(value: object) -> object:
+    """Keep missing provenance explicit instead of silently filling it with a guess."""
+    return PROVENANCE_UNKNOWN if value is None or value == "" else value
+
+
+def _process_start_time() -> str:
+    """Return the current Windows process creation time when the OS exposes it."""
+    if os.name != "nt":
+        return PROVENANCE_UNKNOWN
+    handle = None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FileTime(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(FileTime), ctypes.POINTER(FileTime),
+            ctypes.POINTER(FileTime), ctypes.POINTER(FileTime),
+        ]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(0x1000, False, os.getpid())
+        if not handle:
+            return PROVENANCE_UNKNOWN
+        creation = FileTime()
+        exit_time = FileTime()
+        kernel_time = FileTime()
+        user_time = FileTime()
+        if not kernel32.GetProcessTimes(
+                handle, ctypes.byref(creation), ctypes.byref(exit_time),
+                ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            return PROVENANCE_UNKNOWN
+        ticks = (int(creation.high) << 32) | int(creation.low)
+        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        return (epoch + timedelta(microseconds=ticks // 10)).isoformat()
+    except Exception:  # noqa: BLE001 - provenance must degrade to explicit UNKNOWN
+        return PROVENANCE_UNKNOWN
+    finally:
+        if handle:
+            try:
+                import ctypes
+                ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
+            except Exception:  # noqa: BLE001 - best-effort handle cleanup
+                pass
+
+
+def _default_entrypoint() -> str:
+    value = os.environ.get("PERSONAL_AI_ENTRYPOINT")
+    if value:
+        return value
+    try:
+        return str(Path(sys.argv[0]).resolve(strict=False))
+    except (IndexError, OSError):
+        return PROVENANCE_UNKNOWN
+
+
+def _default_thread_id() -> str:
+    return os.environ.get("PERSONAL_AI_THREAD_ID") or os.environ.get("CODEX_THREAD_ID") \
+        or PROVENANCE_UNKNOWN
+
+
+def _default_actor_type() -> str:
+    return os.environ.get("PERSONAL_AI_ACTOR_TYPE") or (
+        "automated" if os.environ.get("PERSONAL_AI_TASK_ID") else "manual"
+    )
+
+
 def _write_json_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -110,6 +196,11 @@ class CanonicalMutationLock:
         actor: str,
         trigger: str,
         task_id: str | None = None,
+        actor_type: str | None = None,
+        thread_id: str | None = None,
+        entrypoint: str | None = None,
+        process_start_time: str | None = None,
+        mutation_lease_id: str | None = None,
         operation: str,
         scope: list[str] | None = None,
         run_id: str | None = None,
@@ -122,9 +213,14 @@ class CanonicalMutationLock:
         self.actor = actor
         self.trigger = trigger
         self.task_id = task_id or "personal-ai-sync"
+        self.actor_type = actor_type or _default_actor_type()
+        self.thread_id = thread_id or _default_thread_id()
+        self.entrypoint = entrypoint or _default_entrypoint()
+        self.process_start_time = process_start_time or _process_start_time()
         self.operation = operation
         self.scope = sorted(scope or [])
         self.run_id = run_id or uuid.uuid4().hex
+        self.mutation_lease_id = mutation_lease_id or f"lease-{uuid.uuid4().hex}"
         self.lock_root = (lock_root or MUTATION_LOCK_ROOT).resolve(strict=False)
         self.receipt_root = (receipt_root or (self.lock_root / "receipts")).resolve(strict=False)
         self.canonical_root = canonical_root
@@ -134,9 +230,15 @@ class CanonicalMutationLock:
         self.metadata = {
             "schema": MUTATION_LOCK_SCHEMA,
             "actor": actor,
+            "actor_type": self.actor_type,
             "pid": os.getpid(),
+            "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
+            "process_start_time": self.process_start_time,
+            "entrypoint": self.entrypoint,
+            "thread_id": self.thread_id,
             "run_id": self.run_id,
             "task_id": self.task_id,
+            "mutation_lease_id": self.mutation_lease_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "operation": operation,
             "repo": str(self.repo),
@@ -242,24 +344,58 @@ def write_mutation_receipt(
     *,
     base: str,
     result: str,
-    staged: list[str],
-    changed: list[str],
-    commit: str,
+    staged: list[str] | None = None,
+    changed: list[str] | None = None,
+    commit: str = PROVENANCE_UNKNOWN,
+    base_head: str | None = None,
+    result_head: str | None = None,
+    remote_before: str | None = None,
+    remote_after: str | None = None,
+    push_target: str | None = None,
+    operation: str | None = None,
 ) -> Path:
-    """Persist mutation evidence outside the canonical checkout."""
+    """Persist mutation evidence and its process-to-commit provenance outside Git."""
+    timestamp = datetime.now(timezone.utc).isoformat()
+    staged = sorted(staged or [])
+    changed = sorted(changed or [])
+    commit = str(_provenance_value(commit))
+    base_head = str(_provenance_value(base_head if base_head is not None else base))
+    result_head = str(_provenance_value(result_head if result_head is not None else commit))
+    remote_before = str(_provenance_value(remote_before))
+    remote_after = str(_provenance_value(remote_after))
+    push_target = str(_provenance_value(push_target))
+    operation = str(_provenance_value(operation if operation is not None else lock.operation))
+    ppid = lock.metadata.get("ppid", PROVENANCE_UNKNOWN)
     payload = {
         "schema": MUTATION_RECEIPT_SCHEMA,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "provenance_schema": MUTATION_AUDIT_SCHEMA,
+        "timestamp": timestamp,
+        "created_at": timestamp,
+        "repo": str(lock.repo),
         "actor": lock.actor,
+        "actor_type": lock.actor_type,
         "trigger": lock.trigger,
         "task_id": lock.task_id,
         "run_id": lock.run_id,
+        "thread_id": lock.thread_id,
+        "pid": lock.metadata.get("pid", PROVENANCE_UNKNOWN),
+        "ppid": ppid,
+        "process_start_time": lock.process_start_time,
+        "entrypoint": lock.entrypoint,
+        "operation": operation,
+        "base_head": base_head,
+        "result_head": result_head,
+        "remote_before": remote_before,
+        "remote_after": remote_after,
+        "owned_scope": list(lock.scope),
+        "changed_files": changed,
+        "commit": commit,
+        "push_target": push_target,
+        "mutation_lease_id": lock.mutation_lease_id,
         "base": base,
         "result": result,
-        "staged": sorted(staged),
-        "changed": sorted(changed),
-        "commit": commit,
-        "repo": str(lock.repo),
+        "staged": staged,
+        "changed": changed,
         "ownership": {
             "canonical": True,
             "repo": str(lock.repo),
@@ -268,7 +404,10 @@ def write_mutation_receipt(
             "lock_run_id": lock.run_id,
         },
     }
-    path = lock.receipt_root / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{lock.run_id}.json"
+    path = lock.receipt_root / (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+        f"{lock.run_id}-{uuid.uuid4().hex[:8]}.json"
+    )
     _write_json_atomic(path, payload)
     return path
 
@@ -678,6 +817,10 @@ def _mutation_lock_for_plane(
         actor=results.get("actor", "personal-ai-sync"),
         trigger=results.get("trigger", "personal_ai_sync"),
         task_id=results.get("task_id", "personal-ai-sync"),
+        actor_type=results.get("actor_type"),
+        thread_id=results.get("thread_id"),
+        entrypoint=results.get("entrypoint"),
+        process_start_time=results.get("process_start_time"),
         run_id=results.get("run_id"),
         operation=operation,
         scope=scope,
@@ -686,29 +829,328 @@ def _mutation_lock_for_plane(
     )
 
 
-def _owned_commit_receipt(repo: Path, commit: str, receipt_root: Path | None = None) -> bool:
-    root = receipt_root or MUTATION_LOCK_ROOT / "receipts"
-    if not root.is_dir():
+def _receipt_scope_is_valid(receipt: dict) -> bool:
+    changed = receipt.get("changed_files")
+    scope = receipt.get("owned_scope")
+    if not isinstance(changed, list) or not isinstance(scope, list):
         return False
-    for path in root.glob("*.json"):
+    scope_values = [str(item) for item in scope]
+    if any(item in ("git-history", "repository") for item in scope_values):
+        return True
+    return all(_path_in_scope(str(path), scope_values) for path in changed)
+
+
+def _receipt_structurally_valid(
+    receipt: object,
+    repo: Path,
+    *,
+    operation: str | None = None,
+) -> bool:
+    if not isinstance(receipt, dict):
+        return False
+    if receipt.get("schema") != MUTATION_RECEIPT_SCHEMA \
+            or receipt.get("provenance_schema") != MUTATION_AUDIT_SCHEMA:
+        return False
+    if any(field not in receipt or receipt.get(field) in (None, "")
+           for field in PROVENANCE_REQUIRED_FIELDS):
+        return False
+    recorded_repo = receipt.get("repo")
+    if not isinstance(recorded_repo, str) or _path_key(Path(recorded_repo)) != _path_key(repo):
+        return False
+    ownership = receipt.get("ownership")
+    if not isinstance(ownership, dict) or ownership.get("canonical") is not True:
+        return False
+    if receipt.get("result") not in {
+            "COMMITTED", "MERGED", "PULLED", "PUSHED", "SCOPE_VIOLATION"}:
+        return False
+    if not _receipt_scope_is_valid(receipt):
+        return False
+    if operation is not None and receipt.get("operation") != operation:
+        return False
+    if receipt.get("result") == "PUSHED":
+        if receipt.get("remote_before") == PROVENANCE_UNKNOWN \
+                or receipt.get("remote_after") == PROVENANCE_UNKNOWN \
+                or receipt.get("push_target") == PROVENANCE_UNKNOWN:
+            return False
+    return True
+
+
+def _load_mutation_receipts(root: Path) -> list[tuple[Path, dict]]:
+    if not root.is_dir():
+        return []
+    loaded = []
+    for path in sorted(root.glob("*.json")):
         try:
-            receipt = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             continue
-        ownership = receipt.get("ownership") or {}
-        recorded_repo = receipt.get("repo")
-        if (receipt.get("schema") == MUTATION_RECEIPT_SCHEMA
+        if isinstance(value, dict):
+            loaded.append((path, value))
+    return loaded
+
+
+def _receipt_covers_commit(repo: Path, receipt: dict, commit: str) -> bool:
+    if not _receipt_structurally_valid(receipt, repo):
+        return False
+    if receipt.get("commit") == commit:
+        return receipt.get("result") in {"COMMITTED", "MERGED", "PULLED", "PUSHED"}
+    if receipt.get("result") != "PULLED":
+        return False
+    base = receipt.get("base_head")
+    result = receipt.get("result_head")
+    if base in (None, "", PROVENANCE_UNKNOWN) or result in (None, "", PROVENANCE_UNKNOWN):
+        return False
+    base_rc, _ = git(repo, "merge-base", "--is-ancestor", str(base), commit)
+    result_rc, _ = git(repo, "merge-base", "--is-ancestor", commit, str(result))
+    return base_rc == 0 and result_rc == 0
+
+
+def validate_mutation_receipt(
+    receipt_path: Path | str,
+    repo: Path,
+    *,
+    commit: str | None = None,
+    operation: str | None = None,
+) -> bool:
+    """Validate structural provenance and optional commit/push linkage."""
+    try:
+        value = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return False
+    if not _receipt_structurally_valid(value, repo, operation=operation):
+        return False
+    return commit is None or _receipt_covers_commit(repo, value, commit)
+
+
+def _commit_affected_files(repo: Path, commit: str) -> list[str]:
+    rc, out = git(repo, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit)
+    return sorted({line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()}) \
+        if rc == 0 else []
+
+
+def _commit_provenance_record(repo: Path, commit: str) -> dict:
+    record = {
+        "commit": commit,
+        "timestamp": PROVENANCE_UNKNOWN,
+        "author": PROVENANCE_UNKNOWN,
+        "affected_files": _commit_affected_files(repo, commit),
+    }
+    rc, out = git(repo, "show", "-s", "--format=%H%x00%ct%x00%an%x00%ae", commit)
+    if rc != 0:
+        record["error"] = out[-300:] if out else "cannot read commit metadata"
+        return record
+    parts = out.strip().split("\x00")
+    if len(parts) >= 4:
+        record["commit"] = parts[0] or commit
+        try:
+            record["timestamp"] = datetime.fromtimestamp(
+                int(parts[1]), tz=timezone.utc).isoformat()
+        except (TypeError, ValueError, OverflowError):
+            record["timestamp"] = PROVENANCE_UNKNOWN
+        record["author"] = {"name": parts[2], "email": parts[3]}
+    return record
+
+
+def inspect_commit_provenance(
+    repo: Path,
+    commit: str | None = None,
+    *,
+    receipt_root: Path | None = None,
+) -> dict:
+    """Classify one existing commit without manufacturing historical evidence."""
+    repo = repo.resolve(strict=False)
+    if commit is None:
+        rc, out = git(repo, "rev-parse", "HEAD")
+        if rc != 0:
+            return {"status": PROVENANCE_UNKNOWN, "error": out}
+        commit = out.strip()
+    root = receipt_root or (_mutation_lock_root_for_repo(repo) / "receipts")
+    matching = [str(path) for path, receipt in _load_mutation_receipts(root)
+                if _receipt_covers_commit(repo, receipt, commit)]
+    record = _commit_provenance_record(repo, commit)
+    record["status"] = "GOVERNED" if matching else LEGACY_UNATTRIBUTED_COMMIT
+    record["receipt_paths"] = matching
+    return record
+
+
+def _provenance_audit_root_for_repo(repo: Path) -> Path:
+    return _mutation_lock_root_for_repo(repo) / "provenance-audit"
+
+
+def _provenance_state_path(repo: Path, audit_root: Path) -> Path:
+    digest = hashlib.sha256(_path_key(repo).encode("utf-8")).hexdigest()[:24]
+    return audit_root / f"{digest}.state.json"
+
+
+def audit_canonical_commits(
+    repo: Path,
+    *,
+    audit_root: Path | None = None,
+    receipt_root: Path | None = None,
+    previous_head: str | None = None,
+    persist: bool = True,
+) -> dict:
+    """Audit new commits and persist review evidence without changing Git state."""
+    repo = repo.resolve(strict=False)
+    audit_root = (audit_root or _provenance_audit_root_for_repo(repo)).resolve(strict=False)
+    receipt_root = (receipt_root or (_mutation_lock_root_for_repo(repo) / "receipts")) \
+        .resolve(strict=False)
+    checked_at = datetime.now(timezone.utc).isoformat()
+    state_path = _provenance_state_path(repo, audit_root)
+    result = {
+        "schema": MUTATION_AUDIT_SCHEMA,
+        "repo": str(repo),
+        "checked_at": checked_at,
+        "state_path": str(state_path),
+        "previous_audited_head": previous_head or PROVENANCE_UNKNOWN,
+        "current_head": PROVENANCE_UNKNOWN,
+        "status": PROVENANCE_UNKNOWN,
+        "result": PROVENANCE_UNKNOWN,
+        "new_commits": [],
+        "governed_commits": [],
+        "unauthorized": [],
+        "legacy_unattributed": [],
+    }
+
+    if not (repo / ".git").exists():
+        result["error"] = "not a git repository"
+        return result
+    head_rc, head_out = git(repo, "rev-parse", "HEAD")
+    if head_rc != 0 or not head_out.strip():
+        result["error"] = head_out or "cannot resolve HEAD"
+        return result
+    head = head_out.strip()
+    result["current_head"] = head
+
+    state = {}
+    if previous_head is None and state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            result["error"] = f"audit state unreadable: {exc}"
+            return result
+        previous_head = state.get("last_audited_head")
+    if previous_head in (None, "", PROVENANCE_UNKNOWN):
+        previous_head = None
+    result["previous_audited_head"] = previous_head or PROVENANCE_UNKNOWN
+
+    def persist_state(status: str, audit_result: str, *, event: dict | None = None) -> None:
+        if not persist:
+            return
+        state_payload = {
+            "schema": MUTATION_AUDIT_SCHEMA,
+            "repo": str(repo),
+            "last_audited_head": head,
+            "last_checked_at": checked_at,
+            "last_status": status,
+            "last_result": audit_result,
+            "last_unauthorized": result["unauthorized"],
+        }
+        _write_json_atomic(state_path, state_payload)
+        if event is not None:
+            event_path = audit_root / "events" / (
+                f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+                f"{uuid.uuid4().hex}.json"
+            )
+            _write_json_atomic(event_path, event)
+
+    if previous_head is None:
+        legacy = inspect_commit_provenance(repo, head, receipt_root=receipt_root)
+        if legacy.get("status") == LEGACY_UNATTRIBUTED_COMMIT:
+            legacy["classification"] = LEGACY_UNATTRIBUTED_COMMIT
+            result["legacy_unattributed"] = [legacy]
+        result["status"] = "BASELINE_INITIALIZED"
+        result["result"] = "PASS"
+        try:
+            persist_state(result["status"], result["result"])
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            result["status"] = PROVENANCE_UNKNOWN
+            result["result"] = PROVENANCE_UNKNOWN
+            result["error"] = f"audit evidence write failed: {exc}"
+        return result
+
+    if previous_head == head:
+        result["status"] = "NO_CHANGE"
+        result["result"] = "PASS"
+        try:
+            persist_state(result["status"], result["result"])
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            result["status"] = PROVENANCE_UNKNOWN
+            result["result"] = PROVENANCE_UNKNOWN
+            result["error"] = f"audit evidence write failed: {exc}"
+        return result
+
+    ancestor_rc, ancestor_out = git(repo, "merge-base", "--is-ancestor", str(previous_head), head)
+    if ancestor_rc != 0:
+        result["status"] = PROVENANCE_UNKNOWN
+        result["result"] = PROVENANCE_UNKNOWN
+        result["error"] = (
+            "previous audited HEAD is not an ancestor of current HEAD; "
+            f"previous={previous_head} current={head} detail={ancestor_out}"
+        )
+        return result
+
+    commits_rc, commits_out = git(repo, "rev-list", "--reverse", f"{previous_head}..{head}")
+    if commits_rc != 0:
+        result["status"] = PROVENANCE_UNKNOWN
+        result["result"] = PROVENANCE_UNKNOWN
+        result["error"] = commits_out or "cannot enumerate new commits"
+        return result
+
+    receipts = _load_mutation_receipts(receipt_root)
+    unauthorized = []
+    governed = []
+    commits = [line.strip() for line in commits_out.splitlines() if line.strip()]
+    for commit in commits:
+        record = _commit_provenance_record(repo, commit)
+        record["previous_audited_head"] = previous_head
+        record["current_head"] = head
+        covered_by = [str(path) for path, receipt in receipts
+                      if _receipt_covers_commit(repo, receipt, commit)]
+        record["receipt_paths"] = covered_by
+        if covered_by:
+            record["classification"] = "GOVERNED"
+            governed.append(record)
+        else:
+            record["classification"] = UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION
+            unauthorized.append(record)
+    result["new_commits"] = commits
+    result["governed_commits"] = governed
+    result["unauthorized"] = unauthorized
+    if unauthorized:
+        result["status"] = UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION
+        result["result"] = "REVIEW"
+    else:
+        result["status"] = "CLEAN"
+        result["result"] = "PASS"
+    event = None
+    if unauthorized:
+        event = {
+            "schema": MUTATION_AUDIT_SCHEMA,
+            "event_type": UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION,
+            "timestamp": checked_at,
+            "repo": str(repo),
+            "previous_audited_head": previous_head,
+            "current_head": head,
+            "commits": unauthorized,
+            "action": "REVIEW_ONLY_NO_RESET_NO_REVERT",
+        }
+    try:
+        persist_state(result["status"], result["result"], event=event)
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        result["status"] = PROVENANCE_UNKNOWN
+        result["result"] = PROVENANCE_UNKNOWN
+        result["error"] = f"audit evidence write failed: {exc}"
+    return result
+
+
+def _owned_commit_receipt(repo: Path, commit: str, receipt_root: Path | None = None) -> bool:
+    root = receipt_root or MUTATION_LOCK_ROOT / "receipts"
+    for _, receipt in _load_mutation_receipts(root):
+        if (receipt.get("result") in ("COMMITTED", "MERGED")
                 and receipt.get("commit") == commit
-                and isinstance(recorded_repo, str)
-                and recorded_repo
-                and _path_key(Path(recorded_repo)) == _path_key(repo)
-                and receipt.get("result") in ("COMMITTED", "MERGED")
-                and ownership.get("canonical") is True):
-            changed = receipt.get("changed") or []
-            scope = ownership.get("scope") or []
-            if isinstance(changed, list) and isinstance(scope, list) \
-                    and all(_path_in_scope(str(item), [str(x) for x in scope]) for item in changed):
-                return True
+                and _receipt_structurally_valid(receipt, repo)):
+            return True
     return False
 
 
@@ -774,10 +1216,17 @@ def _commit_owned_files_locked(
     changed = changed_paths(lock.repo, f"{base.strip()}..{commit.strip()}")
     if any(not _path_in_scope(path, owned) for path in changed):
         write_mutation_receipt(lock, base=base.strip(), result="SCOPE_VIOLATION",
-                               staged=staged_after, changed=changed, commit=commit.strip())
+                               staged=staged_after, changed=changed, commit=commit.strip(),
+                               base_head=base.strip(), result_head=commit.strip())
         return False, f"ABORT: committed scope violation: {changed}"
-    receipt = write_mutation_receipt(lock, base=base.strip(), result="COMMITTED",
-                                     staged=staged_after, changed=changed, commit=commit.strip())
+    try:
+        receipt = write_mutation_receipt(lock, base=base.strip(), result="COMMITTED",
+                                         staged=staged_after, changed=changed, commit=commit.strip(),
+                                         base_head=base.strip(), result_head=commit.strip())
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        return False, f"COMMITTED_WITHOUT_RECEIPT: {exc}"
+    if not validate_mutation_receipt(receipt, lock.repo, commit=commit.strip()):
+        return False, f"COMMITTED_WITHOUT_VALID_RECEIPT: {receipt}"
     return True, f"committed {commit.strip()} receipt={receipt}"
 
 
@@ -788,6 +1237,11 @@ def commit_owned_files(
     actor: str = "personal-ai-sync",
     trigger: str = "explicit-owned-commit",
     task_id: str = "personal-ai-sync",
+    actor_type: str | None = None,
+    thread_id: str | None = None,
+    entrypoint: str | None = None,
+    process_start_time: str | None = None,
+    run_id: str | None = None,
     operation: str = "owned-commit",
     allow_foreign_dirty: bool = False,
     validate: bool = True,
@@ -809,6 +1263,11 @@ def commit_owned_files(
         actor=actor,
         trigger=trigger,
         task_id=task_id,
+        actor_type=actor_type,
+        thread_id=thread_id,
+        entrypoint=entrypoint,
+        process_start_time=process_start_time,
+        run_id=run_id,
         operation=operation,
         scope=owned,
         lock_root=lock_root,
@@ -893,6 +1352,7 @@ def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
         r["graph_state"] = UNKNOWN
         r["reason"] = f"no origin/{r['branch']}"
         return r
+    r["remote_head"] = remote.strip()
 
     rc, ahead = git(repo, "rev-list", "--count", f"origin/{r['branch']}..HEAD")
     rc2, behind = git(repo, "rev-list", "--count", f"HEAD..origin/{r['branch']}")
@@ -1334,8 +1794,22 @@ def execute_plan(plan: list[dict], classifications: dict,
                     head_rc, head = git(repo, "rev-parse", "HEAD")
                     changed = (changed_paths(repo, f"{base.strip()}..{head.strip()}")
                                if base_rc == 0 and head_rc == 0 else [])
-                    write_mutation_receipt(lock, base=base.strip(), result="PULLED",
-                                           staged=[], changed=changed, commit=head.strip())
+                    receipt = write_mutation_receipt(
+                        lock,
+                        base=base.strip(),
+                        result="PULLED",
+                        staged=[],
+                        changed=changed,
+                        commit=head.strip(),
+                        base_head=base.strip(),
+                        result_head=head.strip(),
+                        remote_before=current.get("remote_head", PROVENANCE_UNKNOWN),
+                        remote_after=head.strip(),
+                    )
+                    if not validate_mutation_receipt(receipt, repo, commit=head.strip()):
+                        review(item, f"PULLED_WITHOUT_VALID_RECEIPT: {receipt}")
+                        continue
+                    item["receipt"] = str(receipt)
                     item["executed"] = True
                     item["state"] = "PULLED"
                     c.update({"graph_state": IN_SYNC, "sync_state": IN_SYNC, "state": IN_SYNC,
@@ -1383,6 +1857,7 @@ def execute_plan(plan: list[dict], classifications: dict,
                         c["sync_state"] = BLOCKED
                         c["state"] = BLOCKED
                         continue
+                    local_base_rc, local_base = git(repo, "rev-parse", "HEAD")
                     base_rc, base = git(repo, "rev-parse", f"origin/{current['branch']}")
                     rc, out = git(repo, "push", "origin", current["branch"])
                     if rc != 0:
@@ -1391,8 +1866,28 @@ def execute_plan(plan: list[dict], classifications: dict,
                     head_rc, head = git(repo, "rev-parse", "HEAD")
                     changed = (changed_paths(repo, f"{base.strip()}..{head.strip()}")
                                if base_rc == 0 and head_rc == 0 else [])
-                    write_mutation_receipt(lock, base=base.strip(), result="PUSHED",
-                                           staged=[], changed=changed, commit=head.strip())
+                    remote_after_rc, remote_after = git(
+                        repo, "rev-parse", f"origin/{current['branch']}"
+                    )
+                    receipt = write_mutation_receipt(
+                        lock,
+                        base=base.strip(),
+                        result="PUSHED",
+                        staged=[],
+                        changed=changed,
+                        commit=head.strip(),
+                        base_head=local_base.strip() if local_base_rc == 0 else PROVENANCE_UNKNOWN,
+                        result_head=head.strip() if head_rc == 0 else PROVENANCE_UNKNOWN,
+                        remote_before=base.strip() if base_rc == 0 else PROVENANCE_UNKNOWN,
+                        remote_after=remote_after.strip() if remote_after_rc == 0 else PROVENANCE_UNKNOWN,
+                        push_target=f"origin/{current['branch']}",
+                        operation="explicit-push",
+                    )
+                    if not validate_mutation_receipt(receipt, repo, commit=head.strip(),
+                                                      operation="explicit-push"):
+                        review(item, f"PUSHED_WITHOUT_VALID_RECEIPT: {receipt}")
+                        continue
+                    item["receipt"] = str(receipt)
                     item["executed"] = True
                     item["state"] = "PUSHED"
                     c.update({"graph_state": IN_SYNC, "sync_state": IN_SYNC, "state": IN_SYNC,
@@ -1522,12 +2017,18 @@ def _handle_state_divergence_locked(item: dict, repo: Path, c: dict,
     changed = changed_paths(repo, f"{base.strip()}..{head.strip()}") if head_rc == 0 else []
     if any(not _path_in_scope(path, ["memory/records/**"]) for path in changed):
         write_mutation_receipt(lock, base=base.strip(), result="SCOPE_VIOLATION",
-                               staged=staged, changed=changed, commit=head.strip())
+                               staged=staged, changed=changed, commit=head.strip(),
+                               base_head=base.strip(), result_head=head.strip())
         item["action"] = "REVIEW"
         item["reason"] = f"ABORT: deterministic merge changed paths outside memory scope: {changed}"
         return
     receipt = write_mutation_receipt(lock, base=base.strip(), result="MERGED",
-                                     staged=staged, changed=changed, commit=head.strip())
+                                     staged=staged, changed=changed, commit=head.strip(),
+                                     base_head=base.strip(), result_head=head.strip())
+    if not validate_mutation_receipt(receipt, repo, commit=head.strip()):
+        item["action"] = "REVIEW"
+        item["reason"] = f"MERGED_WITHOUT_VALID_RECEIPT: {receipt}"
+        return
     item["executed"] = True
     item["state"] = "MERGED"
     item["memory"] = v
@@ -1545,6 +2046,28 @@ def _handle_state_divergence_locked(item: dict, repo: Path, c: dict,
         item["reason"] = "deterministic memory merge committed locally; explicit push mode required"
 
 
+def _audit_classified_repositories(classifications: dict) -> dict:
+    """Audit every repository that the sync run treats as a managed plane."""
+    audits = {}
+    for name, classification in classifications.items():
+        if name != "agent-tools" and name != "personal-ai-state" and not name.startswith("project:"):
+            continue
+        repo = Path(classification.get("path", ""))
+        if not (repo / ".git").exists():
+            continue
+        try:
+            audits[name] = audit_canonical_commits(repo)
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            audits[name] = {
+                "schema": MUTATION_AUDIT_SCHEMA,
+                "repo": str(repo),
+                "status": PROVENANCE_UNKNOWN,
+                "result": PROVENANCE_UNKNOWN,
+                "error": f"provenance audit failed: {exc}",
+            }
+    return audits
+
+
 # --------------------------------------------------------------------- sync
 def run_sync(mode: str, detail: bool = False) -> dict:
     results: dict = {
@@ -1552,9 +2075,15 @@ def run_sync(mode: str, detail: bool = False) -> dict:
         "planes": {},
         "actions": [],
         "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
+        "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
         "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_sync"),
         "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-sync"),
-        "run_id": uuid.uuid4().hex,
+        "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
+        "thread_id": _default_thread_id(),
+        "pid": os.getpid(),
+        "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
+        "process_start_time": _process_start_time(),
+        "entrypoint": _default_entrypoint(),
     }
     writable = mode in ("sync", "pull", "push", "restore")
 
@@ -1585,6 +2114,10 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     for name, c in classifications.items():
         results["planes"].setdefault(name, c)
 
+    results["provenance"] = {
+        "before": _audit_classified_repositories(classifications),
+    }
+
     plan = plan_actions({k: v for k, v in classifications.items()
                          if not v.get("note")},  # PAUSED/known-blocker 项目只显示不进计划
                         state_repo, mode)
@@ -1596,6 +2129,7 @@ def run_sync(mode: str, detail: bool = False) -> dict:
                 for i in plan]
     execute_plan(plan, classifications, state_repo, mode, results)
     results["actions"] = plan
+    results["provenance"]["after"] = _audit_classified_repositories(classifications)
 
     # 受影响面判定（§7/§8/§23）：记录 pull/merge 产生的文件变化
     changed_at: list[str] = []
@@ -1694,6 +2228,11 @@ def _overall(plan: list[dict], results: dict) -> str:
         return "REVIEW"
     if isinstance(results.get("skill_sync"), str) and results["skill_sync"].startswith("FAIL"):
         return "REVIEW"
+    for phase in (results.get("provenance") or {}).values():
+        for audit in (phase or {}).values():
+            if audit.get("status") in (UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION,
+                                        PROVENANCE_UNKNOWN):
+                return "REVIEW"
     return "PASS"
 
 
@@ -1716,9 +2255,15 @@ def run_restore(detail: bool = False, repo: Path = REPO,
         "mode": "restore",
         "steps": [],
         "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
+        "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
         "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_restore"),
         "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-restore"),
-        "run_id": uuid.uuid4().hex,
+        "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
+        "thread_id": _default_thread_id(),
+        "pid": os.getpid(),
+        "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
+        "process_start_time": _process_start_time(),
+        "entrypoint": _default_entrypoint(),
     }
 
     def step(name: str, ok: bool, note: str = "") -> None:
@@ -1733,8 +2278,12 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 lock = CanonicalMutationLock(
                     target,
                     actor=results["actor"],
+                    actor_type=results["actor_type"],
                     trigger=results["trigger"],
                     task_id=results["task_id"],
+                    thread_id=results["thread_id"],
+                    entrypoint=results["entrypoint"],
+                    process_start_time=results["process_start_time"],
                     run_id=results["run_id"],
                     operation="restore-clone",
                     scope=["repository"],
@@ -1793,8 +2342,12 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                     lock = CanonicalMutationLock(
                         repo,
                         actor=results["actor"],
+                        actor_type=results["actor_type"],
                         trigger=results["trigger"],
                         task_id=results["task_id"],
+                        thread_id=results["thread_id"],
+                        entrypoint=results["entrypoint"],
+                        process_start_time=results["process_start_time"],
                         run_id=results["run_id"],
                         operation="scheduler-registration",
                         scope=["scheduler:PersonalAI-Governance-Frequent",
@@ -1831,6 +2384,45 @@ def run_restore(detail: bool = False, repo: Path = REPO,
     step("secrets", True, f"{sec['status']} missing={sec['missing']}")
     results["secrets"] = sec
     results["result"] = "PASS" if all(s["ok"] for s in results["steps"]) else "REVIEW"
+    return results
+
+
+def run_provenance_audit() -> dict:
+    """Run the read-only canonical commit audit used by scheduled governance checks."""
+    results = {
+        "mode": "audit",
+        "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
+        "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
+        "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_provenance_audit"),
+        "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-provenance-audit"),
+        "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
+        "thread_id": _default_thread_id(),
+        "pid": os.getpid(),
+        "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
+        "process_start_time": _process_start_time(),
+        "entrypoint": _default_entrypoint(),
+        "provenance": {},
+    }
+    targets = {"agent-tools": REPO}
+    if (STATE_REPO / ".git").exists():
+        targets["personal-ai-state"] = STATE_REPO
+    for name, repo in targets.items():
+        try:
+            results["provenance"][name] = audit_canonical_commits(repo)
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            results["provenance"][name] = {
+                "schema": MUTATION_AUDIT_SCHEMA,
+                "repo": str(repo),
+                "status": PROVENANCE_UNKNOWN,
+                "result": PROVENANCE_UNKNOWN,
+                "error": f"provenance audit failed: {exc}",
+            }
+    audits = results["provenance"].values()
+    results["result"] = "REVIEW" if any(
+        audit.get("status") in (UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION,
+                                 PROVENANCE_UNKNOWN)
+        for audit in audits
+    ) else "PASS"
     return results
 
 
@@ -1880,6 +2472,8 @@ def print_human(results: dict, detail: bool = False) -> None:
     if sec:
         print(f"  {'secrets':22s} {sec['status']}" +
               (f" — missing: {sec['missing']}" if sec.get("missing") else ""))
+    for name, audit in (results.get("provenance") or {}).items():
+        print(f"  {('provenance:'+name):22s} {audit.get('status', PROVENANCE_UNKNOWN)}")
     sh = results.get("session_history")
     if sh:
         print(f"  {'dsh-session-history':22s} {sh['status']}"
@@ -1904,11 +2498,16 @@ def main() -> int:
         pass
     ap = argparse.ArgumentParser(description="Personal AI Lifecycle Sync（薄编排器）")
     ap.add_argument("mode", nargs="?", default="sync",
-                    choices=["check", "pull", "push", "sync", "restore"])
+                    choices=["check", "pull", "push", "sync", "restore", "audit"])
     ap.add_argument("--detail", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
-    results = run_restore(args.detail) if args.mode == "restore" else run_sync(args.mode, args.detail)
+    if args.mode == "restore":
+        results = run_restore(args.detail)
+    elif args.mode == "audit":
+        results = run_provenance_audit()
+    else:
+        results = run_sync(args.mode, args.detail)
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     else:
