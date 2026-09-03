@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts" / "durability"))
 
 import backup_jobs  # noqa: E402
+import backup_sessions  # noqa: E402
 from restore_check import check_jobs  # noqa: E402
 
 REGISTER_PS1 = REPO / "scripts" / "governance" / "register_governance_tasks.ps1"
@@ -119,6 +120,56 @@ class JobsBackupTests(unittest.TestCase):
         tmp.mkdir()
         res = check_jobs(self.backup_root, tmp)
         self.assertEqual(res["status"], "error")
+
+
+class SessionsManifestMergeTests(unittest.TestCase):
+    """A later same-day incremental run must not clobber the day's manifest."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.td = Path(self.temp_dir.name)
+        self.src = self.td / "dsh-sessions"
+        self.backup_root = self.td / "ai-backup"
+        self.state_repo = self.td / "personal-ai-state"
+        (self.state_repo / "sync").mkdir(parents=True)
+        (self.state_repo / "sync" / "this-device.yaml").write_text(
+            f"device_id: TEST\nbackup_root: {self.backup_root}\n", encoding="utf-8")
+        self._env = mock.patch.dict(os.environ, {
+            "PERSONAL_AI_SESSIONS_SRC": str(self.src),
+            "PERSONAL_AI_STATE": str(self.state_repo),
+        })
+        self._env.start()
+
+    def tearDown(self) -> None:
+        self._env.stop()
+        self.temp_dir.cleanup()
+
+    def _mk_session(self, rel: str, payload: bytes) -> None:
+        f = self.src / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(payload)
+
+    def _manifest(self) -> list:
+        import datetime
+        day = "daily-" + datetime.datetime.now().strftime("%Y-%m-%d")
+        m = self.backup_root / "sessions" / day / "manifest.json"
+        return json.loads(m.read_text(encoding="utf-8"))["files"]
+
+    def test_second_run_same_day_preserves_manifest(self) -> None:
+        self._mk_session("ws-a/s1/session.jsonl.zstd", b"aaa")
+        self.assertEqual(backup_sessions.main(), 0)
+        self.assertEqual(len(self._manifest()), 1)
+        # Second run: nothing changed -> all skipped; manifest must keep the entry.
+        self.assertEqual(backup_sessions.main(), 0)
+        self.assertEqual(len(self._manifest()), 1)
+
+    def test_second_run_merges_new_files(self) -> None:
+        self._mk_session("ws-a/s1/session.jsonl.zstd", b"aaa")
+        self.assertEqual(backup_sessions.main(), 0)
+        self._mk_session("ws-b/s2/session.jsonl.zstd", b"bbb")
+        self.assertEqual(backup_sessions.main(), 0)
+        files = sorted(e["file"] for e in self._manifest())
+        self.assertEqual(files, ["ws-a/s1/session.jsonl.zstd", "ws-b/s2/session.jsonl.zstd"])
 
 
 @unittest.skipIf(os.name != "nt", "Task Scheduler guard is Windows-only")
