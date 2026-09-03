@@ -118,6 +118,21 @@ def render_settings(canonical: dict, overlay: dict, existing: dict | None = None
             capability = capacities.get((provider, model["id"]))
             if capability:
                 model.update(capability)
+
+    # Preserve user-configured or runtime-added models from existing settings.yaml
+    # so that newly introduced models are not wiped out by automated apply runs.
+    if isinstance(existing, dict):
+        existing_providers = existing.get("llm-pi-ai", {}).get("providers", {})
+        for pname, pdef in existing_providers.items():
+            if pname in rendered_providers:
+                known_ids = {m["id"] for m in rendered_providers[pname].get("models", [])}
+                for m in pdef.get("models", []) or []:
+                    if m.get("id") and m["id"] not in known_ids:
+                        rendered_providers[pname].setdefault("models", []).append(dict(m))
+                        known_ids.add(m["id"])
+            elif isinstance(pdef, dict):
+                rendered_providers[pname] = json.loads(json.dumps(pdef))
+
     out = {}
     out.update(overlay["overlay"]["settings"])  # ui-onboarding, agent-presets
     out["llm-pi-ai"] = {"providers": rendered_providers}
@@ -127,7 +142,8 @@ def render_settings(canonical: dict, overlay: dict, existing: dict | None = None
         if isinstance(candidate, dict):
             admitted = {(m["provider"], m["id"]) for m in models
                         if m.get("status") == "admitted"}
-            if (candidate.get("provider"), candidate.get("model")) in admitted:
+            available = {(p, m["id"]) for p, pdef in rendered_providers.items() for m in pdef.get("models", [])}
+            if (candidate.get("provider"), candidate.get("model")) in (admitted | available):
                 selection = dict(candidate)
     out["agent-default-model"] = selection or {
         k: md[k] for k in ("provider", "model", "reasoningEffort") if k in md
