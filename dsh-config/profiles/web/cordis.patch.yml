@@ -129,4 +129,12 @@
     config:
       archiveThresholdTokens: 800000
       sidecarDir: ./.dsh-context-lifecycle
+  - id: model-switch-controller
+    name: ./plugins/dsh-model-switch-controller/lib/index.js
+    config:
+      safetyMargin: 16384
+      requiredOutputBudget: 65536
+      inputMultiplier: 1.08
+      conservativeFallbackLimit: 262144
+      maxCompactionAttempts: 2
 # AIC DSH RUNTIME COMPOSITION END
