@@ -1,12 +1,12 @@
-"""receipt.py — Human-readable (Section 28) and Machine-readable (Section 30) receipt formatters."""
+"""receipt.py — Human-readable and Machine-readable receipt formatters for Personal AI Sync V3."""
 from __future__ import annotations
 
 from typing import Any, Dict
-from .models import OverallStatus, PlaneStatus, SyncReceipt
+from .models import OverallStatus, PlaneStatus, ResourceCategory, SyncReceipt
 
 
 def render_human_receipt(receipt: SyncReceipt) -> str:
-    """Render the 6-section human-readable receipt defined in Section 28."""
+    """Render the human-readable receipt with clear separation between Convergence, Safety, and Health."""
     lines = []
 
     # 1. 一句话结果
@@ -28,8 +28,8 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
         lines.append("同步失败，无法安全继续。")
     lines.append("")
 
-    # 2. 本次更新了什么
-    lines.append("## 2. 本次更新了什么")
+    # 2. 本次实际更新
+    lines.append("## 2. 本次实际更新")
     if receipt.changes_applied:
         for change in receipt.changes_applied:
             lines.append(f"* {change}")
@@ -46,8 +46,8 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
         lines.append("本次同步未遇到异常。")
     lines.append("")
 
-    # 4. 系统如何处理 / 为什么这样取舍
-    lines.append("## 4. 系统如何处理 / 为什么这样取舍")
+    # 4. 怎么处理 / 为什么这样取舍
+    lines.append("## 4. 怎么处理 / 为什么这样取舍")
     if receipt.tradeoff_decisions:
         for item in receipt.tradeoff_decisions:
             title = item.get("title", "系统处理")
@@ -63,38 +63,53 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
         lines.append("按既定基线与幂等规则执行，未发生特殊决策分流。")
         lines.append("")
 
-    # 5. 当前状态表
-    lines.append("## 5. 当前状态表")
-    lines.append("| 项目 | 状态 | 当前结果 |")
+    # 5. 同步结果 (Convergence Planes)
+    lines.append("## 5. 同步结果")
+    lines.append("| 项目 | 状态 | 结果 |")
     lines.append("| :--- | :--- | :--- |")
 
-    # Table items mapping
-    planes_order = [
+    convergence_order = [
         ("Personal AI State", "Canonical State Plane"),
         ("Agent Tools", "Agent Tools / Source Plane"),
         ("Deployment Mirror", "Deployment Mirror Plane"),
+        ("Presets", "DSH Preset Plane"),
         ("DSH Config", "DSH Config Plane"),
         ("Plugins", "DSH Plugin Plane"),
         ("MCP", "MCP Plane"),
         ("Skills", "Skill Plane"),
         ("DSH Runtime", "Runtime Plane"),
-        ("Model Safety", "Model Discovery / Safety Plane"),
-        ("Durable Jobs", "Durable Job Plane"),
-        ("Session History", "Session Continuity Plane"),
-        ("Backup", "Backup / Recovery Plane"),
     ]
 
-    for display_name, plane_key in planes_order:
+    for display_name, plane_key in convergence_order:
         p_res = receipt.planes.get(plane_key)
         if p_res:
             lines.append(f"| {display_name} | {p_res.symbol} | {p_res.summary} |")
 
     lines.append("")
-    lines.append("状态说明：✓ 已完成 / ○ 待重启 / △ 需要检查 / ✗ 失败")
+
+    # 6. 安全与健康检查 (Safety Gates & Health Observability)
+    lines.append("## 6. 安全与健康检查")
+    lines.append("| 检查项 | 状态 | 当前观测 |")
+    lines.append("| :--- | :--- | :--- |")
+
+    observability_order = [
+        ("Model Safety", "Model Discovery / Safety Gate"),
+        ("Durable Jobs", "Durable Job Health"),
+        ("Session History", "Session Continuity Health"),
+        ("Backup", "Backup / Recovery Health"),
+    ]
+
+    for display_name, plane_key in observability_order:
+        p_res = receipt.planes.get(plane_key)
+        if p_res:
+            lines.append(f"| {display_name} | {p_res.symbol} | {p_res.summary} |")
+
+    lines.append("")
+    lines.append("状态说明：✓ 正常/已对齐 / ○ 待重启 / △ 需要关注 / ✗ 失败")
     lines.append("")
 
-    # 6. 需要用户做什么
-    lines.append("## 6. 需要用户做什么")
+    # 7. 需要用户做什么
+    lines.append("## 7. 需要用户做什么")
     lines.append(receipt.action_required_from_user)
     lines.append("")
 
