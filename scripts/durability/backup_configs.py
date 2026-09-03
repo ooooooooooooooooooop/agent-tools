@@ -52,10 +52,14 @@ def main() -> int:
     root = backup_root()
     day = root / "configs" / ("daily-" + started[:10])
     day.mkdir(parents=True, exist_ok=True)
-    entries, failed = [], []
+    entries, failed, skipped = [], [], []
     for src, irreplaceable, secret in CONFIGS:
         if not src.is_file():
-            failed.append(f"{src.name}: missing")
+            # Missing GENERATED files are rebuildable via aic render — skip, don't fail.
+            # Missing IRREPLACEABLE files are real losses — fail the run.
+            rel = f"~/{src.relative_to(HOME)}".replace("\\", "/") \
+                if str(src).startswith(str(HOME)) else str(src)
+            (failed if irreplaceable else skipped).append(f"{rel}: missing")
             continue
         dst = day / f"{src.parent.name}--{src.name}"
         try:
@@ -87,7 +91,8 @@ def main() -> int:
                    "bytes": sum(e["bytes"] for e in entries),
                    "manifest": str(mpath.relative_to(root)).replace("\\", "/"),
                    "integrity_status": "verified" if status == "ok" else "failed",
-                   "error": "; ".join(failed) if failed else None})
+                   "error": "; ".join(failed) if failed else None,
+                   "skipped_generated_missing": skipped or None})
     print(f"configs backup: files={len(entries)} failed={len(failed)} -> {day.name} [{status}]")
     return 0 if status == "ok" else 1
 

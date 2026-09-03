@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -983,114 +985,562 @@ def evaluate_durable_job_health(
 
 
 # ---------------------------------------------------------------- Health 12: Session Continuity
+#
+# Semantic rule (2026-09-03 remediation): an unattached root session is NOT
+# automatically a health problem. Forensics proved 14/14 historical unattached
+# roots were synthetic drill fixtures and empty aborted shells — zero user
+# sessions. Hard warnings target UNEXPECTED / UNKNOWN roots only; classification
+# is conservative and multi-evidence (title pattern + content shape + batch
+# correlation). When in doubt -> UNKNOWN -> WARNING. Never silently classify a
+# possibly-real user session as test residue.
+
+_SYNTHETIC_TITLE_PREFIXES = ("reply with exactly", "reply with the exact token")
+_SYNTHETIC_TITLE_MARKERS = ("opencode_recovery",)
+_SYNTHETIC_TITLE_RE = re.compile(r"^(.)\1{9,}$")  # pure filler, e.g. "xxxx..."
+_EMPTY_SHELL_MAX_EVENTS = 5          # session header + policy events, no user content
+_FIXTURE_BATCH_WINDOW_MS = 60 * 60 * 1000  # shell within 60min of a confirmed fixture (same ws)
+
+
+def _is_synthetic_title(title: str | None) -> bool:
+    if not title:
+        return False
+    t = title.strip().lower()
+    if any(t.startswith(p) for p in _SYNTHETIC_TITLE_PREFIXES):
+        return True
+    if any(m in t for m in _SYNTHETIC_TITLE_MARKERS):
+        return True
+    return bool(_SYNTHETIC_TITLE_RE.match(t.strip()))
+
+
+def _load_session_projcache(home: Path) -> dict:
+    """sid -> {title, cwd, created_ms, blank} from the runtime session index."""
+    pc = home / "storages" / "session_projcache.json"
+    out: dict = {}
+    if not pc.is_file():
+        return out
+    try:
+        data = json.loads(pc.read_text(encoding="utf-8"))
+        for sid, rec in data.get("tables", {}).get("sessions", {}).items():
+            ident = rec.get("identity", {}) if isinstance(rec, dict) else {}
+            rows = rec.get("rows", {}) if isinstance(rec, dict) else {}
+            title_row = rows.get("title") or {}
+            meta = rows.get("sessionListMetadata") or {}
+            out[sid] = {
+                "title": title_row.get("val"),
+                "cwd": ident.get("cwd"),
+                "created_ms": ident.get("createdAt"),
+                "blank": bool(meta.get("blank")),
+            }
+    except Exception:
+        pass
+    return out
+
+
+def _read_session_events(path: Path, limit: int = 80) -> list | None:
+    """Stream-decode up to `limit` events from a zstd session file.
+
+    Returns None when the file cannot be decoded (caller treats as UNKNOWN).
+    """
+    try:
+        import zstandard as zstd
+    except ImportError:
+        return None
+    try:
+        dctx = zstd.ZstdDecompressor()
+        out: list = []
+        with open(path, "rb") as fh, dctx.stream_reader(fh) as r:
+            buf = b""
+            while len(out) < limit:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                buf += chunk
+                parts = buf.split(b"\n")
+                buf = parts.pop()
+                for p in parts:
+                    if p.strip():
+                        out.append(json.loads(p))
+                    if len(out) >= limit:
+                        break
+        return out
+    except Exception:
+        return None
+
+
+def _session_content_shape(events: list | None) -> dict:
+    """Derive user-content evidence from decoded events."""
+    shape = {"user_msgs": 0, "synth_user_msgs": 0, "injected_msgs": 0,
+             "tool_calls": 0, "turns": 0,
+             "events": 0, "title": None, "created_ms": None, "cwd": None}
+    if events is None:
+        return shape
+    shape["events"] = len(events)
+    for e in events:
+        t = e.get("type")
+        if t == "session":
+            shape["created_ms"] = e.get("createdAt")
+            shape["cwd"] = e.get("cwd")
+        elif t == "turn/start":
+            shape["turns"] += 1
+        elif t == "user/message":
+            content = (e.get("data") or {}).get("content") or []
+            texts = [c.get("text", "") for c in content
+                     if isinstance(c, dict) and c.get("type") == "text"]
+            joined = " ".join(texts).strip()
+            first_line = joined.split("\n", 1)[0].strip().lower()
+            # Harness-injected context frames ride the user/message channel but
+            # are not user input — exclude from user-content evidence.
+            if first_line.startswith(("<system-reminder>", "current runtime context.")):
+                shape["injected_msgs"] += 1
+                continue
+            shape["user_msgs"] += 1
+            if _is_synthetic_title(first_line):
+                shape["synth_user_msgs"] += 1
+        elif t in ("tool/call", "tool_call", "tool/result", "tool_result"):
+            shape["tool_calls"] += 1
+        elif t == "session/title" and not shape["title"]:
+            shape["title"] = (e.get("data") or {}).get("title")
+    return shape
+
+
+def classify_unattached_root(sid: str, ws_dir_name: str, proj: dict | None,
+                             events: list | None,
+                             workspace_fixture_ms: list | None) -> tuple:
+    """Conservative multi-evidence classification of one unattached root.
+
+    Returns (classification, evidence_dict):
+      EXPECTED_TEST_FIXTURE   synthetic title + no real user content
+      EXPECTED_EMPTY_ABORTED  header-only shell correlated with a confirmed fixture
+      UNEXPECTED              real user content detached from the registry
+      UNKNOWN                 insufficient/mixed evidence -> stays a WARNING
+    """
+    title = (proj or {}).get("title")
+    created_ms = (proj or {}).get("created_ms")
+    shape = _session_content_shape(events)
+    if title is None:
+        title = shape["title"]
+    if created_ms is None:
+        created_ms = shape["created_ms"]
+
+    has_content = (shape["user_msgs"] - shape["synth_user_msgs"]) > 0 \
+        or shape["tool_calls"] > 0 or shape["turns"] > 1
+    # Synthetic evidence may sit in the runtime title (final LLM retitle),
+    # the first session/title event, or a synthetic user prompt — any suffices.
+    synthetic = _is_synthetic_title(title) or _is_synthetic_title(shape["title"]) \
+        or shape["synth_user_msgs"] > 0
+
+    if synthetic and not has_content:
+        return "EXPECTED_TEST_FIXTURE", {"title": title, "user_msgs": shape["user_msgs"],
+                                         "tool_calls": shape["tool_calls"],
+                                         "created_ms": created_ms}
+    if has_content:
+        return "UNEXPECTED", {"title": title, "user_msgs": shape["user_msgs"],
+                              "tool_calls": shape["tool_calls"], "turns": shape["turns"]}
+
+    # No user content and no (synthetic) title: empty/aborted shell semantics.
+    if events is None:
+        return "UNKNOWN", {"reason": "session file unreadable"}
+    if shape["user_msgs"] == 0 and shape["events"] <= _EMPTY_SHELL_MAX_EVENTS:
+        if workspace_fixture_ms:
+            for fx_ms in workspace_fixture_ms:
+                if fx_ms is not None and created_ms is not None and \
+                        abs(fx_ms - created_ms) <= _FIXTURE_BATCH_WINDOW_MS:
+                    return "EXPECTED_EMPTY_ABORTED", {"title": title,
+                                                      "correlated_fixture_ms": fx_ms}
+        return "UNKNOWN", {"reason": "empty shell without fixture correlation"}
+    return "UNKNOWN", {"reason": "insufficient evidence"}
+
+
 def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
-    """Health 12: Physical session count vs runtime enumerable count evaluation."""
+    """Health 12: Physical vs runtime-enumerable session identity + conservative
+    unattached-root semantics (EXPECTED / UNEXPECTED / UNKNOWN)."""
     sessions_root = home / "sessions"
     ws_file = home / "storages" / "workspace.json"
 
+    phys_ids: set = set()
     phys_count = 0
-    live_names = set()
+    root_dirs: dict = {}  # sid -> Path
     if sessions_root.is_dir():
         for p in sessions_root.rglob("session.jsonl.zstd"):
             phys_count += 1
-            live_names.add(p.parent.name)
+            phys_ids.add(p.parent.name)
+            if p.parent.name.startswith("session-"):
+                root_dirs[p.parent.name] = p.parent
 
-    attached_ids = set()
+    proj = _load_session_projcache(home)
+    runtime_ids = set(proj.keys())
+
+    attached_ids: set = set()
+    ws_paths: list = []
     if ws_file.is_file():
         try:
             ws_data = json.loads(ws_file.read_text(encoding="utf-8"))
             for ws_info in ws_data.get("tables", {}).get("workspaces", {}).values():
+                ws_paths.append(str(ws_info.get("path", "")).lower().rstrip("\\"))
                 for sid in ws_info.get("sessionIds", []):
                     attached_ids.add(sid)
         except Exception:
             pass
 
-    root_sessions = {s for s in live_names if s.startswith("session-")}
-    unattached_roots = root_sessions - attached_ids
+    identity_match = phys_ids == runtime_ids
+    phys_only = sorted(phys_ids - runtime_ids)
+    runtime_only = sorted(runtime_ids - phys_ids)
 
-    summary = f"物理 {phys_count} / 挂载 {len(attached_ids)} / 孤立根 {len(unattached_roots)}"
+    unattached = sorted(set(root_dirs) - attached_ids)
+    # Pre-compute confirmed-fixture creation times per workspace for shell correlation.
+    ws_of_root = {}
+    for sid, d in root_dirs.items():
+        ws_of_root[sid] = d.parent.name
+    fixture_ms_by_ws: dict = {}
+    for sid in unattached:
+        info = proj.get(sid) or {}
+        if _is_synthetic_title(info.get("title")):
+            ms = info.get("created_ms")
+            if ms is not None:
+                fixture_ms_by_ws.setdefault(ws_of_root.get(sid, ""), []).append(ms)
 
-    if len(unattached_roots) == 0:
+    # Two passes: pass 1 classifies with proj-title-synthetic fixture windows;
+    # pass 2 re-runs still-UNKNOWN empty shells against windows enlarged by
+    # pass-1-confirmed fixtures (whose proj title may be an LLM retitle, so the
+    # synthetic evidence only shows up after decoding events).
+    results: dict = {}
+    for sid in unattached:
+        events = _read_session_events(root_dirs[sid] / "session.jsonl.zstd")
+        results[sid] = classify_unattached_root(
+            sid, ws_of_root.get(sid, ""), proj.get(sid), events,
+            fixture_ms_by_ws.get(ws_of_root.get(sid, "")))
+
+    for sid in unattached:
+        cls, ev = results[sid]
+        if cls != "UNKNOWN" or not str(ev.get("reason", "")).startswith("empty shell"):
+            continue
+        ws = ws_of_root.get(sid, "")
+        extra = fixture_ms_by_ws.setdefault(ws, [])
+        for osid, (ocls, oev) in results.items():
+            if ocls == "EXPECTED_TEST_FIXTURE" and ws_of_root.get(osid) == ws:
+                ms = (proj.get(osid) or {}).get("created_ms") \
+                    or oev.get("created_ms")
+                if ms is not None and ms not in extra:
+                    extra.append(ms)
+        events = _read_session_events(root_dirs[sid] / "session.jsonl.zstd")
+        results[sid] = classify_unattached_root(
+            sid, ws, proj.get(sid), events, fixture_ms_by_ws.get(ws))
+
+    expected, unexpected, unknown = [], [], []
+    for sid in unattached:
+        cls, _ev = results[sid]
+        (expected if cls.startswith("EXPECTED") else unexpected if cls == "UNEXPECTED"
+         else unknown).append(sid)
+
+    def _short(ids: list) -> list:
+        return sorted(ids)[:8]
+
+    details = {
+        "physical_count": phys_count,
+        "runtime_enumerable_count": len(runtime_ids),
+        "identity_match": identity_match,
+        "physical_minus_runtime": phys_only[:8],
+        "runtime_minus_physical": runtime_only[:8],
+        "attached_root_count": len(attached_ids & set(root_dirs)),
+        "expected_unattached": _short(expected),
+        "expected_unattached_count": len(expected),
+        "unexpected_unattached": _short(unexpected),
+        "unexpected_unattached_count": len(unexpected),
+        "unknown_unattached": _short(unknown),
+        "unknown_unattached_count": len(unknown),
+    }
+
+    if not identity_match:
         return ResourceRecord(
             resource_id="session_continuity",
             plane=SyncPlane.SESSION_CONTINUITY,
             category=ResourceCategory.HEALTH_OBSERVABILITY,
-            status=PlaneStatus.HEALTHY,
-            symbol="✓",
-            summary=summary,
+            status=PlaneStatus.HEALTH_FAILED,
+            symbol="✗",
+            summary=f"会话身份集不一致: 物理 {phys_count} / 可枚举 {len(runtime_ids)}",
             required_evidence_level=EvidenceLevel.L2_OBSERVED,
-            evidence_refs=[{"type": "sessions_counted", "physical": phys_count, "attached": len(attached_ids)}],
-            details={"physical_count": phys_count, "attached_count": len(attached_ids), "unattached_roots": 0},
+            blockers=["PHYSICAL_RUNTIME_IDENTITY_MISMATCH"],
+            details=details,
         )
 
+    if unexpected or unknown:
+        parts = []
+        if unexpected:
+            parts.append(f"{len(unexpected)} 个真实用户会话未挂载")
+        if unknown:
+            parts.append(f"{len(unknown)} 个身份不明")
+        return ResourceRecord(
+            resource_id="session_continuity",
+            plane=SyncPlane.SESSION_CONTINUITY,
+            category=ResourceCategory.HEALTH_OBSERVABILITY,
+            status=PlaneStatus.HEALTH_WARNING,
+            symbol="△",
+            summary=f"物理 {phys_count} / 可枚举 {len(runtime_ids)} / {'，'.join(parts)}",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            warnings=[f"UNEXPECTED_UNATTACHED_ROOTS={len(unexpected)}",
+                      f"UNKNOWN_UNATTACHED_ROOTS={len(unknown)}"],
+            details=details,
+        )
+
+    summary = (f"物理 {phys_count} / 可枚举 {len(runtime_ids)} / "
+               f"挂载 {details['attached_root_count']}")
+    if expected:
+        summary += f"；{len(expected)} 个历史测试残留（expected）"
     return ResourceRecord(
         resource_id="session_continuity",
         plane=SyncPlane.SESSION_CONTINUITY,
         category=ResourceCategory.HEALTH_OBSERVABILITY,
-        status=PlaneStatus.HEALTH_WARNING,
-        symbol="△",
+        status=PlaneStatus.HEALTHY,
+        symbol="✓",
         summary=summary,
         required_evidence_level=EvidenceLevel.L2_OBSERVED,
-        warnings=[f"发现 {len(unattached_roots)} 个未挂载根会话"],
-        details={"physical_count": phys_count, "attached_count": len(attached_ids), "unattached_roots": sorted(list(unattached_roots))[:5]},
+        evidence_refs=[{"type": "session_identity_sets",
+                        "physical": phys_count, "runtime": len(runtime_ids),
+                        "expected_test_residue": len(expected)}],
+        details=details,
     )
 
 
 # ---------------------------------------------------------------- Health 13: Backup / Recovery
-def evaluate_backup_recovery_health(home: Path) -> ResourceRecord:
-    """Health 13: Backup freshness and integrity inspection."""
-    backup_dir = home / "backup"
-    if not backup_dir.is_dir():
-        return ResourceRecord(
-            resource_id="backup_recovery",
-            plane=SyncPlane.BACKUP_RECOVERY,
-            category=ResourceCategory.HEALTH_OBSERVABILITY,
-            status=PlaneStatus.HEALTH_WARNING,
-            symbol="△",
-            summary="备份目录尚未建立",
-            required_evidence_level=EvidenceLevel.L2_OBSERVED,
-            warnings=["未检测到 ~/.dsh/backup 备份目录"],
-        )
+#
+# Semantic rule (2026-09-03 remediation): the canonical backup destination is
+# NOT ~/.dsh/backup. It is backup_root from personal-ai-state/sync/this-device.yaml
+# (the same machine policy the durability pipeline itself reads). Health is
+# decomposed into independent signals — BACKUP_FRESHNESS (RPO per dataset),
+# BACKUP_INTEGRITY (artifacts exist & verified), RESTORE_EVIDENCE (latest
+# restore_check) — plus FULL_DR_READINESS, which tracks off-device/key custody
+# and is reported separately so an incomplete disaster-recovery posture never
+# masks a healthy local backup (and vice versa).
 
-    files = [f for f in backup_dir.iterdir() if f.is_file()]
-    if not files:
-        return ResourceRecord(
-            resource_id="backup_recovery",
-            plane=SyncPlane.BACKUP_RECOVERY,
-            category=ResourceCategory.HEALTH_OBSERVABILITY,
-            status=PlaneStatus.HEALTH_WARNING,
-            symbol="△",
-            summary="未发现有效备份快照文件",
-            required_evidence_level=EvidenceLevel.L2_OBSERVED,
-            warnings=["~/.dsh/backup 目录为空"],
-        )
+_BACKUP_RPO_DEFAULTS = {"sessions": 26.0, "broker": 26.0, "configs": 168.0,
+                        "jobs": 26.0, "repos": 26.0}
 
-    # Inspect newest file
-    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    newest = files[0]
-    file_size = newest.stat().st_size
-    mtime = newest.stat().st_mtime
 
-    if file_size == 0:
+def _load_backup_policy(state_repo: Path | None) -> tuple | None:
+    """(device_config, error). Reads the same machine policy as the durability pipeline."""
+    root = Path(state_repo) if state_repo else (Path.home() / "personal-ai-state")
+    cfg_file = root / "sync" / "this-device.yaml"
+    if not cfg_file.is_file():
+        return None, f"device config missing: {cfg_file}"
+    try:
+        import yaml
+        cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return None, f"device config unreadable: {exc}"
+    if not isinstance(cfg, dict) or not cfg.get("backup_root"):
+        return None, "device config missing backup_root"
+    return cfg, None
+
+
+def _ledger_rows(backup_root: Path) -> list:
+    f = backup_root / "ledger" / "runs.jsonl"
+    if not f.is_file():
+        return []
+    out = []
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def _latest_ok(rows: list, dataset: str) -> dict | None:
+    best = None
+    for r in rows:
+        ds = r.get("dataset", "")
+        if not (ds == dataset or ds.startswith(dataset + ":")):
+            continue
+        if r.get("status") == "ok" and r.get("integrity_status") == "verified":
+            if best is None or r.get("finished_at", "") > best.get("finished_at", ""):
+                best = r
+    return best
+
+
+def _parse_iso(iso: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(iso)
+    except Exception:
+        return None
+
+
+def evaluate_backup_recovery_health(home: Path,
+                                    state_repo: Path | None = None) -> ResourceRecord:
+    """Health 13: Backup freshness / integrity / restore-evidence from the
+    canonical machine backup policy (this-device.yaml -> backup_root)."""
+    cfg, err = _load_backup_policy(state_repo)
+    if cfg is None:
         return ResourceRecord(
             resource_id="backup_recovery",
             plane=SyncPlane.BACKUP_RECOVERY,
             category=ResourceCategory.HEALTH_OBSERVABILITY,
             status=PlaneStatus.HEALTH_FAILED,
             symbol="✗",
-            summary=f"最新备份文件为空 (0 字节: {newest.name})",
+            summary="备份策略不可达（无法定位 canonical backup_root）",
             required_evidence_level=EvidenceLevel.L2_OBSERVED,
-            blockers=[f"Corrupt 0-byte backup file: {newest.name}"],
+            blockers=[f"BACKUP_POLICY_UNREACHABLE: {err}"],
+            details={"policy_error": err},
         )
 
+    backup_root = Path(str(cfg["backup_root"]))
+    targets = {**_BACKUP_RPO_DEFAULTS, **(cfg.get("rpo_targets_hours") or {})}
+
+    if not backup_root.is_dir():
+        return ResourceRecord(
+            resource_id="backup_recovery",
+            plane=SyncPlane.BACKUP_RECOVERY,
+            category=ResourceCategory.HEALTH_OBSERVABILITY,
+            status=PlaneStatus.HEALTH_FAILED,
+            symbol="✗",
+            summary=f"备份根目录不存在: {backup_root}",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            blockers=[f"BACKUP_ROOT_MISSING: {backup_root}"],
+            details={"backup_root": str(backup_root)},
+        )
+
+    rows = _ledger_rows(backup_root)
+    if not rows:
+        return ResourceRecord(
+            resource_id="backup_recovery",
+            plane=SyncPlane.BACKUP_RECOVERY,
+            category=ResourceCategory.HEALTH_OBSERVABILITY,
+            status=PlaneStatus.HEALTH_FAILED,
+            symbol="✗",
+            summary=f"{backup_root} 存在但没有任何备份运行记录",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            blockers=["BACKUP_LEDGER_EMPTY"],
+            details={"backup_root": str(backup_root)},
+        )
+
+    now = datetime.now().astimezone()
+    freshness: dict = {}
+    integrity_notes: list = []
+    freshness_state = "PASS"
+
+    for ds in ("sessions", "broker", "configs", "jobs"):
+        target = float(targets.get(ds, 26.0))
+        latest = _latest_ok(rows, ds)
+        if latest is None:
+            freshness[ds] = {"status": "UNKNOWN", "rpo_target_h": target,
+                             "cause": "NO_VERIFIED_BACKUP"}
+            freshness_state = "WARNING" if freshness_state == "PASS" else freshness_state
+            integrity_notes.append(f"{ds}: 无 verified 备份记录")
+            continue
+        finished = _parse_iso(str(latest.get("finished_at", "")))
+        age_h = (now - finished).total_seconds() / 3600 if finished else None
+        breached = age_h is None or age_h > target
+        freshness[ds] = {"status": "BREACHED" if breached else "HEALTHY",
+                         "rpo_age_h": round(age_h, 2) if age_h is not None else None,
+                         "rpo_target_h": target,
+                         "last_verified": latest.get("finished_at")}
+        if breached:
+            freshness_state = "WARNING"
+            integrity_notes.append(f"{ds}: RPO breach")
+
+    # Artifact existence evidence (newest per dataset)
+    artifacts: dict = {}
+
+    def _latest_file(sub: str, pattern: str) -> Path | None:
+        d = backup_root / sub
+        if not d.is_dir():
+            return None
+        fs = sorted(d.glob(pattern))
+        return fs[-1] if fs else None
+
+    art_sessions = _latest_file("sessions", "daily-*")
+    artifacts["sessions"] = bool(art_sessions and art_sessions.is_dir())
+    art_broker = _latest_file("broker", "*.sqlite")
+    artifacts["broker"] = bool(art_broker and art_broker.is_file() and art_broker.stat().st_size > 0)
+    art_jobs = _latest_file("jobs", "*.sqlite")
+    artifacts["jobs"] = bool(art_jobs and art_jobs.is_file() and art_jobs.stat().st_size > 0)
+    art_configs = _latest_file("configs", "daily-*")
+    artifacts["configs"] = bool(art_configs and art_configs.is_dir())
+    integrity_state = "PASS" if all(artifacts.values()) else "WARNING"
+    for ds, ok in artifacts.items():
+        if not ok:
+            integrity_notes.append(f"{ds}: 最新 artifact 缺失")
+
+    # Restore evidence: latest restore_check ledger row
+    restore_row = None
+    for r in rows:
+        if r.get("job") == "restore_check":
+            if restore_row is None or r.get("finished_at", "") > restore_row.get("finished_at", ""):
+                restore_row = r
+    if restore_row is None:
+        restore_state, restore_note = "WARNING", "无 restore_check 记录"
+    elif restore_row.get("status") == "ok" and restore_row.get("integrity_status") == "verified":
+        restore_state, restore_note = "PASS", f"最近 restore_check {restore_row.get('finished_at')} verified"
+    else:
+        restore_state, restore_note = "WARNING", f"最近 restore_check 失败: {restore_row.get('finished_at')}"
+
+    # Repo durability evidence (source durability lives in git; reported here as info)
+    repo_rows = [r for r in rows if r.get("job") == "check_repos"]
+    latest_repo: dict = {}
+    for r in repo_rows:
+        latest_repo[r.get("dataset", "")] = r
+    repo_risks = [k for k, v in latest_repo.items() if v.get("status") != "ok"]
+
+    # Full disaster recovery readiness: off-device package + external key custody.
+    remote_pkg = bool(list(backup_root.glob("remote-package*")))
+    full_dr = "INCOMPLETE"  # external key custody not established (by design, this round)
+    full_dr_notes = []
+    if not remote_pkg:
+        full_dr = "MISSING"
+        full_dr_notes.append("无 off-device backup package")
+    full_dr_notes.append("EXTERNAL_KEY_CUSTODY=NO（密钥与本机同生共死，属外部 durability 条件）")
+
+    details = {
+        "backup_root": str(backup_root),
+        "policy_source": str((Path(state_repo) if state_repo else Path.home() / "personal-ai-state")
+                             / "sync" / "this-device.yaml"),
+        "BACKUP_FRESHNESS": freshness,
+        "BACKUP_FRESHNESS_STATE": freshness_state,
+        "BACKUP_INTEGRITY": artifacts,
+        "BACKUP_INTEGRITY_STATE": integrity_state,
+        "RESTORE_EVIDENCE": {"status": restore_state, "note": restore_note},
+        "SOURCE_DURABILITY": {"repo_risks": sorted(repo_risks),
+                              "last_check": max((r.get("finished_at", "") for r in repo_rows), default=None)},
+        "FULL_DR_READINESS": full_dr,
+        "FULL_DR_NOTES": full_dr_notes,
+        "ledger_entries": len(rows),
+    }
+
+    warnings: list = []
+    if freshness_state != "PASS":
+        warnings.append(f"BACKUP_FRESHNESS={freshness_state}: " + "; ".join(integrity_notes))
+    if integrity_state != "PASS":
+        warnings.append(f"BACKUP_INTEGRITY={integrity_state}")
+    if restore_state != "PASS":
+        warnings.append(f"RESTORE_EVIDENCE={restore_state}: {restore_note}")
+
+    if warnings:
+        last_ok = max((r.get("finished_at", "") for r in rows if r.get("status") == "ok"), default="?")
+        return ResourceRecord(
+            resource_id="backup_recovery",
+            plane=SyncPlane.BACKUP_RECOVERY,
+            category=ResourceCategory.HEALTH_OBSERVABILITY,
+            status=PlaneStatus.HEALTH_WARNING,
+            symbol="△",
+            summary=f"{backup_root} 可用；最近成功 {last_ok}；"
+                    f"FRESHNESS={freshness_state} INTEGRITY={integrity_state} RESTORE={restore_state}",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            warnings=warnings,
+            details=details,
+        )
+
+    last_ok = max((r.get("finished_at", "") for r in rows if r.get("status") == "ok"), default="?")
     return ResourceRecord(
         resource_id="backup_recovery",
         plane=SyncPlane.BACKUP_RECOVERY,
         category=ResourceCategory.HEALTH_OBSERVABILITY,
         status=PlaneStatus.HEALTHY,
         symbol="✓",
-        summary=f"发现 {len(files)} 个快照，最新 `{newest.name}` 正常",
+        summary=f"{backup_root} 正常；最近成功 {last_ok}；"
+                f"sessions/broker/jobs/configs 均在 RPO 内",
         required_evidence_level=EvidenceLevel.L2_OBSERVED,
-        evidence_refs=[{"type": "backup_file_checked", "name": newest.name, "size": file_size, "mtime": mtime}],
-        details={"backup_count": len(files), "latest_file": newest.name, "size": file_size},
+        evidence_refs=[{"type": "ledger_verified", "entries": len(rows),
+                        "restore": restore_state}],
+        details=details,
     )
