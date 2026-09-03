@@ -90,11 +90,43 @@ def check_configs(root: Path, tmp: Path) -> dict:
             "parsed": ok, "failed": bad}
 
 
+def check_jobs(root: Path, tmp: Path) -> dict:
+    """Restore latest durable-jobs snapshot into an isolated temp DB and verify.
+
+    Never touches the live registry: the snapshot is copied to a temp file and
+    opened read-only there. Verifies integrity, expected schema, and enumerates
+    unfinished (non-terminal) jobs as restore evidence.
+    """
+    snaps = sorted((root / "jobs").glob("jobs-*.sqlite")) if (root / "jobs").is_dir() else []
+    if not snaps:
+        return {"name": "jobs_restore", "status": "error", "error": "no jobs snapshot"}
+    dst = tmp / snaps[-1].name
+    shutil.copy2(snaps[-1], dst)
+    try:
+        con = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
+        integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+        tables = sorted(r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+        unfinished = con.execute(
+            "SELECT COUNT(*) FROM jobs WHERE job_state NOT IN "
+            "('COMPLETED','FAILED','CANCELLED')").fetchone()[0]
+        con.close()
+    except sqlite3.DatabaseError as exc:
+        return {"name": "jobs_restore", "status": "error",
+                "snapshot": snaps[-1].name, "integrity_check": f"FAILED: {exc}"}
+    schema_ok = "jobs" in tables and "events" in tables
+    ok = integrity == "ok" and schema_ok
+    return {"name": "jobs_restore", "status": "ok" if ok else "error",
+            "snapshot": snaps[-1].name, "integrity_check": "ok" if integrity == "ok" else "FAILED",
+            "schema_ok": schema_ok, "tables": len(tables), "unfinished_jobs": unfinished}
+
+
 def main() -> int:
     started = now_iso()
     root = backup_root()
     tmp = Path(tempfile.mkdtemp(prefix="restore-check-"))
-    checks = [check_broker(root, tmp), check_session(root, tmp), check_configs(root, tmp)]
+    checks = [check_broker(root, tmp), check_session(root, tmp), check_configs(root, tmp),
+              check_jobs(root, tmp)]
     status = "ok" if all(c["status"] == "ok" for c in checks) else "error"
     ledger_append({"job": "restore_check", "dataset": "all", "started_at": started,
                    "finished_at": now_iso(), "status": status,

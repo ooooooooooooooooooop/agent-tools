@@ -271,7 +271,7 @@ class SyncEngine:
             h12_res = evaluate_session_continuity_health(self.home)
 
             # Health 13: Backup / Recovery
-            h13_res = evaluate_backup_recovery_health(self.home)
+            h13_res = evaluate_backup_recovery_health(self.home, state_repo=self.state_repo)
 
             # Collect Resources Map
             resources_map: Dict[str, ResourceRecord] = {

@@ -104,6 +104,18 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
         if p_res:
             lines.append(f"| {display_name} | {p_res.symbol} | {p_res.summary} |")
 
+    # Disaster recovery readiness is tracked separately from local backup health:
+    # off-device backup + external key custody are external durability conditions
+    # and never mask a healthy local backup (nor does a local failure imply DR).
+    backup_res = receipt.planes.get("Backup / Recovery Health")
+    if backup_res:
+        dr = backup_res.details.get("FULL_DR_READINESS")
+        if dr:
+            symbol = "✓" if dr == "READY" else "△"
+            note = "；".join(backup_res.details.get("FULL_DR_NOTES", [])) or \
+                "外部密钥托管/off-device 备份未建立（不阻塞本地备份健康）"
+            lines.append(f"| Disaster Recovery | {symbol} | {dr}: {note} |")
+
     lines.append("")
     lines.append("状态说明：✓ 正常/已对齐 / ○ 待重启 / △ 需要关注 / ✗ 失败")
     lines.append("")
