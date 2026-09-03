@@ -1,9 +1,10 @@
 ---
 name: publish-and-reuse
-description: Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下我的 Personal AI”自动判断 PULL/PUSH/MERGE/NO ACTION/REVIEW/BLOCKED（AUTO_SYNC），覆盖 agent-tools、personal-ai-state（curated + Dynamic Memory 合并）、项目仓库、runtime refresh 与新设备 Fresh Restore；同时保留 DSH 四层环境上传/更新/体检/复现作为子步骤。只自动处理确定安全的变更，冲突与 dirty 一律留给人工。
+description: Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下我的 Personal AI”自动判断 PULL/MERGE/NO ACTION/REVIEW/BLOCKED（AUTO_SYNC），覆盖 agent-tools、personal-ai-state（curated + Dynamic Memory 合并）、项目仓库、runtime refresh 与新设备 Fresh Restore；同时保留 DSH 四层环境上传/更新/体检/复现作为子步骤。只自动处理确定安全的变更，冲突与 dirty 一律留给人工；commit/push 受 canonical ownership lease 与 receipt 约束。
 version: 2.0.0
 triggers:
-  - "同步一下我的 Personal AI / 同步一下 / 更新一下这台电脑 / 让这台电脑跟另一台一致 / 把最新状态同步过来 / 把这台机器的变化同步出去"
+  - "同步一下我的 Personal AI / 同步一下 / 更新一下这台电脑 / 让这台电脑跟另一台一致 / 把最新状态同步过来"
+  - "把这台机器的变化同步出去 / 只上传"
   - "只检查同步状态 / 只拉远端 / 只上传 / 在新电脑恢复我的 Personal AI"
   - "一键上传环境 / 上传环境 / 备份环境 / 同步到 GitHub / 推送环境配置"
   - "一键更新环境 / 从 GitHub 同步 / 同步到 DSH / 刷新环境 / 拉取环境"
@@ -45,7 +46,8 @@ Fresh Restore 只是 `local canonical missing` 时的特殊 SYNC。
 
 | 用户说 | 进入模式 |
 |---|---|
-| 同步一下 / 同步我的 Personal AI / 更新一下这台电脑 / 让两台电脑一致 / 把变化同步出去 | `SYNC`（AUTO_SYNC，自动判方向） |
+| 同步一下 / 同步我的 Personal AI / 更新一下这台电脑 / 让两台电脑一致 | `SYNC`（AUTO_SYNC，自动判方向） |
+| 把变化同步出去 / 只上传 | `PUSH`（显式上传，必须有 ownership receipt） |
 | 只检查 | `CHECK`（只读） |
 | 只拉远端 | `PULL`（禁止 push/merge） |
 | 只上传 | `PUSH`（禁止 pull/merge） |
@@ -65,7 +67,7 @@ python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 
 内部顺序（防数据丢失）：fetch all → classify all（git ancestry，禁止 mtime/last-write-wins）→ action plan → 只执行确定安全动作 → 受影响面判定 → 受影响 Harness `aic apply`（generated-only，snapshot+post-diff+rollback）→ 受影响 derived 增量 refresh → validate → 写 machine-local checkpoint（`~/.dsh/.personal-ai-sync/status.json`）→ 短输出。
 
-确定安全的自动动作（其余一律 REVIEW）：clean FF pull、验证通过且 privacy scan PASS 的 FF push、不同设备新增 record/revision 的 Memory 确定性合并（复用 MemoryProvider.import_bundle 契约）、派生索引 rebuild、runtime diff/refresh。
+确定安全的自动动作（其余一律 REVIEW）：锁内 clean FF pull、显式 push 模式下有 ownership receipt 且验证通过的 FF push、不同设备新增 record/revision 的 Memory 确定性合并（复用 MemoryProvider.import_bundle 契约）、派生索引 rebuild、runtime diff/refresh。`SYNC` 不隐式 commit/push。
 
 ## 安全规则（铁律）
 
@@ -79,6 +81,8 @@ python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 8. **不破坏目标端无关文件**：所有 apply 仅增量覆盖，不清理未登记文件。
 9. 已知外部 blocker（BACKUP_KEY_CUSTODY / NOVEL_REPO_DURABILITY）状态未变只报 `known external blocker, unchanged`，不重复建议解决。
 10. public 项目 push 前必须 privacy scan，命中即 BLOCKED_PRIVACY（NOVEL_REPO_DURABILITY 继续保持）。
+11. canonical 写操作必须先取得 machine-local mutation lease；dirty、foreign lock、unknown lock 或 scope 未验证时一律 REVIEW/DEFER。
+12. commit 只能 stage 声明的 owned paths，并写出 machine-local ownership receipt；禁止 `git add -A`、隐式 push 和非 canonical restore 注册 Scheduler。
 
 ## 输出契约
 
@@ -103,7 +107,7 @@ Result: PASS / REVIEW / BLOCKED
 ## 旧能力：DSH 四层子流程（保留）
 
 - **体检**：`python scripts\sync_skills.py --destination "$env:USERPROFILE\.dsh\skills" --plugins-destination "$env:USERPROFILE\.dsh\profiles\web\plugins" --dsh-config-dir dsh-config --mcp-cordis "$env:USERPROFILE\.dsh\profiles\web\cordis.patch.yml" --profile full --check`
-- **上传（Push）**：门禁 `git diff --check` + `validate_repo --strict` + `quality_report --strict` + 仓库回归 + `publish_check.py` → `git push` → 四层体检确认。
+- **上传（Push）**：仅显式 `push` 模式；每个 ahead commit 必须有 ownership receipt，再执行 `git diff --check` + `validate_repo --strict` + `quality_report --strict` + 仓库回归 + `publish_check.py` → `git push` → 四层体检确认。
 - **更新（Pull）**：`git pull --ff-only` → 门禁 → 同体检命令 `--apply` → 逐层 `sync_dsh_config.py apply` → 重启 DSH 生效。
 - **新设备复现（Install）**：RESTORE 流程（见 reference §14），幂等、可重复执行。
 

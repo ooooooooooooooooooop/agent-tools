@@ -104,6 +104,20 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 `CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `C:\Desktop\skills` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
 
+### 11.0 Canonical Mutation Ownership
+
+所有 Personal AI canonical repository 的写操作必须经过 `scripts/personal_ai_sync.py` 的
+`CanonicalMutationLock`：先以 `actor / pid / run_id / started_at / operation / repo / scope` 原子取得机器本地
+lease，再重新检查工作区。只要 working tree 不是 `CLEAN`，自动 pull、push、merge、restore overwrite 和 commit
+一律 `REVIEW/DEFER`；不得 reset、checkout、stash、whole-repo stage 或把 foreign dirty 内容带入提交。
+
+显式 commit 只能使用声明的 owned paths，并在 commit 前验证 cached diff 完全属于该 scope；成功后把
+`actor / trigger / task_id / base / result / staged / changed / commit / ownership` receipt 写到
+`~/.dsh/.personal-ai-mutation/receipts/`，不写入 canonical repo。`SYNC` 不隐式 commit/push；只有显式
+`push` 模式且所有 ahead commits 都有有效 ownership receipt 才允许 push。临时/测试 restore 源不得取得
+canonical writer identity，也不得注册 live Scheduler。完整协议以已加载的
+`skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md` §19 为准。
+
 未来一切基础设施变化 = 独立 change，走：
 
 ```text

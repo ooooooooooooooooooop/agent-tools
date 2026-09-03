@@ -10,15 +10,15 @@
 
 ```text
 CHECK    只读取和比较（连 fetch 之外什么都不写），输出各 Plane 状态
-PULL     只允许安全的 fast-forward 拉取；禁止覆盖 dirty tree / rebase / 自动解冲突
-PUSH     只允许发布已合法形成且验证通过的 canonical 变化；禁止自动 commit/force push/上传 runtime 态
-SYNC     日常默认（AUTO_SYNC）：fetch → classify → determine direction → safe pull/push/merge
-         → runtime refresh → verify。用户不需要选方向。
+PULL     只允许锁内、clean working tree 的 fast-forward 拉取；禁止覆盖 dirty tree / rebase / 自动解冲突
+PUSH     只允许显式 push 模式发布已合法形成且有 ownership receipt 的 canonical 变化；禁止自动 commit/force push/上传 runtime 态
+SYNC     日常默认（AUTO_SYNC）：fetch → classify → determine safe direction → clean fast-forward/确定性 memory merge
+         → runtime refresh → verify。SYNC 不隐式 commit 或 push；脏工作区与未授权 ahead 一律 REVIEW/DEFER。
 RESTORE  local canonical missing 时自动进入；复用 PULL + bootstrap + runtime regeneration，
          不维护第二套独立 restore 逻辑
 ```
 
-触发路由：用户说“同步一下 / 同步我的 Personal AI / 更新一下这台电脑 / 让两台电脑一致 / 把变化同步出去”→ AUTO_SYNC；只有明确说“只检查 / 只拉远端 / 只上传 / 在新电脑恢复”才强制 CHECK / PULL / PUSH / RESTORE。
+触发路由：用户说“同步一下 / 同步我的 Personal AI / 更新一下这台电脑 / 让两台电脑一致”→ AUTO_SYNC；用户明确说“把变化同步出去 / 只上传”才进入 PUSH；“只检查 / 只拉远端 / 在新电脑恢复”分别强制 CHECK / PULL / RESTORE。
 
 ## 2. Canonical Source Matrix
 
@@ -90,21 +90,22 @@ BLOCKED_AUTH / BLOCKED_PRIVACY / OPTIONAL_NOT_INSTALLED / UNKNOWN
 | IN_SYNC | NO ACTION |
 | REMOTE_AHEAD + clean | FAST-FORWARD PULL → validate → 受影响 derived rebuild → 受影响 runtime refresh → post-check |
 | REMOTE_AHEAD + dirty | UNTOUCHED（报告，不动） |
-| LOCAL_AHEAD | 已 commit + owner 正确 + validation PASS + privacy PASS + 非 device-local → PUSH；否则 REVIEW |
+| LOCAL_AHEAD + clean + explicit push | 所有 ahead commit 均有 ownership receipt，validation PASS + privacy PASS + 非 device-local → PUSH；否则 REVIEW |
+| LOCAL_AHEAD + sync/check | REVIEW；不隐式 push |
 | LOCAL_DIRTY | UNTOUCHED；禁止自动 add/commit/stash/reset/checkout/overwrite |
 | DIVERGED | REVIEW_REQUIRED；禁止自动 merge infra canonical / rebase / force push；Memory 除外（见下） |
 
 ## 5. agent-tools 策略（最保守，§8）
 
-- remote ahead + clean → FF pull → `validate_repo --strict` + 相关 tests + 受影响 runtime refresh
-- local ahead → commit 已存在 + 门禁通过 + remote 无新历史 → PUSH（public：先 privacy scan）
+- remote ahead + clean → locked FF pull → `validate_repo --strict` + 相关 tests + 受影响 runtime refresh
+- local ahead → 仅显式 `push` 模式，且每个 ahead commit 有 ownership receipt、门禁通过、remote 无新历史 → PUSH（public：先 privacy scan）
 - dirty → 不碰
 - diverged → REVIEW，不得自动合并 Control Plane / registry / Skills infra code
 
 ## 6. personal-ai-state 分两类（§9）
 
 **A. Curated State**（identity/preferences/goals/overlays/gateways/sync metadata）：
-remote ahead + clean → PULL；local committed ahead → PUSH_CANDIDATE；双端修改 → CONFLICT_REVIEW。禁止 last-write-wins，禁止自动语义融合。
+remote ahead + clean → PULL；local committed ahead 仅在显式 push 且 receipt 校验通过时 → PUSH_CANDIDATE；双端修改 → CONFLICT_REVIEW。禁止 last-write-wins，禁止自动语义融合。
 
 **B. Dynamic Memory**：复用 MemoryProvider 冻结契约（`scripts/memory/provider.py` 的 `export` / `import_bundle`）：
 
@@ -120,7 +121,7 @@ Memory 变化后（§12）：只做受影响 derived index rebuild，验证 sear
 ## 7. Project Repository Sync（§13）
 
 - remote ahead + clean → FF pull
-- local committed ahead + remote unchanged + privacy audit PASS + 项目 policy 允许 → PUSH
+- local committed ahead + explicit push + ownership receipt + remote unchanged + privacy audit PASS + 项目 policy 允许 → PUSH
 - dirty → 不碰；diverged → REVIEW_REQUIRED
 - public 仓库 push 前扫描：secret / private infra names / personal overlay / machine-local path / private memory / credential / hidden provider → 命中即 BLOCKED_PRIVACY
 - 当前 `NOVEL_REPO_DURABILITY = BLOCKED_PRIVACY` 继续保持，不得为 sync 自动绕过
@@ -155,7 +156,7 @@ Preflight → Detect repositories/Harnesses → aic discover → Fetch canonical
 
 顺序纪律（§21）：先 fetch all → classify all → build action plan → execute safe actions；禁止先 push 再发现 remote 有变化。
 
-安全自动范围（§22）：clean FF pull / validated FF push / distinct immutable memory addition / distinct immutable revision merge / generated runtime render / derived rebuild / idempotent schedule registration。其他一律 REVIEW。**AUTO_SYNC = 自动处理所有确定安全的问题，不是所有问题。**
+安全自动范围（§22）：locked clean FF pull / explicit receipt-backed push / distinct immutable memory addition / distinct immutable revision merge / generated runtime render / derived rebuild / idempotent schedule registration。dirty tree、implicit commit/push、foreign writer、未知锁或未有回执的 ahead commit 一律 REVIEW/DEFER。**AUTO_SYNC = 自动处理所有确定安全的问题，不是所有问题。**
 
 ## 11. Incremental 与 Dependency Mapping（§23/§24）
 
@@ -177,6 +178,13 @@ governance script changed   → governance task validation
 
 `~/.dsh/.personal-ai-sync/status.json`：device_id / last_successful_sync / per_repo_last_seen_commit / last_memory_merge / runtime_render_revision / last_result。不进 canonical、不进 personal-ai-state git、可删、删除后可重新 discover。
 
+Canonical mutation lease and receipts are machine-local durable evidence, not canonical content:
+`~/.dsh/.personal-ai-mutation/<repo-hash>.lock.json` and
+`~/.dsh/.personal-ai-mutation/receipts/*.json`. A mutation must atomically acquire the lease with
+`actor / pid / run_id / started_at / operation / repo / scope`; an active foreign lease or malformed metadata
+causes `DEFER`. Dead leases are recoverable only after the stale threshold and only when the recorded PID is no
+longer alive. Receipts record `actor / trigger / task_id / base / result / staged / changed / commit / ownership`.
+
 ## 13. Scheduled CHECK-only（§27）
 
 `PersonalAI-Sync-Check`（Windows Task Scheduler，登录后或每日一次）：只 fetch + classify + report；禁止自动 pull/push/merge canonical。不给 aic 加 scheduler。
@@ -197,7 +205,7 @@ Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 
 - Secrets（§29）：先自动完成所有不需要 secret 的部分；只列当前 active route/Harness 真正缺失的 secret；不因 optional Harness 未登录阻塞核心恢复
 - Multi-Harness（§30）：按实际 installed 的 render→diff→apply→diff；未安装 = OPTIONAL_NOT_INSTALLED，不自动装齐
-- Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate
+- Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate；只有 canonical `C:\Desktop\skills` restore 可注册，临时/测试副本不得取得 canonical writer lease 或触碰 live Scheduler
 - Durability（§32）：不硬复制旧 `D:\ai-backup`，重新 discover disks/target/failure domains；无等价 target → DURABILITY=DEGRADED 但 PERSONAL_AI_CANONICAL_RESTORE 仍可 PASS；BACKUP_KEY_CUSTODY 继续 WAITING_FOR_CUSTODY_ROOT
 
 ## 15. 输出契约（§33-§35）
@@ -224,7 +232,7 @@ RESTORE 模式追加 `dsh-session-history` plane 行（backup / live / missing �
 
 ## 16. Failure Recovery / Idempotency（§36）
 
-每个动作幂等可重跑：fetch / FF pull / immutable memory import 去重 / render / derived rebuild / scheduled task registration。禁止依赖“上一步应该已成功”的不可验证状态。中途失败后重跑必须安全收敛。
+每个动作幂等可重跑：fetch / locked FF pull / immutable memory import 去重 / render / derived rebuild / scheduled task registration。任何 commit/merge/push 前必须重新读取 worktree、校验 ownership lease，并只 stage 声明 scope；禁止 `git add -A`、隐式 commit/push 或依赖“上一步应该已成功”的不可验证状态。中途失败后重跑必须安全收敛。
 
 ## 17. Personalization Restore（§40）
 
@@ -233,3 +241,28 @@ RESTORE 模式追加 `dsh-session-history` plane 行（backup / live / missing �
 ## 18. Post-sync Validation（§41）
 
 最小充分验证随 changed components 走；完整验收至少：`aic validate = VALID` + 所有已安装 Harness `aic diff = NO DRIFT` + Memory scope isolation + Context Package smoke + governance status + personal status。
+
+## 19. Canonical Mutation Ownership Closure（2026-09-03）
+
+The write contract is part of this loaded lifecycle reference and therefore survives a new conversation, model,
+restart, or machine restore:
+
+1. Read operations may run in parallel. A canonical mutation must own the exact repository lease first.
+2. `CLEAN` is a hard precondition for pull, push, merge, restore overwrite, and automatic commit. Any dirty path,
+   including an apparently harmless local-only path, yields `REVIEW/DEFER`; foreign dirty content is never staged,
+   reset, checked out, overwritten, or committed by a sync run.
+3. A commit writer declares an exact owned scope, stages only those paths, verifies the cached diff is a subset of
+   that scope, and writes a receipt outside Git. A foreign staged path aborts before staging.
+4. `SYNC` may fast-forward only a clean repository and never creates a generic commit or pushes ahead history. The
+   sole commit exception is the deterministic `personal-ai-state` memory reconciliation in item 5. Push is available
+   only in explicit `push` mode, only for clean local-ahead history whose every commit has a valid receipt.
+5. Diverged infrastructure is `REVIEW/DEFER`. The sole exception is deterministic `personal-ai-state` memory
+   reconciliation under the lease and `memory/records/**` scope; it commits locally, writes a receipt, and still
+   requires explicit push mode.
+6. A non-canonical bootstrap/restore source may clone into its own destination and refresh derived runtime files,
+   but it cannot acquire the canonical lease, register live Scheduler tasks, or mutate/commit/push/reset/checkout
+   the canonical repository.
+
+The implementation entrypoints are `scripts/personal_ai_sync.py` (`CanonicalMutationLock`,
+`commit_owned_files`, and the locked plan executor). The contract deliberately does not expand raw Git permissions
+for arbitrary agents; unproven raw writers remain a review item until they are routed through this entrypoint.
