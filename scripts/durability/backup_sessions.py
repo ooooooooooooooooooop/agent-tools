@@ -8,6 +8,7 @@ Prints no session content. Exit non-zero on any copy/verify failure.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -15,7 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import backup_root, ledger_append, now_iso, sha256_file, write_manifest  # noqa: E402
 
-SRC = Path.home() / ".dsh" / "sessions"
+def sessions_src() -> Path:
+    return Path(os.environ.get("PERSONAL_AI_SESSIONS_SRC",
+                              Path.home() / ".dsh" / "sessions"))
 
 
 def main() -> int:
@@ -29,8 +32,9 @@ def main() -> int:
 
     copied, skipped, failed, total_bytes = [], 0, [], 0
     entries = []
-    for f in sorted(SRC.rglob("session.jsonl.zstd")):
-        rel = str(f.relative_to(SRC)).replace("\\", "/")
+    src_root = sessions_src()
+    for f in sorted(src_root.rglob("session.jsonl.zstd")):
+        rel = str(f.relative_to(src_root)).replace("\\", "/")
         st = f.stat()
         prev = index.get(rel)
         if prev and prev["size"] == st.st_size and prev["mtime"] == int(st.st_mtime):
@@ -51,8 +55,21 @@ def main() -> int:
         except OSError as exc:
             failed.append(f"{rel}: {exc}")
 
-    mpath = write_manifest(day_dir, entries, {"dataset": "sessions",
-                                              "incremental": True})
+    # Merge with any existing same-day manifest: a later incremental run in the
+    # same day copies nothing (all skipped) and must NOT clobber the day's
+    # manifest with an empty file list.
+    mpath = day_dir / "manifest.json"
+    prior: dict = {}
+    if mpath.is_file():
+        try:
+            prior = {e["file"]: e for e in
+                     json.loads(mpath.read_text(encoding="utf-8")).get("files", [])}
+        except Exception:  # noqa: BLE001 - unreadable manifest: rebuild from this run
+            prior = {}
+    prior.update({e["file"]: e for e in entries})
+    merged = list(prior.values())
+    mpath = write_manifest(day_dir, merged, {"dataset": "sessions",
+                                             "incremental": True})
     state_file.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
     status = "ok" if not failed else "error"
     ledger_append({"job": "backup_sessions", "dataset": "sessions", "started_at": started,

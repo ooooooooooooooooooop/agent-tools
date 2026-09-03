@@ -54,6 +54,9 @@ def check_session(root: Path, tmp: Path) -> dict:
     if gen is None:
         return {"name": "session_restore", "status": "error", "error": "no session backup"}
     manifest = json.loads((gen / "manifest.json").read_text(encoding="utf-8"))
+    if not manifest.get("files"):
+        return {"name": "session_restore", "status": "error",
+                "error": f"generation {gen.name} manifest has no files"}
     entry = random.choice(manifest["files"])
     backed = gen / entry["file"]
     dst = tmp / "session-restore.zstd"
