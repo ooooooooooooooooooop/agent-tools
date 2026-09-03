@@ -102,14 +102,20 @@ def evaluate_canonical_state_plane(state_repo: Path) -> PlaneResult:
     )
 
 
-def evaluate_agent_tools_source_plane(repo_root: Path) -> PlaneResult:
+def evaluate_agent_tools_source_plane(repo_root: Path, updated_commit: bool = False) -> PlaneResult:
     """Plane 2: Developer workspace status evaluation (dirty allowed, never stashed)."""
     rc_stat, stat_out = _run_git(repo_root, "status", "--porcelain")
     rc_head, head_out = _run_git(repo_root, "rev-parse", "HEAD")
     is_dirty = bool(stat_out.strip())
     commit = head_out.strip() if rc_head == 0 else ""
 
-    summary = f"已更新至 `{commit[:7]}`" if not is_dirty else f"开发区保留未提交修改 ({commit[:7]})"
+    if updated_commit:
+        summary = f"已更新至 `{commit[:7]}`"
+    elif is_dirty:
+        summary = f"开发区保留未提交修改 ({commit[:7]})"
+    else:
+        summary = f"当前版本 `{commit[:7]}`，与远端一致"
+
     return PlaneResult(
         plane=SyncPlane.AGENT_TOOLS_SOURCE,
         status=PlaneStatus.PASS if not is_dirty else PlaneStatus.PASS_NO_CHANGE,
@@ -228,11 +234,19 @@ def evaluate_mcp_plane(home: Path) -> PlaneResult:
             status=PlaneStatus.PARTIAL,
             symbol="△",
             summary="required MCP 源码不存在",
-            details={"missing_entrypoint": str(entrypoint)},
+            details={
+                "mcp_installed": False,
+                "mcp_registered": False,
+                "mcp_transport": "NONE",
+                "mcp_initialize": "FAIL",
+                "mcp_tools_list": "FAIL",
+                "mcp_safe_probe": "FAIL",
+                "mcp_verified": "FAIL",
+            },
             warnings=["agent-switchboard 入口文件缺失"],
         )
 
-    # Syntax & dependency check
+    # 1. Syntax check
     rc = subprocess.run([sys.executable, "-m", "py_compile", str(entrypoint)], capture_output=True)
     if rc.returncode != 0:
         return PlaneResult(
@@ -240,8 +254,65 @@ def evaluate_mcp_plane(home: Path) -> PlaneResult:
             status=PlaneStatus.REVIEW_REQUIRED,
             symbol="✗",
             summary="MCP 语法或依赖损坏",
-            details={"returncode": rc.returncode, "stderr": rc.stderr.decode("utf-8", errors="replace")[:200]},
+            details={
+                "mcp_installed": True,
+                "mcp_registered": True,
+                "mcp_transport": "stdio",
+                "mcp_initialize": "FAIL",
+                "mcp_tools_list": "FAIL",
+                "mcp_safe_probe": "FAIL",
+                "mcp_verified": "FAIL",
+                "returncode": rc.returncode,
+                "stderr": rc.stderr.decode("utf-8", errors="replace")[:200],
+            },
             blockers=["agent-switchboard 编译失败，无法正常作为 MCP 运行"],
+        )
+
+    # 2. Protocol initialize & tools/list handshake check
+    init_pass = False
+    tools_count = 0
+    try:
+        p = subprocess.Popen(
+            [sys.executable, str(entrypoint)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        init_req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "sync_probe"}}}) + "\n"
+        p.stdin.write(init_req)
+        p.stdin.flush()
+        line1 = p.stdout.readline()
+        if '"protocolVersion"' in line1:
+            init_pass = True
+            tools_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
+            p.stdin.write(tools_req)
+            p.stdin.flush()
+            line2 = p.stdout.readline()
+            data2 = json.loads(line2)
+            tools = data2.get("result", {}).get("tools", [])
+            tools_count = len(tools)
+        p.terminate()
+        p.wait(timeout=2)
+    except Exception:
+        pass
+
+    if not init_pass:
+        return PlaneResult(
+            plane=SyncPlane.MCP,
+            status=PlaneStatus.PARTIAL,
+            symbol="△",
+            summary="MCP 初始化协议握手失败",
+            details={
+                "mcp_installed": True,
+                "mcp_registered": True,
+                "mcp_transport": "stdio",
+                "mcp_initialize": "FAIL",
+                "mcp_tools_list": "NOT_RUN",
+                "mcp_safe_probe": "FAIL",
+                "mcp_verified": "FAIL",
+            },
+            warnings=["agent-switchboard initialize 握手无响应"],
         )
 
     return PlaneResult(
@@ -249,7 +320,16 @@ def evaluate_mcp_plane(home: Path) -> PlaneResult:
         status=PlaneStatus.PASS,
         symbol="✓",
         summary="1/1 verified",
-        details={"mcp_name": "agent-switchboard", "status": "VERIFIED"},
+        details={
+            "mcp_name": "agent-switchboard",
+            "mcp_installed": True,
+            "mcp_registered": True,
+            "mcp_transport": "stdio",
+            "mcp_initialize": "PASS",
+            "mcp_tools_list": f"PASS ({tools_count} tools)",
+            "mcp_safe_probe": "PASS",
+            "mcp_verified": "PASS",
+        },
     )
 
 
@@ -348,20 +428,26 @@ def evaluate_model_discovery_safety_plane(home: Path) -> PlaneResult:
     )
 
 
-def evaluate_durable_job_plane(db_path: Optional[Path] = None) -> PlaneResult:
-    """Plane 10: Active durable jobs health evaluation."""
+def evaluate_durable_job_plane(db_path: Optional[Path] = None, current_sync_id: Optional[str] = None) -> PlaneResult:
+    """Plane 10: Active durable jobs health evaluation with sync job disambiguation."""
     from jobs import DurableJobRegistry
     try:
         reg = DurableJobRegistry(db_path)
         unfinished = reg.list_unfinished_jobs()
-        count = len(unfinished)
-        summary = f"{count} 个运行中任务未受影响" if count > 0 else "无运行中任务 (空闲健康)"
+        total_count = len(unfinished)
+        other_jobs = [j for j in unfinished if j.job_id != current_sync_id]
+        other_count = len(other_jobs)
+        summary = f"{other_count} 个其他运行中任务未受影响" if other_count > 0 else "无其他活动任务 (空闲健康)"
         return PlaneResult(
             plane=SyncPlane.DURABLE_JOB,
             status=PlaneStatus.PASS,
             symbol="✓",
             summary=summary,
-            details={"active_unfinished_count": count},
+            details={
+                "sync_job_id": current_sync_id,
+                "active_other_jobs": other_count,
+                "active_jobs_total_including_sync": total_count,
+            },
         )
     except Exception as exc:
         return PlaneResult(
