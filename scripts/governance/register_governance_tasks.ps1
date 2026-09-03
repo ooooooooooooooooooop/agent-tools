@@ -5,9 +5,20 @@ param(
 # Idempotently register the existing Personal AI governance/durability/sync-check
 # runners with the Windows Task Scheduler. This is deployment/recovery glue, not a
 # new scheduler. Canonical contracts: run_governance_*.ps1 (governance),
-# run_nightly.ps1 (durability), personal_ai_sync.py check (sync check-only).
+# run_nightly.ps1 (durability), run_sync_check.ps1 (sync check-only adapter).
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$canonicalRoot = 'C:\Desktop\skills'
+$canonicalRootResolved = (Resolve-Path -LiteralPath $canonicalRoot).Path
+$scriptRootResolved = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+$expectedScriptPath = Join-Path $canonicalRootResolved 'scripts\governance'
+$expectedScriptRoot = (Resolve-Path -LiteralPath $expectedScriptPath).Path
+$canonicalSourceMatches = [StringComparer]::OrdinalIgnoreCase.Equals(
+  $scriptRootResolved.TrimEnd('\'), $expectedScriptRoot.TrimEnd('\')
+)
+if (-not $canonicalSourceMatches) {
+  throw "Refusing non-canonical registration source: $scriptRootResolved (expected $expectedScriptRoot)"
+}
+$repo = $canonicalRootResolved
 $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $specs = @(
@@ -31,7 +42,7 @@ $specs = @(
   },
   @{
     Name = 'PersonalAI-Sync-Check'
-    Runner = Join-Path $repo 'scripts\personal_ai_sync.py'
+    Runner = Join-Path $repo 'scripts\governance\run_sync_check.ps1'
     Trigger = New-ScheduledTaskTrigger -Daily -At '09:00'
     Description = 'Check-only Personal AI sync classification (never pull/push/merge canonical).'
   }

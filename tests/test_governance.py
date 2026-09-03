@@ -102,10 +102,15 @@ class TestUpstreamCapabilityReview(unittest.TestCase):
     def test_weekly_runner_uses_existing_review_and_propagates_failures(self):
         text = (REPO / "scripts" / "governance" / "run_governance_weekly.ps1").read_text(encoding="utf-8")
         self.assertIn("$PSScriptRoot", text)
-        self.assertIn("upstream_capability_review", text)
-        self.assertIn("$rc = 1", text)
-        self.assertIn("exit $rc", text)
+        self.assertIn("runner_adapter.py", text)
+        self.assertIn("weekly", text)
+        self.assertIn("exit $LASTEXITCODE", text)
         self.assertNotIn("C:\\Users\\admin", text)
+
+    def test_sync_scheduler_uses_check_only_adapter(self):
+        text = (REPO / "scripts" / "governance" / "register_governance_tasks.ps1").read_text(encoding="utf-8")
+        self.assertIn("run_sync_check.ps1", text)
+        self.assertNotIn("Runner = Join-Path $repo 'scripts\\personal_ai_sync.py'", text)
 
     def test_task_registration_reuses_windows_scheduler_and_verifies_runner(self):
         text = (REPO / "scripts" / "governance" / "register_governance_tasks.ps1").read_text(encoding="utf-8")
