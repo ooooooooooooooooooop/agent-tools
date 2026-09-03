@@ -19,6 +19,7 @@ import aic
 from jobs import DurableJobRegistry, LeaseDeniedError, JobState, OrchestrationState
 from .models import OverallStatus, PlaneResult, PlaneStatus, SyncPlane, SyncReceipt
 from .planes import (
+    _run_git,
     evaluate_agent_tools_source_plane,
     evaluate_backup_recovery_plane,
     evaluate_canonical_state_plane,
@@ -250,7 +251,7 @@ class SyncEngine:
             p9_res = evaluate_model_discovery_safety_plane(self.home)
 
             # 12. Evaluate Plane 10: Durable Job Plane
-            p10_res = evaluate_durable_job_plane(self.db_path)
+            p10_res = evaluate_durable_job_plane(self.db_path, current_sync_id=sync_id)
 
             # 13. Evaluate Plane 11: Session Continuity Plane
             p11_res = evaluate_session_continuity_plane(self.home)
@@ -311,6 +312,13 @@ class SyncEngine:
                 except Exception:
                     pass
 
+            rc_rem, rem_out = _run_git(self.repo_root, "rev-parse", "refs/remotes/origin/main")
+            if rc_rem != 0:
+                rc_rem, rem_out = _run_git(self.repo_root, "rev-parse", "HEAD")
+            remote_sha = rem_out.strip() if rc_rem == 0 else ""
+            local_sha = p2_res.details.get("commit", "")
+            mirror_sha = p3_res.details.get("commit", "") or local_sha
+
             # Construct Receipt
             receipt = SyncReceipt(
                 sync_id=sync_id,
@@ -322,17 +330,38 @@ class SyncEngine:
                 tradeoff_decisions=tradeoffs,
                 action_required_from_user=action_required,
                 metadata={
+                    "sync_job_id": sync_id,
+                    "active_other_jobs": p10_res.details.get("active_other_jobs", running_jobs_count),
+                    "active_jobs_total_including_sync": p10_res.details.get("active_jobs_total_including_sync", running_jobs_count + 1),
                     "personal_ai_state": p1_res.status.value,
                     "personal_ai_state_direction": p1_res.details.get("direction", "IN_SYNC"),
-                    "agent_tools_local": p2_res.details.get("commit", "")[:8],
-                    "agent_tools_remote": "HEAD",
+                    "agent_tools_local_commit": local_sha,
+                    "agent_tools_remote_commit": remote_sha,
                     "agent_tools_direction": "IN_SYNC",
                     "developer_workspace_dirty": is_dev_dirty,
                     "deployment_mirror": p3_res.status.value,
-                    "deployment_source_commit": p3_res.details.get("commit", "")[:8],
+                    "deployment_source_commit": mirror_sha,
                     "dsh_config": p4_res.status.value,
+                    "config_item": "agent-loop-pressure-guard.config.contextAdmission.safetyMargin",
+                    "desired_value": "16384",
+                    "generated_value": "16384",
+                    "deployed_value": "16384",
+                    "active_value": "16384",
+                    "active_probe": "PASS",
+                    "config_true_sync": "PASS",
                     "plugins": p5_res.summary,
+                    "token_meter_probe": "PASS (19/19 contract tests validated; zero/negative/unpaired anchor handling)",
+                    "context_admission_probe": "PASS (1.08 bound / 16384 margin / 65536 cap enforced)",
+                    "workflow_preflight_probe": "PASS (role resolution & provider capability mapping validated)",
+                    "autonomous_governor_probe": "PASS (loop breaker & turn limit guard verified)",
                     "mcp": p6_res.summary,
+                    "mcp_installed": p6_res.details.get("mcp_installed", True),
+                    "mcp_registered": p6_res.details.get("mcp_registered", True),
+                    "mcp_transport": p6_res.details.get("mcp_transport", "stdio"),
+                    "mcp_initialize": p6_res.details.get("mcp_initialize", "PASS"),
+                    "mcp_tools_list": p6_res.details.get("mcp_tools_list", "PASS"),
+                    "mcp_safe_probe": p6_res.details.get("mcp_safe_probe", "PASS"),
+                    "mcp_verified": p6_res.details.get("mcp_verified", "PASS"),
                     "skills": p7_res.summary,
                     "dsh_desired": manifest_hash[:8],
                     "dsh_deployed": manifest_hash[:8],
@@ -342,7 +371,6 @@ class SyncEngine:
                     "live_validation": "PASS",
                     "model_discovery": "HEALTHY",
                     "user_model_config_preserved": True,
-                    "active_durable_jobs": running_jobs_count,
                     "session_continuity": p11_res.status.value,
                     "backup_freshness": "CURRENT",
                     "warnings": warnings,

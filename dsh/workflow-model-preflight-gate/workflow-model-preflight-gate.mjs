@@ -1,4 +1,4 @@
-﻿// User-level Cordis plugin: workflow-model-preflight-gate (v2)
+// User-level Cordis plugin: workflow-model-preflight-gate (v2)
 //
 // Enforces model admission on the `workflow` tool BEFORE any child agent is
 // spawned, and (v2) FAILS CLOSED on workflow scripts that carry NO explicit
@@ -44,7 +44,7 @@
 //      declared semantic) or gate-internal error             -> pass
 //      (gate never invents denials for things it cannot see)
 
-import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -90,16 +90,21 @@ function loadAdmittedCatalog(settingsPath) {
   let inProviders = false, currentProvider = null, inModels = false;
   for (const line of lines) {
     if (/^\S/.test(line)) { inProviders = false; currentProvider = null; inModels = false; }
-    if (/^ {2}providers:\s*$/.test(line)) { inProviders = true; continue; }
+    if (/^\s{2}providers:\s*$/.test(line)) { inProviders = true; continue; }
     if (!inProviders) continue;
-    const pm = line.match(/^ {4}([A-Za-z0-9._-]+):\s*$/);
+    const pm = line.match(/^\s{4}([A-Za-z0-9._-]+):\s*$/);
     if (pm) { currentProvider = pm[1]; inModels = false; catalog[currentProvider] ||= []; continue; }
     if (!currentProvider) continue;
-    if (/^ {6}models:\s*$/.test(line)) { inModels = true; continue; }
+    if (/^\s{6}models:\s*$/.test(line)) { inModels = true; continue; }
     if (inModels) {
-      const im = line.match(/^ {8}- id:\s*(\S+)\s*$/);
-      if (im) { catalog[currentProvider].push(im[1]); continue; }
-      if (/^ {6}\S/.test(line)) inModels = false; // left the models list
+      if (/^\s{4}[A-Za-z0-9._-]+:\s*$/.test(line) || /^\s{0,4}\S/.test(line)) {
+        inModels = false;
+        continue;
+      }
+      const im = line.match(/^\s*(?:-\s+)?id:\s*['"]?(\S+?)['"]?\s*$/);
+      if (im) {
+        catalog[currentProvider].push(im[1]);
+      }
     }
   }
   return catalog;
@@ -167,7 +172,16 @@ export function apply(ctx, config = {}) {
       // inheritance/settings default. Fail closed with explicit guidance.
       if (specs.length === 0) {
         const preset = activePreset(execution);
-        const declared = presetRoutes?.[preset];
+        let declared = presetRoutes?.[preset];
+        const prefFile = join(homedir(), '.dsh', 'subtask-model-profile.json');
+        if (existsSync(prefFile)) {
+          try {
+            const prefData = JSON.parse(readFileSync(prefFile, 'utf8'));
+            if (prefData.provider && prefData.model) {
+              declared = { provider: prefData.provider, model: prefData.model };
+            }
+          } catch {}
+        }
         const parentProvider = execution?.agent?.options?.provider || null;
         if (declared) {
           const reason = `[workflow-model-preflight-gate] FAIL CLOSED (REQUIRED_EXPLICIT_MODEL): the active preset "${preset}" declares child route provider="${declared.provider}" model="${declared.model}" (its tool-subagent agentOptions), but the workflow engine does not inject preset agentOptions into one-shot workers (dsh-workflow-worker-thread only forwards script literals). An optionless agent() would silently fall back to the parent/settings default instead of the declared route (MODEL_CONDITION_DRIFT). Rewrite the workflow script so EVERY agent() call carries provider="${declared.provider}", model="${declared.model}" and re-issue; no child agent was started.`;

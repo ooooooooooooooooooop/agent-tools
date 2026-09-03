@@ -2443,6 +2443,9 @@ def print_human(results: dict, detail: bool = False) -> None:
                    if lc.get('restartReason') and lc.get('restartReason') != 'NONE' else "")
         print(f"  RESTART_REQUIRED             {lc.get('restartRequired', 'NO')}{restart}")
         print(f"  LIVE_VALIDATION              {lc.get('liveValidation', {}).get('status', 'NOT_RUN')}")
+        import subtask_model_switch
+        subtask_st = subtask_model_switch.get_status()
+        print(f"  SUBTASK_MODEL_PROFILE        {subtask_st['profile'].upper()} ({subtask_st['target']['model']})")
         print()
     except Exception:
         pass

@@ -89,6 +89,26 @@ def dsh_home() -> Path:
 
 
 def resolve_value_from(policy: dict, dotted: str):
+    # Respect user-owned subtask model profile for subagent spawn and fork lanes
+    if dotted in ("rules.subagent_spawn.model", "rules.subagent_fork.model",
+                  "rules.subagent_spawn.provider", "rules.subagent_fork.provider"):
+        pref_file = dsh_home() / "subtask-model-profile.json"
+        if pref_file.is_file():
+            try:
+                data = json.loads(pref_file.read_text(encoding="utf-8-sig"))
+                prof = data.get("subtask_model_profile", "").lower()
+                if prof == "gemini":
+                    if dotted.endswith(".model"):
+                        return "gemini-3.7-flash-high"
+                    if dotted.endswith(".provider"):
+                        return "cpa"
+                elif prof == "luna":
+                    if dotted.endswith(".model"):
+                        return "gpt-5.6-luna-max"
+                    if dotted.endswith(".provider"):
+                        return "cpa"
+            except Exception:
+                pass
     node = policy
     for part in dotted.split("."):
         node = node[part]
