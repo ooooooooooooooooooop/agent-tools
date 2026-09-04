@@ -132,7 +132,7 @@ function Show-ErrorBalloon {
 }
 
 function Wait-PortFree {
-    param([int]$Port, [int]$TimeoutMs = 15000)
+    param([int]$Port, [int]$TimeoutMs = 15000, [switch]$FailClosed)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
         $inUse = netstat -ano 2>$null | Select-String ":$Port\s" | Select-String 'LISTENING|ESTABLISHED|TIME_WAIT'
@@ -141,6 +141,14 @@ function Wait-PortFree {
             return
         }
         Start-Sleep -Milliseconds 500
+    }
+    if ($FailClosed) {
+        # Never start a second host over a possibly-live one. Residual
+        # connections after the timeout mean the old owner may still be bound
+        # to the port (or to the shared workspace registry); starting anyway is
+        # the two-writer race that produced the workspace.json lost-update
+        # incident (DSH_WORKSPACE_REGISTRY_INTEGRITY, 2026-09-04).
+        throw "Port $Port still has residual connections after ${TimeoutMs}ms; refusing to start a second DSH Web host (RESTART_BLOCKED_OLD_HOST_NOT_TERMINATED)."
     }
     Write-Log "Warning: port $Port still has residual connections after ${TimeoutMs}ms, proceeding anyway."
 }
@@ -152,10 +160,22 @@ try {
         throw "Managed DSH launcher not found: $LauncherPath"
     }
 
+    # Single-instance guard: if a DSH Web host is already running AND healthy,
+    # reuse it instead of kill-and-restarting. A second click on the shortcut
+    # (or a sync-engine restart racing a manual one) must never spawn a second
+    # host over the same workspace registry.
+    if (Test-DshReady) {
+        Write-Log 'DSH Web is already running and healthy; reusing the existing host (no restart).'
+        Start-Process -FilePath 'explorer.exe' -ArgumentList $DshUrl | Out-Null
+        exit 0
+    }
+
     Stop-DshWeb -Snapshot (Get-ProcessSnapshot)
 
-    # Wait for port 3080 to be fully released before starting the new process
-    Wait-PortFree -Port 3080
+    # Wait for port 3080 to be fully released before starting the new process.
+    # Fail closed: residual connections mean the old owner may still hold the
+    # port / registry — never start a second host over it.
+    Wait-PortFree -Port 3080 -FailClosed
 
     # Use WMI Win32_Process.Create to launch a fully detached process that is
     # not part of this process's Windows Job Object. This prevents Windows from

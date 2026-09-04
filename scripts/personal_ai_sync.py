@@ -697,6 +697,97 @@ def session_history_status(live_root: Path, backup_root: Path | None = None,
     }
 
 
+def workspace_registry_integrity(workspace_json: Path | None = None) -> dict:
+    """WORKSPACE_REGISTRY_INTEGRITY plane: read-only invariant check on the DSH
+    workspace registry (`~/.dsh/storages/workspace.json`).
+
+    Detects the class of the DSH_WORKSPACE_REGISTRY_INTEGRITY incident
+    (2026-09-04): a workspace record present in `tables.workspaces` but absent
+    from `global.workspaceIds` (records/order mismatch), a duplicate normalized
+    workspace path, or a session double-accounted across workspaces. These are
+    exactly the invariants `WorkspaceRegistry.validateStoredState` enforces at
+    DSH startup; running them here surfaces the corruption on every
+    `personal-ai sync check` instead of only at the next host boot.
+
+    Read-only: never mutates, never auto-merges. A violation returns
+    REVIEW_REQUIRED with a structured reason; PASS otherwise.
+    """
+    ws_file = workspace_json or (Path.home() / ".dsh" / "storages" / "workspace.json")
+    if not ws_file.is_file():
+        return {"status": "NOT_APPLICABLE", "reason": f"workspace registry not present: {ws_file}"}
+    try:
+        data = json.loads(ws_file.read_text(encoding="utf-8-sig"))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "FAIL", "reason": f"workspace registry unreadable: {exc}"}
+
+    try:
+        order = list(data.get("global", {}).get("workspaceIds", []))
+        workspaces = data.get("tables", {}).get("workspaces", {}) or {}
+        archived = list(data.get("global", {}).get("archivedSessionIds", []))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "FAIL", "reason": f"workspace registry malformed shape: {exc}"}
+
+    problems = []
+
+    # records/order set equality (the incident: records=9, order=8)
+    order_set = set(order)
+    table_set = set(workspaces)
+    if len(order) != len(order_set):
+        problems.append(f"order repeats a workspace id ({len(order)} != {len(order_set)} unique)")
+    missing_from_order = table_set - order_set
+    dangling_order = order_set - table_set
+    if missing_from_order:
+        problems.append(
+            f"{len(missing_from_order)} workspace record(s) absent from registry order: "
+            + ", ".join(sorted(missing_from_order)))
+    if dangling_order:
+        problems.append(
+            f"{len(dangling_order)} order id(s) reference no workspace record: "
+            + ", ".join(sorted(dangling_order)))
+
+    # normalized (realpath-canonical) path uniqueness
+    seen_paths: dict[str, str] = {}
+    for wid, rec in workspaces.items():
+        path = rec.get("path")
+        if not isinstance(path, str):
+            problems.append(f"workspace {wid} has no path")
+            continue
+        # Windows/Unix normalize for the uniqueness canon: strip trailing slash,
+        # normalize case on Windows drive letter is left to fs.realpath at the
+        # host; here we compare the stored canonical path string exactly (the
+        # host already stores fs.realpath output). Duplicate identical strings
+        # are the observable duplicate-path invariant.
+        prior = seen_paths.get(path)
+        if prior is not None:
+            problems.append(f"duplicate normalized path '{path}' claimed by {prior} and {wid}")
+        else:
+            seen_paths[path] = wid
+
+    # session ownership uniqueness
+    accounted: dict[str, str] = {}
+    for wid, rec in workspaces.items():
+        for sid in rec.get("sessionIds", []):
+            holder = accounted.get(sid)
+            if holder is not None and holder != wid:
+                problems.append(f"session {sid} accounted by both {holder} and {wid}")
+            else:
+                accounted[sid] = wid
+
+    result = {
+        "status": "PASS" if not problems else "REVIEW",
+        "reason": "" if not problems else "; ".join(problems),
+        "workspace_count": len(workspaces),
+        "order_count": len(order),
+        "archived_count": len(archived),
+        "problems": problems,
+    }
+    if not problems:
+        result["reason"] = (
+            f"records={len(workspaces)} order={len(order)} paths_unique=True "
+            f"session_ownership_unique=True")
+    return result
+
+
 def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120,
         env: dict[str, str] | None = None) -> tuple[int, str]:
     try:
@@ -2380,6 +2471,13 @@ def run_restore(detail: bool = False, repo: Path = REPO,
          f" missing={sh['missing']}{anchors_summary}"
          + (f" ({sh['reason']})" if sh.get("reason") else ""))
     results["session_history"] = sh
+    # WORKSPACE_REGISTRY_INTEGRITY plane(DSH_WORKSPACE_REGISTRY_INTEGRITY 事故,
+    # 2026-09-04):只读检查 workspace registry 不变量(records==order / 路径唯一 /
+    # session 唯一归属);违反 → REVIEW_REQUIRED,绝不做 auto-merge。
+    wri = workspace_registry_integrity()
+    step("workspace registry integrity", wri["status"] in ("PASS", "NOT_APPLICABLE"),
+         wri["reason"])
+    results["workspace_registry"] = wri
     sec = check_secrets()
     step("secrets", True, f"{sec['status']} missing={sec['missing']}")
     results["secrets"] = sec
@@ -2482,6 +2580,10 @@ def print_human(results: dict, detail: bool = False) -> None:
         print(f"  {'dsh-session-history':22s} {sh['status']}"
               f" (backup={sh['backup_count']} live={sh['live_count']}"
               f" missing={sh['missing']})")
+    wri = results.get("workspace_registry")
+    if wri:
+        print(f"  {'workspace-registry':22s} {wri['status']}"
+              + (f" — {wri['reason']}" if wri.get("reason") else ""))
     print(f"\n  external blockers    known external blocker, unchanged "
           f"({len(KNOWN_BLOCKERS)})")
     for s in results.get("steps", []):
