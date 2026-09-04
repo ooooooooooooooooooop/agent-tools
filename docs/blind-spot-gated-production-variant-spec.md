@@ -152,9 +152,12 @@ The overlay does NOT rely solely on standard Gate 0. It executes a dedicated sem
 | **This Blind-Spot Variant (Pass)** | **3-4** | **~15k-25k** | **~4k-8k** | **~0.04x (~96% cheaper)** |
 | **This Blind-Spot Variant (Re-entry)** | **5-6** | **~30k-45k** | **~8k-14k** | **~0.08x (~92% cheaper)** |
 
-- When the candidate answer is already sound (expected in ~70% of production queries),
-  total cost is 1 primary call + 1-2 blind-spot probes + 1 gate evaluation.
-- Re-entry triggers ONLY when genuine material blind spots are surfaced.
+- **Illustrative Scenario Note:** The table contrasts the two operational paths:
+  1. *Fast-Path Pass (No Material Blind Spot):* 1 primary call + 1-2 blind-spot probes + 1 gatekeeper evaluation.
+  2. *Re-entry Path (Material Challenge):* adds 1 primary re-entry synthesis call.
+- **Evidence Classification:**
+  * Observed call/token counts: grounded in exp1 and held-out validation traces.
+  * Generalized production prevalence of pass vs re-entry: **UNVERIFIED** (requires live telemetry; no prior distribution assumed).
 
 ---
 

@@ -281,5 +281,92 @@ class TestLintResponsePass(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestExecuteBlindSpotPipelineE2E(unittest.TestCase):
+    def test_e2e_pipeline_skips_pure_execution(self):
+        called = []
+        def mock_call(model, prompt, tag):
+            called.append(tag)
+            return ""
+
+        out, trace = bsg.execute_blind_spot_pipeline(
+            user_prompt="Deploy the docker container v1.2 to production ECS.",
+            candidate_answer="Executing deployment commands.",
+            call_model_fn=mock_call,
+        )
+        self.assertEqual(trace["final_disposition"], "SKIP_EXECUTION_PHASE")
+        self.assertEqual(len(called), 0, "Execution task must make 0 reviewer calls")
+        self.assertEqual(out, "Executing deployment commands.")
+
+    def test_e2e_pipeline_immaterial_fast_path(self):
+        called = []
+        def mock_call(model, prompt, tag):
+            called.append(tag)
+            if tag == "blindspot-review":
+                return "NO_MATERIAL_BLIND_SPOTS. The candidate decision is sound."
+            if tag == "materiality-gate":
+                return '{"material": false, "reason": "No material flaw detected."}'
+            return ""
+
+        cand = "## 6. Moderator Synthesis\nCommit to Architecture A.\n## 7. Uncertainty Ledger\nLow risk."
+        out, trace = bsg.execute_blind_spot_pipeline(
+            user_prompt="Choose between Architecture A and Architecture B",
+            candidate_answer=cand,
+            call_model_fn=mock_call,
+            main_model_id="claude-opus-5",
+        )
+        self.assertEqual(trace["final_disposition"], "NO_MATERIAL_CHANGE")
+        self.assertFalse(trace.get("reentry_occurred", False))
+        self.assertEqual(called, ["blindspot-review", "materiality-gate"])
+        self.assertEqual(out, cand)
+
+    def test_e2e_pipeline_material_reentry_accepted(self):
+        called = []
+        def mock_call(model, prompt, tag):
+            called.append(tag)
+            if tag == "blindspot-review":
+                return "MATERIAL: Omits high-write contention bottleneck on global table lock."
+            if tag == "materiality-gate":
+                return '{"material": true, "reason": "Global table lock fatally blocks concurrent writes."}'
+            if tag == "reentry-synthesis":
+                return "Revised: Partially accept table lock risk; adopt online schema change (gh-ost)."
+            return ""
+
+        cand = "## 6. Moderator Synthesis\nCommit to standard ALTER TABLE.\n## 7. Uncertainty Ledger\nAssume fast lock."
+        out, trace = bsg.execute_blind_spot_pipeline(
+            user_prompt="Design zero-downtime database schema migration strategy",
+            candidate_answer=cand,
+            call_model_fn=mock_call,
+            main_model_id="claude-opus-5",
+        )
+        self.assertEqual(trace["final_disposition"], "PARTIALLY_ACCEPTED")
+        self.assertTrue(trace["reentry_occurred"])
+        self.assertEqual(called, ["blindspot-review", "materiality-gate", "reentry-synthesis"])
+        self.assertIn("## Decision Update: Blind-Spot Integration", out)
+        self.assertIn("online schema change (gh-ost)", out)
+
+    def test_e2e_pipeline_heterogeneous_unavailable_safe_downgrade(self):
+        orig_families = dict(bsg.MODEL_FAMILIES)
+        try:
+            bsg.MODEL_FAMILIES = {k: "anthropic" for k in orig_families}
+            called = []
+            def mock_call(model, prompt, tag):
+                called.append(tag)
+                return ""
+
+            cand = "Candidate decision."
+            out, trace = bsg.execute_blind_spot_pipeline(
+                user_prompt="Strategic decision",
+                candidate_answer=cand,
+                call_model_fn=mock_call,
+                main_model_id="claude-opus-5",
+            )
+            self.assertEqual(trace["final_disposition"], "HETEROGENEOUS_REVIEW_UNAVAILABLE")
+            self.assertEqual(len(called), 0, "Unavailable heterogeneous reviewer must make 0 calls")
+            self.assertIn("Candidate decision", out)
+            self.assertIn("Governance Note", out)
+        finally:
+            bsg.MODEL_FAMILIES = orig_families
+
+
 if __name__ == "__main__":
     unittest.main()
