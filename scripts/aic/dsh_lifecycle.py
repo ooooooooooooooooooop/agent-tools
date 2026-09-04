@@ -151,6 +151,11 @@ def ensure_deployment_mirror(home: Path | None = None,
         if rc.returncode != 0:
             raise RuntimeError(f"failed to initialize deployment mirror: {rc.stderr}")
 
+    rc_before, head_before = _git(mirror_dir, "rev-parse", "HEAD")
+    commit_before = head_before.strip() if rc_before == 0 else ""
+
+    subprocess.run(["git", "-C", str(mirror_dir), "config", "core.autocrlf", "false"],
+                   capture_output=True, text=True)
     subprocess.run(["git", "-C", str(mirror_dir), "fetch", "--quiet", str(src),
                     "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"],
                    capture_output=True, text=True)
@@ -173,7 +178,9 @@ def ensure_deployment_mirror(home: Path | None = None,
 
     return {
         "path": str(mirror_dir),
+        "commit_before": commit_before,
         "commit": actual_commit,
+        "changed": bool(commit_before and actual_commit and commit_before != actual_commit),
         "dirty": is_dirty,
         "clean": not is_dirty,
     }

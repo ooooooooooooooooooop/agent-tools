@@ -28,6 +28,8 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
             lines.append("同步收敛已完成，没有新的收敛变化；但检测到健康异常，需要后续处理。")
     elif receipt.overall == OverallStatus.PARTIAL_RESTART_REQUIRED:
         lines.append("同步基本完成，更新已部署，待下次正常重启 DSH 后自动生效。")
+    elif receipt.overall == OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS:
+        lines.append("同步部分完成：部分非核心资源尚未完全收敛，主功能正常；且存在需要关注的健康状态。")
     elif receipt.overall == OverallStatus.PARTIAL:
         lines.append("同步部分完成：部分非核心资源尚未完全收敛，主功能正常。")
     elif receipt.overall == OverallStatus.REVIEW_REQUIRED:
@@ -43,6 +45,14 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
     if receipt.changes_applied:
         for change in receipt.changes_applied:
             lines.append(f"* {change}")
+    elif receipt.overall in (
+        OverallStatus.PARTIAL,
+        OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS,
+        OverallStatus.PARTIAL_RESTART_REQUIRED,
+        OverallStatus.REVIEW_REQUIRED,
+        OverallStatus.FAILED,
+    ):
+        lines.append("本次未产生已应用的磁盘更新；系统仍有待对齐或待收敛项。")
     else:
         lines.append("本次没有发现需要同步的变化，当前系统已是最新状态。")
     lines.append("")

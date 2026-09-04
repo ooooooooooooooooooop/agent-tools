@@ -14,7 +14,15 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from sync_v2.models import EvidenceLevel, OverallStatus, PlaneStatus, ResourceCategory, ResourceRecord, SyncPlane
+from sync_v2.models import (
+    EvidenceLevel,
+    OverallStatus,
+    PlaneStatus,
+    ResourceCategory,
+    ResourceRecord,
+    SyncPlane,
+    SyncReceipt,
+)
 from sync_v2.planes import (
     evaluate_agent_tools_source_plane,
     evaluate_backup_recovery_health,
@@ -32,6 +40,7 @@ from sync_v2.planes import (
 )
 from sync_v2.engine import SyncEngine
 from sync_v2.receipt import render_human_receipt
+from jobs import DurableJobRegistry
 
 
 class FakeSyncRegressionTests(unittest.TestCase):
@@ -839,6 +848,341 @@ class SyncV3TruthAndHealthAdjudicationTests(unittest.TestCase):
         self.assertEqual(res.details["BACKUP_INTEGRITY_STATE"], "PASS")
         self.assertEqual(res.details["LOCAL_BACKUP_HEALTH"], "PASS")
         self.assertIn(res.details["FULL_DR_READINESS"], ("INCOMPLETE", "MISSING"))
+
+
+class SyncV3ConvergenceDriftReconciliationTests(unittest.TestCase):
+    """Regression test matrix covering the 9 convergence drift reconciliation requirements (A-I):
+    A: remote ahead, mirror stale, sync -> mirror refreshed
+    B: mirror stale reinspection uses new snapshot
+    C: skill stale -> repair -> verified
+    D: plugin stale -> deployment plan/apply/reverify
+    E: required plugin partial -> Runtime cannot PASS for same desired set
+    F: check-only -> detects but does not repair
+    G: normal sync -> detects and repairs
+    H: repair deltas exist -> Human Receipt cannot say 'no changes'
+    I: partial convergence + health warnings -> overall is PARTIAL_WITH_HEALTH_WARNINGS
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.td = Path(self.temp_dir.name)
+        self.home = self.td / ".dsh"
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.home / "jobs.db"
+        (self.home / "sessions").mkdir(parents=True, exist_ok=True)
+        (self.home / "storages").mkdir(parents=True, exist_ok=True)
+        (self.home / "storages" / "workspace.json").write_text("{}", encoding="utf-8")
+        (self.home / "storages" / "session_projcache.json").write_text("{}", encoding="utf-8")
+
+        # Runtime composition baseline
+        prof_dir = self.home / "profiles" / "web"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        (prof_dir / "dsh-runtime-composition.json").write_text(
+            json.dumps({"profileCombinationHash": "hash123"}), encoding="utf-8"
+        )
+        (prof_dir / "cordis.patch.yml").write_text(
+            "# AIC DSH RUNTIME COMPOSITION BEGIN\n- id: include:token-meter-pressure-guard\n# AIC DSH RUNTIME COMPOSITION END\n",
+            encoding="utf-8"
+        )
+        (self.home / "settings.yaml").write_text("agent-default-model:\n  model: deepseek-chat\n", encoding="utf-8")
+
+        # Presets baseline
+        preset_dir = self.home / ".agent-presets" / "cc"
+        preset_dir.mkdir(parents=True, exist_ok=True)
+        (preset_dir / "agent.cordis.yml").write_text("agent:\n  profile: cc\n", encoding="utf-8")
+
+        # Skills baseline
+        (self.home / "skills").mkdir(parents=True, exist_ok=True)
+
+        # Mirror baseline
+        self.mirror_dir = self.home / ".deployment-mirror" / "agent-tools"
+        self.mirror_dir.mkdir(parents=True, exist_ok=True)
+
+        # State repo baseline
+        self.state_repo = self.td / "personal-ai-state"
+        (self.state_repo / "sync").mkdir(parents=True, exist_ok=True)
+        self.backup_root = self.td / "ai-backup"
+        (self.backup_root / "ledger").mkdir(parents=True, exist_ok=True)
+        (self.state_repo / "sync" / "this-device.yaml").write_text(
+            f"device_id: TEST\nbackup_root: {self.backup_root}\n", encoding="utf-8"
+        )
+        self._write_verified_backup_ledger()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _call_git(self, repo, *args, **kwargs):
+        """Deterministic git stand-in for hermetic engine runs.
+
+        Mirrors _run_git(repo, ...) semantics so the engine can free-run a full
+        detect -> plan -> repair -> re-inspect cycle without touching a real repo:
+          * status/porcelain on the real dev repo -> dirty (REPO worktree has edits)
+          * mirror HEAD -> f3f6c48 (stale), remote origin/main -> 128906b (ahead)
+          * every other git call -> clean/empty.
+        """
+        flat = " ".join(str(a) for a in args)
+        if "status" in flat and "--porcelain" in flat and repo != self.mirror_dir:
+            return (0, " M scripts/personal_ai_sync.py")
+        if "rev-parse" in flat:
+            if repo == self.mirror_dir:
+                return (0, "f3f6c48")
+            if "HEAD" in flat:
+                return (0, "f3f6c48")
+            return (0, "128906b")
+        return (0, "")
+
+    def _write_verified_backup_ledger(self) -> None:
+        import datetime as dt
+        base = dt.datetime.now().astimezone() - dt.timedelta(hours=1)
+        ts = base.isoformat(timespec="seconds")
+        rows = [
+            {"job": "backup_sessions", "dataset": "sessions", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_broker", "dataset": "broker:broker", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_configs", "dataset": "configs", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_jobs", "dataset": "jobs", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_repos", "dataset": "repos", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+            {"job": "restore_check", "dataset": "all", "finished_at": ts, "status": "ok", "integrity_status": "verified"},
+        ]
+        led = self.backup_root / "ledger" / "runs.jsonl"
+        led.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        for sub, name in [("sessions", "daily-x"), ("configs", "daily-x")]:
+            d = self.backup_root / sub / name
+            d.mkdir(parents=True, exist_ok=True)
+        for sub, name in [("broker", "broker-x.sqlite"), ("jobs", "jobs-x.sqlite")]:
+            d = self.backup_root / sub / name
+            d.parent.mkdir(parents=True, exist_ok=True)
+            d.write_bytes(b"sqlite")
+
+    def _make_engine_and_patches(self):
+        """Return a SyncEngine plus the patch stack needed to free-run check_only=False
+        against the sandbox home without real git/DSH-runtime/MCP side effects.
+
+        Mirror dir exists (with .git) so the engine computes mirror_before, invokes the
+        real ensure_deployment_mirror path (mocked to report a refresh), then re-inspects
+        the mirror plane via its mocked evaluator.
+        """
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+        engine.db_path = self.db_path
+        engine.registry = DurableJobRegistry(self.db_path)
+        (self.mirror_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (self.mirror_dir / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+        in_sync = lambda rid, plane, summary="in sync": ResourceRecord(
+            resource_id=rid, plane=plane, category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.IN_SYNC, symbol="✓", summary=summary)
+        mirror_ensure = mock.MagicMock(return_value={"commit_before": "f3f6c48", "commit": "128906b", "changed": True})
+        skills_eval = mock.MagicMock(return_value=in_sync("skills", SyncPlane.SKILL))
+        patches = [
+            mock.patch("sync_v2.engine._run_git", side_effect=self._call_git),
+            mock.patch("sync_v2.engine.evaluate_agent_tools_source_plane", return_value=ResourceRecord(
+                resource_id="agent_tools_source", plane=SyncPlane.AGENT_TOOLS_SOURCE,
+                category=ResourceCategory.CONVERGENCE_PLANE, status=PlaneStatus.PASS_NO_CHANGE,
+                details={"dirty": False})),
+            mock.patch("dsh_lifecycle.ensure_deployment_mirror", mirror_ensure),
+            mock.patch("sync_v2.engine.evaluate_deployment_mirror_plane", return_value=ResourceRecord(
+                resource_id="deployment_mirror", plane=SyncPlane.DEPLOYMENT_MIRROR,
+                category=ResourceCategory.CONVERGENCE_PLANE, status=PlaneStatus.IN_SYNC,
+                materialized_identity="128906b", desired_identity="128906b")),
+            mock.patch("sync_v2.engine.evaluate_dsh_config_plane", return_value=in_sync("dsh_config", SyncPlane.DSH_CONFIG)),
+            mock.patch("sync_v2.engine.evaluate_dsh_plugins_plane", return_value=in_sync("dsh_plugins", SyncPlane.DSH_PLUGIN)),
+            mock.patch("sync_v2.engine.evaluate_skills_plane", skills_eval),
+            mock.patch("sync_v2.engine.evaluate_mcp_plane", return_value=in_sync("mcp", SyncPlane.MCP)),
+            mock.patch("sync_v2.engine._find_live_dsh_process", return_value=None),
+            # engine.py imports dsh_runtime lazily inside run(); patch the module's inspect
+            # so the post-runtime block sees a clean manifest and never triggers real apply.
+            mock.patch("dsh_runtime.inspect",
+                       return_value={"status": "PASS", "manifest": {"profileCombinationHash": "h"}, "warnings": []}),
+        ]
+        mocks = {"mirror_ensure": mirror_ensure, "skills_eval": skills_eval}
+        return engine, patches, mocks
+
+    def test_A_remote_ahead_mirror_stale_sync_refreshes_mirror(self) -> None:
+        # Remote accepted commit is ahead (128906b), mirror at f3f6c48. check_only=False
+        # must detect the stale mirror and refresh it -> real transaction change.
+        import contextlib
+        engine, patches, mocks = self._make_engine_and_patches()
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            receipt, _ = engine.run(check_only=False)
+        # Mirror refresh executed and surfaced as a real transaction change
+        self.assertTrue(any("生产部署镜像已更新" in c for c in receipt.changes_applied))
+        self.assertNotEqual(receipt.overall, OverallStatus.PASS_NO_CHANGE)
+        # ensure_deployment_mirror received the accepted remote commit (128906b) as target
+        self.assertEqual(mocks["mirror_ensure"].call_args[0][2], "128906b")
+
+    def test_B_mirror_stale_reinspection_uses_new_snapshot(self) -> None:
+        # After mirror refresh, downstream planes must be re-inspected against the NEW
+        # snapshot (self.mirror_dir as source_repo), not the dev repo_root.
+        import contextlib
+        engine, patches, mocks = self._make_engine_and_patches()
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            engine.run(check_only=False)
+        # engine resolves source_repo = mirror_dir because mirror is clean (not dirty)
+        self.assertEqual(mocks["skills_eval"].call_args[0][1], engine.mirror_dir)
+        self.assertNotEqual(mocks["skills_eval"].call_args[0][1], engine.repo_root)
+
+    def test_C_skill_stale_repairs_and_verifies(self) -> None:
+        # Create a skill repo source and a stale installed destination
+        repo_skill = self.td / "repo_skill" / "skills" / "my-skill"
+        repo_skill.mkdir(parents=True, exist_ok=True)
+        (repo_skill / "SKILL.md").write_text("version: 2.0.0\nnew content\n", encoding="utf-8")
+        manifest_p = self.td / "repo_skill" / "skills.json"
+        manifest_p.write_text(json.dumps({"skills": [{"name": "my-skill", "path": "skills/my-skill"}]}), encoding="utf-8")
+
+        dst_skill = self.home / "skills" / "my-skill"
+        dst_skill.mkdir(parents=True, exist_ok=True)
+        (dst_skill / "SKILL.md").write_text("version: 1.0.0\nold content\n", encoding="utf-8")
+
+        # Inspection without repair reports PARTIAL / stale
+        res_inspect = evaluate_skills_plane(self.home, self.td / "repo_skill", repair=False)
+        self.assertEqual(res_inspect.status, PlaneStatus.PARTIAL)
+        self.assertIn("my-skill", res_inspect.details["stale"])
+
+        # Evaluation with repair performs atomic materialize and reverifies to REPAIRED
+        res_repair = evaluate_skills_plane(self.home, self.td / "repo_skill", repair=True)
+        self.assertEqual(res_repair.status, PlaneStatus.REPAIRED)
+        self.assertIn("my-skill", res_repair.details["repaired"])
+        self.assertEqual((dst_skill / "SKILL.md").read_text(encoding="utf-8"), "version: 2.0.0\nnew content\n")
+        self.assertTrue(len(res_repair.details["repaired_deltas"]) > 0)
+        self.assertEqual(res_repair.details["repaired_deltas"][0]["skill_id"], "my-skill")
+
+    def test_D_plugin_stale_plan_apply_reverify(self) -> None:
+        contract = {
+            "runtime_composition": {
+                "managed_rows": {
+                    "plugins": [{
+                        "id": "test-plugin",
+                        "source_relative": "plugins/src",
+                        "plugin_directory": "test-plugin",
+                        "entry_relative": "index.js",
+                    }]
+                }
+            }
+        }
+        repo_root = self.td / "repo_plugin"
+        (repo_root / "plugins/src").mkdir(parents=True, exist_ok=True)
+        (repo_root / "plugins/src/index.js").write_text("// new plugin code\n", encoding="utf-8")
+
+        dst_plugin = self.home / "profiles/web/plugins/test-plugin"
+        dst_plugin.mkdir(parents=True, exist_ok=True)
+        (dst_plugin / "index.js").write_text("// old plugin code\n", encoding="utf-8")
+
+        # Test without repair -> PARTIAL, plugin listed stale
+        res_no_rep = evaluate_dsh_plugins_plane(self.home, repo_root, contract, repair=False)
+        self.assertEqual(res_no_rep.status, PlaneStatus.PARTIAL)
+        self.assertIn("test-plugin", res_no_rep.details["stale"])
+
+        # Recreate the stale destination, then test with repair: dsh_runtime.apply (mocked)
+        # performs the deployment and the evaluator re-verifies to REPAIRED.
+        (dst_plugin / "index.js").write_text("// old plugin code\n", encoding="utf-8")
+
+        def _fake_apply(home, contract):
+            (dst_plugin / "index.js").write_text("// new plugin code\n", encoding="utf-8")
+            return {"status": "APPLIED"}
+
+        with mock.patch("dsh_runtime.apply", side_effect=_fake_apply) as mock_apply:
+            res_rep = evaluate_dsh_plugins_plane(self.home, repo_root, contract, repair=True)
+            mock_apply.assert_called_once()
+            self.assertEqual(res_rep.status, PlaneStatus.REPAIRED)
+            self.assertTrue(res_rep.details["repaired"])
+            self.assertEqual(res_rep.details["deployed"], 1)
+
+    def test_E_required_plugin_partial_blocks_runtime_pass(self) -> None:
+        contract = {"runtime_composition": {"managed_rows": {"plugins": []}}}
+        active_proc = {"pid": 9999, "commandLine": "node bin.js", "startTimeEpoch": 2000.0}
+
+        # If plugins_plane_status is PARTIAL, runtime plane MUST NOT return IN_SYNC
+        res = evaluate_runtime_plane(
+            self.home, contract, active_proc, repair=False, plugins_plane_status=PlaneStatus.PARTIAL
+        )
+        self.assertEqual(res.status, PlaneStatus.PARTIAL)
+        self.assertNotEqual(res.status, PlaneStatus.IN_SYNC)
+        self.assertIn("底层受管插件未完全对齐", res.summary)
+
+    def test_F_check_only_detects_but_does_not_repair(self) -> None:
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+        # Mock a drift in plugins
+        mock_drift = ResourceRecord(
+            resource_id="dsh_plugins",
+            plane=SyncPlane.DSH_PLUGIN,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.PARTIAL,
+            summary="1 stale plugin",
+        )
+        with mock.patch("sync_v2.engine.evaluate_dsh_plugins_plane", return_value=mock_drift):
+            with mock.patch("sync_v2.engine._find_live_dsh_process", return_value=None):
+                receipt, _ = engine.run(check_only=True)
+                # In check_only mode, changes_applied must be empty and convergence status PARTIAL
+                self.assertEqual(receipt.changes_applied, [])
+                self.assertEqual(receipt.convergence_status, "PARTIAL")
+
+    def test_G_normal_sync_detects_and_repairs(self) -> None:
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+        mock_repaired = ResourceRecord(
+            resource_id="skills",
+            plane=SyncPlane.SKILL,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.REPAIRED,
+            summary="21/21 全部对齐 (已修复 1 项)",
+        )
+        with mock.patch("sync_v2.engine.evaluate_skills_plane", return_value=mock_repaired):
+            with mock.patch("sync_v2.engine._find_live_dsh_process", return_value=None):
+                receipt, _ = engine.run(check_only=False)
+                self.assertTrue(any("Skills 已收敛同步" in c for c in receipt.changes_applied))
+
+    def test_H_repair_deltas_prevent_human_receipt_saying_no_changes(self) -> None:
+        # Case 1: changes applied -> Section 2 lists changes, Section 1 does not say no changes
+        rec_repaired = SyncReceipt(
+            sync_id="test1",
+            timestamp="2026-09-04T12:00:00",
+            overall=OverallStatus.PASS,
+            changes_applied=["生产部署镜像已更新至 128906b", "Skills 已收敛同步"],
+        )
+        human1 = render_human_receipt(rec_repaired)
+        self.assertNotIn("本次没有发现需要同步的变化", human1)
+        self.assertIn("更新了 2 项", human1)
+
+        # Case 2: PARTIAL without changes -> Section 2 explicitly notes unapplied drifts
+        rec_partial = SyncReceipt(
+            sync_id="test2",
+            timestamp="2026-09-04T12:00:00",
+            overall=OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS,
+            changes_applied=[],
+        )
+        human2 = render_human_receipt(rec_partial)
+        self.assertNotIn("当前系统已是最新状态", human2)
+        self.assertIn("本次未产生已应用的磁盘更新；系统仍有待对齐或待收敛项", human2)
+
+    def test_I_partial_convergence_with_health_warnings_overall_is_partial_with_health_warnings(self) -> None:
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+        mock_partial = ResourceRecord(
+            resource_id="dsh_plugins",
+            plane=SyncPlane.DSH_PLUGIN,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.PARTIAL,
+            summary="7/8 插件就绪",
+        )
+        # Create unattached unexpected session to trigger HEALTH_WARNING
+        events = [
+            {"type": "session", "id": "session-warn", "delegationDepth": 0},
+            {"type": "user/message", "role": "user", "data": {"content": [{"type": "text", "text": "Deploy cluster"}]}}
+        ]
+        import zstandard as zstd
+        s_dir = self.home / "sessions" / "--test--/session-warn"
+        s_dir.mkdir(parents=True, exist_ok=True)
+        (s_dir / "session.jsonl.zstd").write_bytes(zstd.ZstdCompressor().compress(b'{"type":"session","id":"session-warn"}\n'))
+
+        with mock.patch("sync_v2.engine.evaluate_dsh_plugins_plane", return_value=mock_partial):
+            with mock.patch("sync_v2.engine._find_live_dsh_process", return_value=None):
+                receipt, _ = engine.run(check_only=True)
+                self.assertEqual(receipt.convergence_status, "PARTIAL")
+                self.assertEqual(receipt.health_status, "WARNING")
+                self.assertEqual(receipt.overall, OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS)
+                self.assertNotEqual(receipt.overall, OverallStatus.PASS_WITH_HEALTH_WARNINGS)
+                self.assertNotEqual(receipt.overall, OverallStatus.PASS_NO_CHANGE)
 
 
 if __name__ == "__main__":
