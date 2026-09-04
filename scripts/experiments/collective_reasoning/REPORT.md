@@ -302,59 +302,106 @@ To isolate this confound causally:
 | **vs R0 (Self-check)** | — | 2 - 4 | Mixed (some judges reward debate depth) |
 | **vs CURRENT** | 5 - 1 | 2 - 4 | CURRENT shows strong standalone baseline |
 
-## 3. Core Scientific Verdict: CASE A Confirmed
+## 3. Revised Scientific Verdict: Dimension Trade-Off, Not Universal Superiority
 
-**Definitive finding:** The failure of COLLECTIVE to beat COUNCIL in Round 1 was
-**predominantly an artifact of the neutral renderer's output contract**, not an
-absence of cognitive gain in the collective reasoning process.
+A rigorous audit of all direct comparisons reveals a critical nuance:
+- **R1 vs COUNCIL (4-2):** Changing the synthesis contract to an actionable decision
+  synthesis reversed the pairwise record against COUNCIL from 1-5 to 4-2.
+- **R1 vs R0 (2-4):** In direct head-to-head comparison, the decision synthesis (R1)
+  did **not** beat the neutral debate summary (R0); judges favored R0 in 4 of 6
+  evaluations (T4 both judges, T3 opus, T5 gemini-pro), citing R0's richer preservation
+  of underlying nuances, uncompressed calculations, and explicit surviving disagreements.
+- **R1 vs CURRENT (2-4):** R1 lost to the production CURRENT baseline 2-4, where
+  CURRENT's structured 7-section analysis was preferred for rigor and completeness.
 
-Holding the reasoning state 100% constant and modifying ONLY the final synthesis
-contract from neutral scribe to decision synthesizer transformed COLLECTIVE's
-record against COUNCIL from **1-5 (loss) to 4-2 (net victory)**.
+**Scientific Interpretation:**
+The renderer effect is a **quality-dimension trade-off**, not an unconditional quality
+upgrade. When judged against another condensed synthesis (COUNCIL), R1's structured
+decision commitment wins on actionability (4-2). However, compressing reasoning into a
+terse decision synthesis discards the analytical depth and explicit tension tracking that
+blind judges reward in uncompressed formats (R0 and CURRENT). 
 
-## 4. Answers to the Six Key Research Questions
+Furthermore, a sample of 3 tasks × 2 judges (4:2 over COUNCIL) represents suggestive,
+task-dependent evidence, not universal or definitive proof. The hypothesis that
+"renderer contract alone explains all of COLLECTIVE's first-round deficit" is rejected
+by the 2-4 loss against R0 itself.
+
+---
+
+## 4. Mechanism-Level Verdicts
+
+1. **FULL OPEN COLLECTIVE (Multi-turn unassigned debate + free rounds):**
+   - **Status: REJECTED FOR PRODUCTION / RESEARCH ONLY.**
+   - **Rationale:** Costs ~2.4x COUNCIL tokens; stopping evaluator reliably halts
+     within 1-2 rounds (free rounds add minimal derivation); prone to drifting outside
+     prompt-specified option constraints (e.g. T3); does not beat CURRENT in direct
+     head-to-head.
+2. **DECISION SYNTHESIS RENDERER:**
+   - **Status: FORMAT PATTERN / TASK-DEPENDENT TRADE-OFF.**
+   - **Rationale:** Boosts actionability against council-style syntheses (+50%p vs
+     COUNCIL), but loses analytical depth against uncompressed reports (2-4 vs R0,
+     2-4 vs CURRENT). Should be an optional presentation formatter, not an assumed
+     cognitive upgrade.
+3. **BLIND-SPOT SEARCH (Clean-context outside review):**
+   - **Status: PRODUCTION CANDIDATE.**
+   - **Rationale:** 6/6 verified novel insights on open tasks (T3-T5) where primary
+     models had shared blind spots; clean context prevents groupthink contamination.
+4. **MATERIALITY GATE:**
+   - **Status: PRODUCTION CANDIDATE.**
+   - **Rationale:** 100% precision across 6 tasks (gate=False on complete objective
+     tasks T1/T2/T6; gate=True on all three open tasks). Successfully prevents
+     unnecessary downstream re-entry and cost inflation.
+5. **CURRENT `simulate-elite-experts` Baseline:**
+   - **Status: PRODUCTION ANCHOR.**
+   - **Rationale:** Remains the most cost-effective and robust single performer:
+     100% objective accuracy (T1 5/5, T2 18, T6 correct), beats COUNCIL 4-2 in exp1,
+     and beats R1 4-2 in exp1r at ~1/10th the token cost of collective approaches.
+
+---
+
+## 5. Answers to the Six Key Research Questions
 
 ### Q1: How much of COLLECTIVE's first-round loss was caused by the renderer?
-**The vast majority.** Against COUNCIL, 3 of the 5 first-round losses were directly
-reversed simply by changing the synthesis contract. The neutral renderer's refusal to
-commit to an actionable path directly triggered the judges' "lacks concrete timelines",
-"reads as debate summary", and "fails to commit" penalties.
+**Partially, through an actionability penalty in comparative synthesis.** Against
+COUNCIL, R1 improved the record from 1-5 to 4-2. However, the renderer contract does not
+explain the whole picture: R1 still lost 2-4 to R0 directly and 2-4 to CURRENT. The
+loss was therefore an artifact of comparative format expectations (actionability vs.
+depth), not proof that the underlying collective answers were universally superior.
 
 ### Q2: Did the frozen collective state already contain superior judgment?
-**Yes.** In T3, the collective state had already discovered the "convergent corruption"
-failure mode of CRDTs and aligned on a content-addressed revision DAG with diff3. R1
-synthesized this into an actionable recommendation that swept COUNCIL 2-0. In T4 and T5,
-the collective state correctly reframed the decisions (cash survival stack; discriminative
-vs generative task separation), which allowed R1 to achieve parity with COUNCIL.
+**In specific dimensions, yes; in completeness, it depends.** In T3, the collective
+state correctly identified the semantic failure modes of CRDTs and aligned on diff3,
+allowing R1 to sweep COUNCIL 2-0. In T4 and T5, the collective state uncovered critical
+reframings (cash survival; discriminative task separation), but individual participant
+finals and R1 omitted deep financial calculations that judges rewarded in COUNCIL
+and CURRENT.
 
 ### Q3: Can decision synthesis translate novel insights into actual quality gain?
-**Yes, but task-dependently.**
-- In **architectural and framing tasks (T3, T5)**, synthesizing novel insights directly
-  delivers superior or tied judgments against strong baselines.
-- In **financially constrained operational tasks (T4)**, synthesis must preserve deep
-  numerical modeling; when synthesis becomes too concise, judges penalize it for
-  omitting underlying calculations even if the strategic direction is correct.
+**Yes, but with an inherent trade-off.** Decision synthesis successfully makes novel
+insights actionable, enabling wins on architectural framing tasks (T3). However,
+condensing the output risks dropping evidentiary detail and explicit uncertainty ledgers,
+which led judges to prefer R0 and CURRENT on operational and analytical tasks (T4, T5).
 
 ### Q4: If changing the renderer didn't win, should full collective be abandoned?
-**Not applicable — R1 DID win (4-2 vs COUNCIL).** However, even with R1 winning against
-COUNCIL, the ~2.4x token cost of the full multi-round protocol remains uneconomical for
-routine production deployment.
+**Full collective should be halted for production regardless.** While R1 reached 4-2 vs
+COUNCIL, it lost 2-4 to CURRENT and 2-4 to R0. Combined with its ~2.4x token cost,
+unpredictable multi-turn dynamics, and option-space drift risk, full open collective
+reasoning is not a viable production architecture.
 
 ### Q5: Is the Blind-Spot + Materiality Gate independently viable for production?
-**Yes, unequivocally.** It is the single highest-ROI mechanism discovered across both
-phases:
-- 100% precision: `material=False` on complete objective tasks (T1, T2, T6; no over-intervention),
-  `material=True` on all three open tasks with shared blind spots (T3, T4, T5).
-- Achieves ~92-96% token reduction compared to full collective reasoning.
-- Operates as a non-disruptive, clean-context audit overlay on any existing engine.
+**Yes, unequivocally.** It is the sole mechanism with unambiguous, high-ROI empirical
+support:
+- 100% precision: `material=False` on complete objective tasks (T1, T2, T6; zero
+  over-intervention), `material=True` on open tasks with real shared blind spots (T3-T5).
+- Achieves ~92-96% token savings compared to running a full collective debate loop.
+- Decouples cleanly from multi-agent chat; operates as a lightweight, clean-context
+  audit overlay on top of existing single-model or council baselines.
 
 ### Q6: Recommended Production Roadmap
-1. **Immediate:** Keep default `simulate-elite-experts` on its proven classic profile
-   (CURRENT scored 5/5, 18, correct on T1/T2/T6, and beat COUNCIL 4-2 in Round 1).
-2. **Short-Term (Specification Ready):** Adopt the standalone **Blind-Spot Gated Overlay**
-   (`docs/blind-spot-gated-production-variant-spec.md`) as an opt-in execution mode
-   (`execution_mode: blind-spot-gated`). Run 1 primary call + 1-2 clean-context blind-spot
-   probes + 1 materiality gate. Only reopen single-shot re-entry if `material=True`.
-3. **Reject:** Do NOT deploy full open-ended multi-model debate loops or neutral-scribe
-   transcript renderers in production.
+1. **Anchor on CURRENT:** Maintain the proven single-model `simulate-elite-experts`
+   classic profile as the default production engine.
+2. **Opt-in Blind-Spot Overlay:** Implement the minimal **Blind-Spot Gated Overlay**
+   as an explicit, opt-in mode for high-stakes judgment tasks.
+3. **Retire Full Multi-Model Debate:** Do not build multi-round open debate loops or
+   forced neutral-scribe formatters for production workloads.
 
