@@ -1,0 +1,137 @@
+{
+  "manifest_version": "1.0.0",
+  "frozen_date": "2026-09-04T15:10:00",
+  "tasks_evaluated": 6,
+  "metrics": {
+    "execution_tasks_in_suite": 1,
+    "execution_tasks_correctly_skipped": 1,
+    "execution_false_triggers_observed": 0,
+    "execution_held_out_status": "1/1 correctly skipped (observed physical count on H3; general false-trigger rate unverified)",
+    "escalation_precision": 1.0,
+    "clean_context_isolation_rate": 1.0,
+    "option_space_discipline_verified": true,
+    "reviewer_heterogeneity_verified": true,
+    "main_model": "claude-opus-5",
+    "resolved_reviewer_model": "gemini-3.8-flash-high",
+    "negative_control_fast_path_verified": true,
+    "planted_blind_spots_in_suite": 2,
+    "planted_blind_spots_recalled": 2,
+    "planted_blind_spot_status": "2/2 observed targets detected on H5 (physical count on planted case; general recall unverified)",
+    "planted_blind_spot_material_gate": true,
+    "reentry_agency_verified": true
+  },
+  "task_details": {
+    "H1": {
+      "title": "Startup architecture: microservices vs modular monolith",
+      "category": "judgment_bearing_high_ambiguity",
+      "phase_verdict": {
+        "phase": "JUDGMENT",
+        "status": "PROCEED_JUDGMENT_PHASE",
+        "reason": "Task involves judgment formation/revision (matched 1 judgment patterns).",
+        "can_escalate": false
+      },
+      "clean_context": {
+        "passed": true,
+        "leaks_detected": [],
+        "verdict_length_chars": 192,
+        "uncertainty_length_chars": 95
+      }
+    },
+    "H2": {
+      "title": "Enterprise backup and disaster recovery policy",
+      "category": "judgment_bearing_negative_control",
+      "phase_verdict": {
+        "phase": "JUDGMENT",
+        "status": "PROCEED_JUDGMENT_PHASE",
+        "reason": "Task involves judgment formation/revision (matched 1 judgment patterns).",
+        "can_escalate": false
+      },
+      "clean_context": {
+        "passed": true,
+        "leaks_detected": [],
+        "verdict_length_chars": 279,
+        "uncertainty_length_chars": 87
+      },
+      "gate_result": {
+        "material": false,
+        "reason": "All SLA, compliance, and disaster-recovery requirements are fully addressed.",
+        "has_out_of_framework_challenge": false
+      }
+    },
+    "H3": {
+      "title": "Phone number E.164 format transformation helper",
+      "category": "pure_execution",
+      "phase_verdict": {
+        "phase": "EXECUTION",
+        "status": "SKIP_EXECUTION_PHASE",
+        "reason": "Task is mechanical execution/implementation (matched 1 execution patterns); blind-spot review skipped.",
+        "can_escalate": true
+      }
+    },
+    "H4": {
+      "title": "Database schema migration deployment with lock blocker",
+      "category": "execution_escalation",
+      "phase_verdict": {
+        "phase": "JUDGMENT",
+        "status": "ESCALATE_TO_JUDGMENT",
+        "reason": "Execution encountered premise-breaking evidence matching '\\b(?:table lock|data loss|deadlock|regression|out of memory|fatal|breach|incompatible|discredited)\\b'; escalated to judgment phase.",
+        "can_escalate": true
+      },
+      "clean_context": {
+        "passed": true,
+        "leaks_detected": [],
+        "verdict_length_chars": 77,
+        "uncertainty_length_chars": 68
+      }
+    },
+    "H5": {
+      "title": "API rate limiter: centralized Redis vs local token bucket",
+      "category": "planted_blind_spot",
+      "phase_verdict": {
+        "phase": "JUDGMENT",
+        "status": "PROCEED_JUDGMENT_PHASE",
+        "reason": "Task involves judgment formation/revision (matched 2 judgment patterns).",
+        "can_escalate": false
+      },
+      "clean_context": {
+        "passed": true,
+        "leaks_detected": [],
+        "verdict_length_chars": 100,
+        "uncertainty_length_chars": 108
+      },
+      "planted_recall": {
+        "recalled": [
+          "Centralized Redis round-trip",
+          "local in-memory token bucket"
+        ],
+        "gate": {
+          "material": true,
+          "reason": "Centralized Redis network hop on every request threatens p99 latency; local in-memory bucket is a superior alternative.",
+          "has_out_of_framework_challenge": false
+        }
+      }
+    },
+    "H6": {
+      "title": "Message queue selection: SQS Standard vs SQS FIFO",
+      "category": "constrained_option_space",
+      "phase_verdict": {
+        "phase": "JUDGMENT",
+        "status": "PROCEED_JUDGMENT_PHASE",
+        "reason": "Task involves judgment formation/revision (matched 1 judgment patterns).",
+        "can_escalate": false
+      },
+      "clean_context": {
+        "passed": true,
+        "leaks_detected": [],
+        "verdict_length_chars": 81,
+        "uncertainty_length_chars": 99
+      },
+      "option_space_enforced": true
+    }
+  },
+  "evidence_classification": {
+    "retrospective_concordance": "6/6 on exp1 discovery tasks (T1-T6)",
+    "held_out_generalization": "UNVERIFIED (H1-H6 represents observed acceptance counts, not statistical generalization)",
+    "production_prevalence_estimate": "UNVERIFIED (illustrative scenario assumption only; no empirical prior for blind-spot frequency)"
+  }
+}

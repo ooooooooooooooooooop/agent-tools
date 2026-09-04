@@ -48,10 +48,12 @@ Choose the execution mode before building the roster:
 
 - `one-shot` (default): Produce the complete output in one response. Use this when the user asks for an analysis, report, comparison, or direct recommendation and has not asked to co-design the panel.
 - `interactive`: Produce Section 1 only, ask the user to confirm or swap the roster, then wait before running dialogue rounds. Use this when the user explicitly asks to choose experts, workshop the panel, or collaborate step by step.
+- `blind-spot-gated` (opt-in overlay): Run the candidate deliberation, then perform a clean-context outside audit across 5 failure categories (hidden assumptions, wrong framing, omitted alternatives, second-order effects, simpler paths) evaluated by a materiality gate. If `material: true`, trigger a single-shot re-entry to revise the decision before final delivery. Use this only when explicitly requested (e.g. `--blind-spot-gated` or asking for "gated audit").
 
 Rules:
 - Do not pause after Section 1 in `one-shot` mode.
 - Do not continue past Section 1 in `interactive` mode until the user confirms or revises the roster.
+- `blind-spot-gated` is strictly opt-in; it must never be the implicit default for standard queries or execution tasks.
 - If profile and execution mode conflict with token or time constraints, preserve the profile's required section/round counts and compress content rather than dropping structure.
 
 ## When NOT to Use This Framework
@@ -342,6 +344,40 @@ Each dialogue round must contain one turn from each active role.
 7. User interaction and post-use reflection
 - After delivering the output, append the Post-Use Self-Check section.
 - If the session is interactive, invite the user to mark which positions they agree/disagree with and why.
+
+## Blind-Spot Gated Overlay Workflow (When execution_mode: blind-spot-gated)
+
+When the user explicitly invokes `blind-spot-gated` mode (canonical invocation surfaces):
+- **Natural Language**: `"使用 simulate-elite-experts 技能，指定 execution_mode 为 blind-spot-gated，评估..."`
+- **Tool / Slash Command**: `/simulate-elite-experts execution_mode: blind-spot-gated: <problem>` or `Skill(skill="simulate-elite-experts", args="execution_mode: blind-spot-gated ...")`
+- **Programmatic Pipeline**: `execute_blind_spot_pipeline(prompt, candidate_answer, call_model_fn=...)`
+
+Execution Lifecycle:
+1. **Task-Phase Gate**: Verify the task is in `JUDGMENT` phase (forming/revising high-stakes choices, architectures, root-cause diagnoses, directions). Pure execution tasks (coding, deployment, mechanical refactoring) fast-path skip review (`SKIP_EXECUTION_PHASE`). Execution tasks with premise-invalidating blockers escalate (`ESCALATE_TO_JUDGMENT`).
+2. **Primary Candidate Formation**: Primary engine completes the standard four-lens deliberation through Moderator Synthesis and Uncertainty Ledger.
+3. **Clean-Context Extraction**: Extract canonical `DecisionPacket` containing ONLY:
+   - Original user problem prompt
+   - Hard constraints & known facts (<=200 words / ~1200 chars)
+   - Candidate verdict summary (from Moderator Synthesis, <=150 words / ~1000 chars)
+   - Core rationale summary (<=200 words / ~1200 chars)
+   - Declared assumptions and uncertainties (<=150 words / ~900 chars)
+   - Declared option space (if choices restricted by prompt)
+   *Hard boundary:* NEVER leak dialogue transcripts, scratchpads, persona turns, or vote tallies to the reviewer.
+4. **Targeted Heterogeneous Audit**: Resolved from canonical `registry/models.yaml` to an admitted model of a different vendor family (e.g. Anthropic -> Google/Moonshot). If heterogeneous model is unavailable, return `HETEROGENEOUS_REVIEW_UNAVAILABLE` (no fake homogeneous reviews). Reviewer audits across 5 failure categories:
+   - (a) Hidden or unexamined assumptions
+   - (b) Wrong framing of the decision space (e.g. false dichotomy)
+   - (c) Omitted viable alternatives
+   - (d) Neglected second-order operational/systemic effects
+   - (e) Dramatically simpler paths
+   *Option-space rule:* Reviewer must evaluate within bounded space first; alternatives outside must be explicitly labeled `[OUT-OF-FRAMEWORK]` as meta-challenges.
+5. **Materiality Gate Circuit Breaker**: Evaluate if audit critique is `material` (fatal flaw, false assumption, dominating option that should alter the recommendation/actions) vs `immaterial` (philosophical difference, declared risk, stylistic preference).
+   - If `material == False`: Deliver candidate output cleanly with zero process noise (fast path).
+   - If `material == True`: Pass critique back to primary engine for **sovereign single-shot re-entry**. The primary engine retains full agency (accept, partially adapt, or defend with reason).
+6. **Clean User Output Delivery**:
+   - `material == False`: Deliver candidate answer directly, zero internal ledger clutter.
+   - `material == True` (defended): Append brief 1-line note that outside review was evaluated and original choice confirmed.
+   - `material == True` (decision changed): Append transparent `### Decision Update: Addressed Blind Spot` section stating what was identified and why the decision changed.
+   - Full debug audit ledger is preserved in execution metadata / trace files.
 
 ## User Interaction Guidance
 
