@@ -214,35 +214,63 @@ class SyncEngine:
                 })
 
             # Plane 3: Deployment Mirror
+            mirror_before = ""
+            if self.mirror_dir.is_dir() and (self.mirror_dir / ".git").exists():
+                _, mb_out = _run_git(self.mirror_dir, "rev-parse", "HEAD")
+                mirror_before = mb_out.strip()
+
+            mirror_repaired = False
             if not check_only:
                 try:
                     import dsh_lifecycle
-                    dsh_lifecycle.ensure_deployment_mirror(self.home, self.repo_root, accepted_remote_commit)
+                    res_m = dsh_lifecycle.ensure_deployment_mirror(self.home, self.repo_root, accepted_remote_commit)
+                    mirror_after = res_m.get("commit", "")
+                    if mirror_before and mirror_after and mirror_before != mirror_after:
+                        mirror_repaired = True
+                        changes_applied.append(f"生产部署镜像已更新至 `{mirror_after[:7]}` (原 `{mirror_before[:7]}`)")
+                        tradeoffs.append({
+                            "title": "生产部署镜像已自动对齐",
+                            "action": f"镜像检出已快进至最新提交 {mirror_after[:7]}",
+                            "reason": "生产镜像与远端接受快照保持对齐，避免因镜像版本滞后引发下游插件与技能误报漂移。",
+                        })
                 except Exception as exc:
                     warnings.append(f"生产部署镜像刷新异常: {exc}")
 
             p3_res = evaluate_deployment_mirror_plane(self.mirror_dir, self.repo_root, accepted_remote_commit)
+            if mirror_repaired and p3_res.status == PlaneStatus.IN_SYNC:
+                p3_res.status = PlaneStatus.REPAIRED
+                p3_res.symbol = "✓"
+                p3_res.summary = f"生产镜像已对齐至 `{accepted_remote_commit[:7]}` (原 `{mirror_before[:7]}`)"
+
+            # Source resolution: if clean deployment mirror is ready, downstream planes use mirror as canonical source
+            source_repo = self.mirror_dir if (self.mirror_dir.is_dir() and (self.mirror_dir / ".git").exists() and not p3_res.details.get("dirty")) else self.repo_root
 
             # Plane 4: Presets
-            p4_res = evaluate_presets_plane(self.home, self.repo_root, contract, repair=not check_only)
+            p4_res = evaluate_presets_plane(self.home, source_repo, contract, repair=not check_only)
+            if p4_res.status == PlaneStatus.REPAIRED:
+                changes_applied.append(f"CC 预设已收敛修复 ({p4_res.summary})")
 
             # Plane 5: DSH Config
             p5_res = evaluate_dsh_config_plane(self.home, contract, repair=not check_only)
+            if p5_res.status == PlaneStatus.REPAIRED:
+                changes_applied.append(f"DSH 配置字段已更新修复 ({p5_res.summary})")
 
             # Plane 6: DSH Plugins
-            p6_res = evaluate_dsh_plugins_plane(self.home, self.repo_root, contract, repair=not check_only)
+            p6_res = evaluate_dsh_plugins_plane(self.home, source_repo, contract, repair=not check_only)
+            if p6_res.status == PlaneStatus.REPAIRED:
+                changes_applied.append(f"DSH 插件已收敛部署 ({p6_res.summary})")
 
             # Plane 7: MCP
-            p7_res = evaluate_mcp_plane(self.home, self.repo_root, contract, repair=not check_only)
+            p7_res = evaluate_mcp_plane(self.home, source_repo, contract, repair=not check_only)
 
             # Plane 8: Skills
-            p8_res = evaluate_skills_plane(self.home, self.repo_root, repair=not check_only)
+            p8_res = evaluate_skills_plane(self.home, source_repo, repair=not check_only)
             if p8_res.status == PlaneStatus.REPAIRED:
                 changes_applied.append(f"Skills 已收敛同步 ({p8_res.summary})")
 
             # Plane 9: DSH Runtime Composition
             active_proc = _find_live_dsh_process()
-            p9_res = evaluate_runtime_plane(self.home, contract, active_proc, repair=not check_only)
+            p9_res = evaluate_runtime_plane(self.home, contract, active_proc, repair=not check_only, plugins_plane_status=p6_res.status)
 
             import dsh_runtime
             insp = dsh_runtime.inspect(self.home, contract)
@@ -373,7 +401,10 @@ class SyncEngine:
             elif convergence_status == "PARTIAL_RESTART_REQUIRED":
                 overall = OverallStatus.PARTIAL_RESTART_REQUIRED
             elif convergence_status == "PARTIAL":
-                overall = OverallStatus.PARTIAL
+                if health_status == "WARNING":
+                    overall = OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS
+                else:
+                    overall = OverallStatus.PARTIAL
             elif health_status == "FAILED":
                 overall = OverallStatus.PASS_WITH_HEALTH_FAILURE
             elif health_status == "WARNING":
@@ -408,6 +439,12 @@ class SyncEngine:
                     action_required = f"下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。另外有 {len(warning_items)} 项健康状态需要关注：\n" + "\n".join(warning_items)
                 else:
                     action_required = "下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。"
+            elif overall in (OverallStatus.PARTIAL, OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS):
+                partial_items = [f"- {r.plane.value}：{r.summary}" for r in convergence_resources if r.status in (PlaneStatus.PARTIAL, PlaneStatus.REVIEW_REQUIRED)]
+                msg = "部分资源尚未完全收敛，主功能正常：\n" + "\n".join(partial_items)
+                if warning_items:
+                    msg += "\n另外有健康状态需要关注：\n" + "\n".join(warning_items)
+                action_required = msg
             elif health_failures:
                 fail_items = [f"- {r.plane.value}：{r.summary}" for r in health_failures]
                 action_required = "同步收敛已完成，但检测到健康异常，需要后续处理：\n" + "\n".join(fail_items)

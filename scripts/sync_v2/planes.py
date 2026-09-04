@@ -63,6 +63,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_portable_file(path: Path) -> str:
+    """Hash text files normalized for line endings (CRLF -> LF) across Windows and Unix."""
+    data = path.read_bytes()
+    if path.suffix.lower() in (
+        ".js", ".mjs", ".cjs", ".json", ".md", ".txt", ".py", ".yml", ".yaml", ".ts", ".ps1"
+    ):
+        data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
 def sha256_tree(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted((p for p in root.rglob("*") if p.is_file()),
@@ -495,19 +505,21 @@ def evaluate_dsh_plugins_plane(
             continue
 
         if src_entry.is_file():
-            src_hash = sha256_file(src_entry)
-            dst_hash = sha256_file(dst_entry)
+            src_hash = sha256_portable_file(src_entry)
+            dst_hash = sha256_portable_file(dst_entry)
             if src_hash != dst_hash:
                 stale.append(p["id"])
                 continue
 
         verified.append(p["id"])
 
+    repaired = False
     if (missing or stale) and repair:
         try:
             import dsh_runtime
             apply_res = dsh_runtime.apply(home, contract)
             if apply_res.get("status") in ("APPLIED", "NO_DRIFT"):
+                repaired = True
                 # Re-verify after repair
                 missing.clear()
                 stale.clear()
@@ -531,16 +543,18 @@ def evaluate_dsh_plugins_plane(
             )
 
     if len(verified) == total_plugins and not missing and not stale:
+        status = PlaneStatus.IN_SYNC if not repaired else PlaneStatus.REPAIRED
+        summary = f"{len(verified)}/{total_plugins} 插件版本已对齐" + (" (已自动收敛部署)" if repaired else "")
         return ResourceRecord(
             resource_id="dsh_plugins",
             plane=SyncPlane.DSH_PLUGIN,
             category=ResourceCategory.CONVERGENCE_PLANE,
-            status=PlaneStatus.IN_SYNC,
+            status=status,
             symbol="✓",
-            summary=f"{len(verified)}/{total_plugins} 插件版本已对齐",
+            summary=summary,
             required_evidence_level=EvidenceLevel.L3_REPRODUCED,
             evidence_refs=[{"type": "plugin_hashes_verified", "verified": verified}],
-            details={"deployed": len(verified), "total": total_plugins, "plugins": verified},
+            details={"deployed": len(verified), "total": total_plugins, "plugins": verified, "repaired": repaired},
         )
 
     return ResourceRecord(
@@ -715,6 +729,7 @@ def evaluate_skills_plane(
     stale_skills = []
     verified_skills = []
     repaired_skills = []
+    repaired_deltas = []
 
     for name, entry in known.items():
         src_dir = (repo_root / entry["path"]).resolve()
@@ -734,18 +749,27 @@ def evaluate_skills_plane(
         for rel, s_path in src_files.items():
             d_path = dst_dir / rel
             if d_path.is_file():
-                if sha256_file(s_path) != sha256_file(d_path):
+                if sha256_portable_file(s_path) != sha256_portable_file(d_path):
                     has_diff = True
                     break
 
         if has_missing or has_diff or has_extra:
             if repair:
+                old_h = sha256_tree(dst_dir) if dst_dir.is_dir() else "MISSING"
                 for rel, s_path in src_files.items():
                     d_path = dst_dir / rel
                     atomic_copy(s_path, d_path)
                 for rel in extra_in_dst:
                     (dst_dir / rel).unlink(missing_ok=True)
+                new_h = sha256_tree(dst_dir)
                 repaired_skills.append(name)
+                repaired_deltas.append({
+                    "skill_id": name,
+                    "old_installed_identity": old_h[:8] if old_h != "MISSING" else old_h,
+                    "new_desired_identity": new_h[:8],
+                    "repair": "ATOMIC_MATERIALIZE",
+                    "final_status": "VERIFIED",
+                })
                 verified_skills.append(name)
             else:
                 if not dst_dir.is_dir():
@@ -768,7 +792,7 @@ def evaluate_skills_plane(
             summary=summary,
             required_evidence_level=EvidenceLevel.L2_OBSERVED,
             evidence_refs=[{"type": "skill_tree_hashes_verified", "verified_count": len(verified_skills)}],
-            details={"total": total_expected, "verified_count": len(verified_skills), "verified": verified_skills, "repaired": repaired_skills},
+            details={"total": total_expected, "verified_count": len(verified_skills), "verified": verified_skills, "repaired": repaired_skills, "repaired_deltas": repaired_deltas},
         )
 
     return ResourceRecord(
@@ -791,6 +815,7 @@ def evaluate_runtime_plane(
     contract: Dict[str, Any],
     active_process: Optional[Dict[str, Any]],
     repair: bool = True,
+    plugins_plane_status: Optional[PlaneStatus] = None,
 ) -> ResourceRecord:
     """Plane 9: DSH runtime immutable status & process alignment."""
     manifest_path = home / "profiles" / "web" / "dsh-runtime-composition.json"
@@ -821,6 +846,23 @@ def evaluate_runtime_plane(
             summary=f"清单解析失败: {exc}",
             required_evidence_level=EvidenceLevel.L3_REPRODUCED,
             blockers=[str(exc)],
+        )
+
+    if plugins_plane_status in (PlaneStatus.PARTIAL, PlaneStatus.FAILED, PlaneStatus.REVIEW_REQUIRED):
+        return ResourceRecord(
+            resource_id="runtime",
+            plane=SyncPlane.RUNTIME,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            desired_identity=deployed_hash,
+            materialized_identity=deployed_hash,
+            active_identity=deployed_hash,
+            drift_detected=True,
+            status=PlaneStatus.PARTIAL,
+            symbol="△",
+            summary=f"运行态就绪但底层受管插件未完全对齐 ({plugins_plane_status.value})",
+            required_evidence_level=EvidenceLevel.L3_REPRODUCED,
+            warnings=["底层受管插件存在未收敛漂移，运行时无法宣称 PASS"],
+            details={"deployed_hash": deployed_hash, "plugins_status": plugins_plane_status.value, "active_running": active_process is not None},
         )
 
     if active_process is None:

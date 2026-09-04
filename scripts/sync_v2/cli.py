@@ -40,6 +40,7 @@ def main() -> int:
         OverallStatus.PASS_NO_CHANGE,
         OverallStatus.PASS_WITH_HEALTH_WARNINGS,
         OverallStatus.PARTIAL_RESTART_REQUIRED,
+        OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS,
         OverallStatus.PARTIAL,
     ):
         return 0
