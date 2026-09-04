@@ -1,56 +1,47 @@
 # Blind-Spot Gated Reasoning: Minimal Production Variant Design Spec
 
-Status: **DESIGN SPEC ONLY — DO NOT DEPLOY**
-Context: Follows collective-reasoning exp1 + exp1r renderer ablation findings.
-Purpose: Capture the evidenced mechanism gain (blind-spot discovery + materiality-gated
-re-entry) without the 2.4x token cost, debate protocol complexity, or option-space
-drift of full open collective reasoning.
+Status: **OPT-IN READY — NOT DEFAULT — DO NOT ENABLE GLOBALLY**
+Context: Derived from collective-reasoning exp1, renderer ablation exp1r, held-out acceptance H1-H6, and live heterogeneous-review acceptance.
+Purpose: Capture the evidenced mechanism gain (blind-spot discovery + materiality-gated re-entry) without the cost, debate-loop complexity, or option-space drift of full open collective reasoning.
 
 ---
 
-## 1. Core Evidentiary Basis (from exp1 & exp1r)
+## 1. Core Evidentiary Basis
 
 1. **What works with evidence:**
-   - Fresh-context blind-spot reviewers surfaced decision-relevant, plausible novel
-     insights in 6/6 evaluations across all open tasks (T3-T5).
-   - Retrospective concordance on the 6 discovery tasks: `RETROSPECTIVE_CONCORDANCE = 6/6`
-     (`material=False` on complete objective tasks T1, T2, T6; `material=True` on open
-     tasks T3-T5 where the group held shared blind spots).
-   - Generalization to unseen tasks: `HELD_OUT_GENERALIZATION = UNVERIFIED` pending
-     dedicated held-out validation on fresh datasets.
-   - Gated re-entry drove verifiable stance shifts in 4-5/5 participants per open task.
-2. **What does NOT work / is not evidenced:**
-   - Full open-ended debate (multi-turn free rounds) added almost nothing: stopping
-     evaluators halted T1/T2 after 1 round and T3-T6 after 2 rounds; extra rounds
-     mostly rephrased.
-   - Neutral transcript rendering systematically lost pairwise actionability ratings.
-   - Full collective cost ~2.4x COUNCIL tokens with no pairwise final-quality win.
-3. **Design response:** Extract ONLY the blind-spot + materiality gate pattern. Run it
-   as a **one-shot, clean-context audit overlay** on any primary reasoning path.
+   - Fresh-context blind-spot reviewers surfaced decision-relevant, plausible novel insights in 6/6 judge-task evaluations across open discovery tasks T3-T5.
+   - Retrospective concordance on the six discovery tasks is `RETROSPECTIVE_CONCORDANCE = 6/6` (`material=False` on T1/T2/T6; `material=True` on T3/T4/T5).
+   - Held-out acceptance H1-H6 completed after the mechanism was frozen. Observed acceptance evidence includes: H3 pure execution skipped 1/1; H2 no-material fast path passed; H5 detected 2/2 planted blind-spot targets; H6 preserved the bounded option space; clean-context leakage was not observed in the held-out cases.
+   - These held-out counts are acceptance evidence, not population estimates. Statistical production generalization, real-world blind-spot prevalence, precision, and recall remain **UNVERIFIED** until enough live usage accumulates.
+   - Live acceptance exercised the intended path: primary model -> bounded decision packet -> heterogeneous fresh-context reviewer -> materiality decision -> sovereign single re-entry when material.
+2. **What is not supported for production:**
+   - Full open-ended multi-model debate remains research-only. It costs materially more, showed diminishing returns after early rounds, and did not demonstrate a stable production-quality advantage over the current baseline.
+   - Renderer ablation showed a dimension trade-off, not a monotonic upgrade: decision synthesis improved actionability against COUNCIL (R1 4-2) but lost direct comparisons against R0 and CURRENT (2-4 in each matchup). Therefore decision synthesis is a task-dependent output option, not a universal superiority claim.
+   - No evidence supports enabling this overlay for pure execution tasks or as a global default.
+3. **Design response:**
+   - Extract only the high-ROI blind-spot + materiality-gate mechanism.
+   - Run it as a one-shot, clean-context audit overlay on an already-formed judgment.
+   - Keep default `simulate-elite-experts` behavior unchanged unless the mode is explicitly selected.
 
 ---
 
 ## 2. Trigger Boundaries & Task-Phase Gate
 
-The overlay does NOT rely solely on standard Gate 0. It executes a dedicated semantic
-**Task-Phase Gate** before any outside review:
+The overlay does not rely solely on standard Gate 0. It executes a dedicated semantic **Task-Phase Gate** before any outside review.
 
 ### Task Phases
+
 1. **JUDGMENT Phase (Eligible for Blind-Spot Audit):**
-   - Active formation, selection, or revision of: judgments, decisions, architectures/schemes,
-     causal/root-cause diagnoses, research conclusions, strategic priorities, or trade-offs.
-   - High reversibility cost (irreversible or expensive to undo).
-   - Significant information ambiguity / competing stakeholder constraints.
+   - Active formation, selection, or revision of judgments, decisions, architectures/schemes, causal/root-cause diagnoses, research conclusions, strategic priorities, or trade-offs.
+   - High reversibility cost or meaningful consequence if wrong.
+   - Significant information ambiguity, competing constraints, or unresolved assumptions.
 
 2. **EXECUTION Phase (Default Skipped):**
-   - Mechanical implementation of an already-decided specification (coding, deployment, file edits,
-     renaming, format transforms, running established test suites, standard operations).
-   - Fast path: returns `SKIP_EXECUTION_PHASE` immediately with zero reviewer calls.
+   - Mechanical implementation of an already-decided specification: coding, deployment, file edits, renaming, format transforms, running established test suites, or standard operations.
+   - Fast path returns `SKIP_EXECUTION_PHASE` with zero reviewer calls.
 
 3. **Execution-to-Judgment Escalation:**
-   - If an execution task encounters unexpected empirical evidence that invalidates the original
-     premise, goal, architecture, or acceptance criteria (e.g. fatal table lock, memory leak,
-     broken invariant), it escalates with `ESCALATE_TO_JUDGMENT` to enter blind-spot review.
+   - If execution encounters unexpected empirical evidence that invalidates the original premise, goal, architecture, or acceptance criteria, it may escalate with `ESCALATE_TO_JUDGMENT` and enter blind-spot review.
 
 ---
 
@@ -60,115 +51,133 @@ The overlay does NOT rely solely on standard Gate 0. It executes a dedicated sem
 [User Task]
      │
      ▼
-[Task-Phase Classifier] ──► EXECUTION (no blocker) ──► Fast Path: Execute & Deliver (0 calls)
+[Task-Phase Classifier] ──► EXECUTION ──► Fast Path: Execute & Deliver (0 review calls)
      │
-     ▼ (JUDGMENT or ESCALATED)
+     ▼ JUDGMENT / ESCALATED
 [Primary Reasoning Engine (Main Model A)]
-  (Single-model classic 4-lens deliberation)
      │
      ▼
 [Candidate Answer Formed]
      │
      ▼
 [DecisionPacket Extractor]
-  Extracts canonical bounded brief (<=150 words verdict, <=150 words uncertainties,
-  <=200 words rationale, known facts, declared option space).
-  *HARD BOUNDARY: Zero transcripts, zero scratchpads, zero model names leaked.*
+  bounded verdict + rationale + uncertainties + hard facts/constraints + option space
+  HARD BOUNDARY: no transcripts, no scratchpads, no model-vote or roster leakage
      │
      ▼
-[Heterogeneous Reviewer Resolver] ──► No admitted heterog model ──► Status: HETEROGENEOUS_REVIEW_UNAVAILABLE
-     │                                                              (Safe governance fallback; no fake audit)
-     ▼ (Heterogeneous Model B, different vendor family)
-┌─────────────────────────────────────────────────────────┐
-│ Clean-Context Blind-Spot Search (1 fresh call)          │
-│ Targets 5 specific failure modes:                       │
-│   (a) Hidden/unexamined assumptions                     │
-│   (b) Wrong framing of decision space                   │
-│   (c) Omitted viable alternatives                       │
-│   (d) Neglected second-order effects                    │
-│   (e) A dramatically simpler path                       │
-│ *Constraint:* Bounded choices must be evaluated first;  │
-│ outside choices labeled '[OUT-OF-FRAMEWORK]'.           │
-└─────────────────────────────────────────────────────────┘
+[Heterogeneous Reviewer Resolver]
+     ├── no admitted heterogeneous model
+     │      └── HETEROGENEOUS_REVIEW_UNAVAILABLE
+     │          (safe bypass; never fake an external review)
+     ▼ different vendor family
+[Clean-Context Blind-Spot Search]
+  targets:
+  (a) hidden/unexamined assumptions
+  (b) wrong framing of the decision space
+  (c) omitted viable or dominating alternatives
+  (d) neglected second-order effects
+  (e) a materially simpler path
+  bounded choices are evaluated first; outside options are labeled [OUT-OF-FRAMEWORK]
      │
      ▼
-┌─────────────────────────────────────────────────────────┐
-│ Materiality Gate (1 fast utility call)                  │
-│ Evaluates if critique raises MATERIAL decision-altering │
-│ findings not already addressed by Candidate Answer.     │
-└─────────────────────────────────────────────────────────┘
+[Materiality Gate]
+  asks whether the critique introduces decision-altering content not already addressed
      │
-     ├── material == FALSE ──► Clean Delivery: Candidate Answer directly (0 process noise)
+     ├── material == FALSE ──► deliver candidate cleanly
      │
-     └── material == TRUE  ──► [Sovereign Single-Shot Re-Entry]
-                               Primary Engine A receives Candidate + Audit Critique.
-                               Engine A evaluates with full agency:
-                                 - ACCEPT: update recommendation & actions
-                                 - PARTIALLY ACCEPT: integrate contingency
-                                 - REJECT WITH REASON: defend original decision
-                               Produces: Revised Final Answer + Transparent Update Note
+     └── material == TRUE ──► [Sovereign Single-Shot Re-Entry]
+                               Main Model A may:
+                                 - ACCEPT
+                                 - PARTIALLY ACCEPT
+                                 - REJECT WITH REASON
+                               then produces the final answer
 ```
 
 ---
 
 ## 4. Canonical Contracts & Anti-Patterns
 
-### Canonical DecisionPacket Contract (Unified)
-- `verdict_summary`: Max 150 words / ~1000 characters.
-- `core_rationale`: Max 200 words / ~1200 characters.
-- `declared_uncertainties`: Max 150 words / ~900 characters.
-- `hard_constraints_and_facts`: Max 200 words / ~1200 characters.
-- `allowed_option_space`: Explicit list if constrained by prompt (e.g. `["SQS Standard", "SQS FIFO"]`).
-- **Strictly Prohibited:** Full debate transcripts, internal scratchpads, persona names/rosters, model vote tallies, majority opinions.
+### Canonical DecisionPacket Contract
 
-### Option-Space Discipline (Preserving Innovation without Chaos)
-- If user prompt restricts choices, reviewer MUST evaluate within bounded space first.
-- If reviewer identifies a strictly dominating option outside the set, it MUST label it `[OUT-OF-FRAMEWORK]` and present it as a meta-level challenge rather than an answer substitution.
-- Primary engine evaluates the meta-challenge during re-entry.
+- `verdict_summary`: max 150 words / approximately 1000 characters.
+- `core_rationale`: max 200 words / approximately 1200 characters.
+- `declared_uncertainties`: max 150 words / approximately 900 characters.
+- `hard_constraints_and_facts`: max 200 words / approximately 1200 characters.
+- `allowed_option_space`: explicit list when the prompt constrains the answer set.
+- Strictly prohibited: full debate transcripts, internal scratchpads, persona names/rosters, model-vote tallies, majority opinions.
+
+### Option-Space Discipline
+
+- If the user restricts choices, the reviewer must evaluate within that bounded space first.
+- A potentially dominating outside option may still be surfaced, but only as `[OUT-OF-FRAMEWORK]` meta-level challenge; it must not silently replace the requested answer set.
+- The primary engine decides whether the meta-challenge should change the recommendation during re-entry.
 
 ### Clean User-Facing Delivery
-- **No Material Finding:** Deliver candidate answer cleanly with zero internal process clutter.
-- **Material Challenge Evaluated but Defended/Rejected:** Append concise 1-sentence note explaining why the original choice stands.
-- **Material Challenge Adopted:** Append clear `### Decision Update: Addressed Blind Spot` section stating what was found and why it changed the recommendation.
-- Full debug audit ledger is preserved in execution metadata / trace files, never polluting default user experience.
 
-### Anti-Patterns (Explicitly Forbidden)
-1. **NO 4-model debate by default:** Does not spin up multi-agent conversational loops.
-2. **NO pre-assigned personas:** Reviewers are instructed neutrally with no roleplay.
-3. **NO transcript leaking:** Reviewers NEVER see internal scratchpads or dialogue turns.
-4. **NO neutral-scribe rendering:** The final product is ALWAYS delivered by a committed decision synthesizer.
-5. **NO silent homogeneous fallback:** If a reviewer from a different vendor family is unavailable, output `HETEROGENEOUS_REVIEW_UNAVAILABLE` rather than pretending an echo-chamber review succeeded.
-   (Directly addresses the harm observed in T3 where COLLECTIVE dropped CRDTs for
-   an unlisted option.)
+- **No material finding:** deliver the candidate answer without process clutter.
+- **Material challenge evaluated but rejected:** if useful, append one concise sentence explaining why the original judgment stands.
+- **Material challenge changes the decision:** clearly state the newly identified blind spot and why it changed the recommendation.
+- Full audit detail remains in provenance/debug traces rather than the default user-facing response.
+
+### Anti-Patterns
+
+1. **No multi-model debate loop by default.**
+2. **No pre-assigned personas for the external reviewer.**
+3. **No transcript/scratchpad leakage to the reviewer.**
+4. **No neutral-scribe final output as the only user product.**
+5. **No silent homogeneous fallback.** If a different vendor family is unavailable, return `HETEROGENEOUS_REVIEW_UNAVAILABLE` rather than presenting self-review as external review.
+6. **No automatic global enablement.** This remains an opt-in mode.
 
 ---
 
 ## 5. Token / Cost Budget Comparison
 
-| Configuration | Typical Calls | Est. Prompt Tokens | Est. Comp Tokens | Relative Cost |
-|---|---|---|---|---|
-| exp1 Full COLLECTIVE | ~25-35 | ~550k (total) | ~470k (total) | **1.0x (baseline: expensive)** |
-| exp1 Traditional COUNCIL | ~11 | ~180k | ~240k | ~0.42x |
-| **This Blind-Spot Variant (Pass)** | **3-4** | **~15k-25k** | **~4k-8k** | **~0.04x (~96% cheaper)** |
-| **This Blind-Spot Variant (Re-entry)** | **5-6** | **~30k-45k** | **~8k-14k** | **~0.08x (~92% cheaper)** |
+The numbers below describe observed or experimentally grounded execution-path magnitudes relative to the expensive exp1 full-collective baseline. They are **not** production-wide savings estimates.
 
-- **Illustrative Scenario Note:** The table contrasts the two operational paths:
-  1. *Fast-Path Pass (No Material Blind Spot):* 1 primary call + 1-2 blind-spot probes + 1 gatekeeper evaluation.
-  2. *Re-entry Path (Material Challenge):* adds 1 primary re-entry synthesis call.
-- **Evidence Classification:**
-  * Observed call/token counts: grounded in exp1 and held-out validation traces.
-  * Generalized production prevalence of pass vs re-entry: **UNVERIFIED** (requires live telemetry; no prior distribution assumed).
+| Configuration | Typical Calls | Est. Prompt Tokens | Est. Completion Tokens | Relative Experimental Cost |
+|---|---:|---:|---:|---:|
+| exp1 Full COLLECTIVE | ~25-35 | ~550k total | ~470k total | 1.0x |
+| exp1 Traditional COUNCIL | ~11 | ~180k | ~240k | ~0.42x |
+| Blind-Spot Variant — no material finding | ~3-4 including primary path | ~15k-25k | ~4k-8k | ~0.04x |
+| Blind-Spot Variant — re-entry | ~5-6 including primary path | ~30k-45k | ~8k-14k | ~0.08x |
+
+Evidence classification:
+- Experimental/acceptance call and token magnitudes: observed or grounded in exp1 and held-out traces.
+- Production prevalence of fast-path vs re-entry: **UNVERIFIED**.
+- Production-wide percentage savings: **UNVERIFIED** and must not be inferred from the table without live telemetry.
 
 ---
 
-## 6. Production Integration Path (When Authorized)
+## 6. Current Integration & Release State
 
-When the user decides to graduate this from research to production:
-1. Wrap as an opt-in execution profile under `simulate-elite-experts`
-   (e.g., `execution_mode: blind-spot-gated`).
-2. Implement the 3 prompts (`blindspot_probe`, `materiality_evaluator`,
-   `reentry_synthesis`) in a standalone helper script under the skill.
-3. Add a verification harness that tests the gate against the exp1 regression
-   scenarios (T1/T2/T6 must pass gate=False; T3/T4/T5 must pass gate=True).
-4. Do NOT modify default classic profile until the gated profile proves parity
-   on execution speed and user satisfaction.
+The production candidate has been implemented and physically validated as an opt-in mode under `simulate-elite-experts`.
+
+Implemented components include:
+1. `execution_mode: blind-spot-gated` in the existing skill contract; default classic/one-shot behavior remains unchanged.
+2. The task-phase gate, clean DecisionPacket extraction, blind-spot prompt construction, materiality handling, option-space guard, and sovereign re-entry helper in `skills/simulate-elite-experts/scripts/blind_spot_gate.py`.
+3. Heterogeneous reviewer selection through the existing Personal AI model registry/routing ownership; no second provider, secret, registry, or fallback stack was added.
+4. Unit/regression coverage for the overlay and the collective-reasoning experiment harness.
+5. Held-out acceptance H1-H6 and a live end-to-end acceptance drill.
+
+Release posture:
+- `DURABLE_OPT_IN_READY = PASS` on the validated feature branch.
+- The mode remains **disabled by default**.
+- It may be invoked explicitly for high-value judgment-bearing work.
+- Full open collective reasoning remains **research-only**.
+- Integration into `origin/main` is performed through the repository PR/audit path; no force-push or silent default enablement is permitted.
+
+---
+
+## 7. Ongoing Evidence Discipline
+
+After integration, do not tune the mechanism repeatedly against T1-T6 or H1-H6. Treat those sets as historical evidence/acceptance fixtures.
+
+Future evidence should come from real opt-in usage and new held-out cases, with emphasis on:
+- whether the reviewer surfaced a genuinely material blind spot;
+- whether the primary model changed its judgment for defensible reasons;
+- whether the resulting decision was later judged better;
+- incremental calls/tokens and latency;
+- false triggers on execution tasks;
+- cases where the reviewer was correctly rejected.
+
+Do not promote this mode to an automatic/default path solely from the current small acceptance set.
