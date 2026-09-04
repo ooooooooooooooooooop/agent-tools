@@ -1062,6 +1062,11 @@ def _read_session_events(path: Path, limit: int = 80) -> list | None:
                         out.append(json.loads(p))
                     if len(out) >= limit:
                         break
+            if len(out) < limit and buf.strip():
+                try:
+                    out.append(json.loads(buf.strip()))
+                except Exception:
+                    pass
         return out
     except Exception:
         return None
@@ -1151,7 +1156,10 @@ def classify_unattached_root(sid: str, ws_dir_name: str, proj: dict | None,
     return "UNKNOWN", {"reason": "insufficient evidence"}
 
 
-def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
+def evaluate_session_continuity_health(
+    home: Path,
+    runtime_enumerable_override: set | None = None,
+) -> ResourceRecord:
     """Health 12: Physical vs runtime-enumerable session identity + conservative
     unattached-root semantics (EXPECTED / UNEXPECTED / UNKNOWN)."""
     sessions_root = home / "sessions"
@@ -1160,15 +1168,37 @@ def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
     phys_ids: set = set()
     phys_count = 0
     root_dirs: dict = {}  # sid -> Path
+    root_ids: set = set()
+    child_ids: set = set()
+    child_parents: dict = {}
+
     if sessions_root.is_dir():
         for p in sessions_root.rglob("session.jsonl.zstd"):
             phys_count += 1
-            phys_ids.add(p.parent.name)
-            if p.parent.name.startswith("session-"):
-                root_dirs[p.parent.name] = p.parent
+            sid = p.parent.name
+            phys_ids.add(sid)
+            events = _read_session_events(p, limit=1)
+            if events and isinstance(events[0], dict):
+                header = events[0]
+                is_root = (
+                    header.get("delegationDepth", 0) == 0
+                    and not header.get("parentSession")
+                    and header.get("origin") != "subagent"
+                )
+                if is_root:
+                    root_ids.add(sid)
+                    root_dirs[sid] = p.parent
+                else:
+                    child_ids.add(sid)
+                    if header.get("parentSession"):
+                        child_parents[sid] = str(header["parentSession"])
+            else:
+                root_ids.add(sid)
+                root_dirs[sid] = p.parent
 
+    # session_projcache.json is strictly an OPTIONAL projection cache, never authoritative truth
     proj = _load_session_projcache(home)
-    runtime_ids = set(proj.keys())
+    projcache_count = len(proj)
 
     attached_ids: set = set()
     ws_paths: list = []
@@ -1178,11 +1208,32 @@ def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
             for ws_info in ws_data.get("tables", {}).get("workspaces", {}).values():
                 ws_paths.append(str(ws_info.get("path", "")).lower().rstrip("\\"))
                 for sid in ws_info.get("sessionIds", []):
-                    attached_ids.add(sid)
+                    attached_ids.add(str(sid))
         except Exception:
             pass
 
-    identity_match = phys_ids == runtime_ids
+    # Runtime enumerable truth:
+    # In DSH runtime semantics (listVisibleSessionSummaries):
+    # runtime enumerates attached sessions (ctx.sessions.list()) + cold physical sessions (persistence.list())
+    if runtime_enumerable_override is not None:
+        runtime_ids = set(runtime_enumerable_override)
+    else:
+        runtime_ids = set(phys_ids | attached_ids)
+
+    # Subagent child lineage:
+    parent_indexed_child_ids = set()
+    for cid in child_ids:
+        pid = child_parents.get(cid)
+        if pid:
+            parent_indexed_child_ids.add(cid)
+
+    # Workspace attachment sets
+    ws_attached_root_ids = root_ids & attached_ids
+    ws_attached_child_ids = child_ids & attached_ids
+    ws_attached_all_ids = set(attached_ids)
+
+    # Physical vs runtime identity match
+    identity_match = (phys_ids == runtime_ids)
     phys_only = sorted(phys_ids - runtime_ids)
     runtime_only = sorted(runtime_ids - phys_ids)
 
@@ -1236,18 +1287,44 @@ def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
         return sorted(ids)[:8]
 
     details = {
+        "PHYSICAL_VALID_IDS": sorted(list(phys_ids)),
+        "RUNTIME_ENUMERABLE_IDS": sorted(list(runtime_ids)),
+        "ROOT_IDS": sorted(list(root_ids)),
+        "CHILD_IDS": sorted(list(child_ids)),
+        "WORKSPACE_ATTACHED_ROOT_IDS": sorted(list(ws_attached_root_ids)),
+        "WORKSPACE_ATTACHED_ALL_IDS": sorted(list(ws_attached_all_ids)),
+        "PARENT_INDEXED_CHILD_IDS": sorted(list(parent_indexed_child_ids)),
+        "EXPECTED_UNATTACHED_ROOT_IDS": sorted(list(expected)),
+        "UNEXPECTED_UNATTACHED_ROOT_IDS": sorted(list(unexpected)),
+        "UNKNOWN_UNATTACHED_ROOT_IDS": sorted(list(unknown)),
         "physical_count": phys_count,
+        "physical_valid_count": phys_count,
         "runtime_enumerable_count": len(runtime_ids),
+        "projcache_count": projcache_count,
+        "projcache_used_as_runtime_truth": False,
         "identity_match": identity_match,
+        "physical_runtime_set_equality": identity_match,
         "physical_minus_runtime": phys_only[:8],
         "runtime_minus_physical": runtime_only[:8],
-        "attached_root_count": len(attached_ids & set(root_dirs)),
+        "root_count": len(root_ids),
+        "child_count": len(child_ids),
+        "attached_root_count": len(ws_attached_root_ids),
+        "workspace_attached_root_count": len(ws_attached_root_ids),
+        "workspace_attached_all_count": len(ws_attached_all_ids),
+        "parent_indexed_child_count": len(parent_indexed_child_ids),
         "expected_unattached": _short(expected),
         "expected_unattached_count": len(expected),
+        "expected_unattached_root_count": len(expected),
         "unexpected_unattached": _short(unexpected),
         "unexpected_unattached_count": len(unexpected),
+        "unexpected_unattached_root_count": len(unexpected),
         "unknown_unattached": _short(unknown),
         "unknown_unattached_count": len(unknown),
+        "unknown_unattached_root_count": len(unknown),
+        "unattached_child_count": len(child_ids - attached_ids),
+        "session_data_loss": bool(runtime_only),
+        "session_continuity_status": "PASS" if identity_match and not runtime_only else "FAIL",
+        "session_attachment_health": "WARNING" if (unexpected or unknown) else "PASS",
     }
 
     if not identity_match:
@@ -1266,7 +1343,7 @@ def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
     if unexpected or unknown:
         parts = []
         if unexpected:
-            parts.append(f"{len(unexpected)} 个真实用户会话未挂载")
+            parts.append(f"{len(unexpected)} 个根会话未挂载")
         if unknown:
             parts.append(f"{len(unknown)} 个身份不明")
         return ResourceRecord(
@@ -1275,14 +1352,14 @@ def evaluate_session_continuity_health(home: Path) -> ResourceRecord:
             category=ResourceCategory.HEALTH_OBSERVABILITY,
             status=PlaneStatus.HEALTH_WARNING,
             symbol="△",
-            summary=f"物理 {phys_count} / 可枚举 {len(runtime_ids)} / {'，'.join(parts)}",
+            summary=f"{len(runtime_ids)}/{phys_count} 会话均完整可枚举；{'，'.join(parts)}，需要后续确认。",
             required_evidence_level=EvidenceLevel.L2_OBSERVED,
             warnings=[f"UNEXPECTED_UNATTACHED_ROOTS={len(unexpected)}",
                       f"UNKNOWN_UNATTACHED_ROOTS={len(unknown)}"],
             details=details,
         )
 
-    summary = (f"物理 {phys_count} / 可枚举 {len(runtime_ids)} / "
+    summary = (f"{len(runtime_ids)}/{phys_count} 会话均完整可枚举；"
                f"挂载 {details['attached_root_count']}")
     if expected:
         summary += f"；{len(expected)} 个历史测试残留（expected）"
@@ -1491,6 +1568,8 @@ def evaluate_backup_recovery_health(home: Path,
         full_dr_notes.append("无 off-device backup package")
     full_dr_notes.append("EXTERNAL_KEY_CUSTODY=NO（密钥与本机同生共死，属外部 durability 条件）")
 
+    local_backup_health = "PASS" if (freshness_state == "PASS" and integrity_state == "PASS" and restore_state == "PASS") else "WARNING"
+
     details = {
         "backup_root": str(backup_root),
         "policy_source": str((Path(state_repo) if state_repo else Path.home() / "personal-ai-state")
@@ -1500,6 +1579,7 @@ def evaluate_backup_recovery_health(home: Path,
         "BACKUP_INTEGRITY": artifacts,
         "BACKUP_INTEGRITY_STATE": integrity_state,
         "RESTORE_EVIDENCE": {"status": restore_state, "note": restore_note},
+        "LOCAL_BACKUP_HEALTH": local_backup_health,
         "SOURCE_DURABILITY": {"repo_risks": sorted(repo_risks),
                               "last_check": max((r.get("finished_at", "") for r in repo_rows), default=None)},
         "FULL_DR_READINESS": full_dr,

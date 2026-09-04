@@ -14,7 +14,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from sync_v2.models import EvidenceLevel, OverallStatus, PlaneStatus, ResourceCategory, SyncPlane
+from sync_v2.models import EvidenceLevel, OverallStatus, PlaneStatus, ResourceCategory, ResourceRecord, SyncPlane
 from sync_v2.planes import (
     evaluate_agent_tools_source_plane,
     evaluate_backup_recovery_health,
@@ -31,6 +31,7 @@ from sync_v2.planes import (
     evaluate_skills_plane,
 )
 from sync_v2.engine import SyncEngine
+from sync_v2.receipt import render_human_receipt
 
 
 class FakeSyncRegressionTests(unittest.TestCase):
@@ -381,6 +382,8 @@ class SessionResidueSemanticsTests(unittest.TestCase):
         (self.home / "storages" / "session_projcache.json").write_text(
             json.dumps({"tables": {"sessions": {}}}), encoding="utf-8")
         self._batch_ms = 1788282000000  # shared fixture creation time
+        self._mk("session-attached-1", title="real attached user session",
+                 events=self._header_events(text="real work"))
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -393,7 +396,7 @@ class SessionResidueSemanticsTests(unittest.TestCase):
             f.write_bytes(b"garbage")
         else:
             import zstandard as zstd
-            raw = "\n".join(json.dumps(e) for e in events).encode()
+            raw = ("\n".join(json.dumps(e) for e in events) + "\n").encode()
             f.write_bytes(zstd.ZstdCompressor().compress(raw))
         pc = json.loads((self.home / "storages" / "session_projcache.json")
                         .read_text(encoding="utf-8"))
@@ -465,7 +468,7 @@ class SessionResidueSemanticsTests(unittest.TestCase):
         d = self.home / "sessions" / "session-phys-only"
         d.mkdir(parents=True, exist_ok=True)
         (d / "session.jsonl.zstd").write_bytes(b"garbage")
-        res = evaluate_session_continuity_health(self.home)
+        res = evaluate_session_continuity_health(self.home, runtime_enumerable_override={"session-attached-1"})
         self.assertEqual(res.status, PlaneStatus.HEALTH_FAILED)
         self.assertIn("PHYSICAL_RUNTIME_IDENTITY_MISMATCH", res.blockers)
 
@@ -537,6 +540,305 @@ class SessionResidueSemanticsTests(unittest.TestCase):
         self.assertEqual(res.status, PlaneStatus.HEALTHY)
         self.assertEqual(res.details["expected_unattached_count"], 2)
         self.assertEqual(res.details["unknown_unattached_count"], 0)
+
+
+class SyncV3TruthAndHealthAdjudicationTests(unittest.TestCase):
+    """Specific regression test matrix covering the 11 truth & health adjudication requirements:
+    1. projcache sparse != session loss
+    2. physical/runtime identity equality
+    3. true physical/runtime mismatch
+    4. child lineage semantics
+    5. unexpected unattached root
+    6. health warning affects overall
+    7. health failure affects overall
+    8. warning prevents '无需操作' false statement
+    9. failure prevents '无需操作'
+    10. jobs no backup -> warning
+    11. jobs backup verified -> local backup health PASS
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.td = Path(self.temp_dir.name)
+        self.home = self.td / ".dsh"
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.home / "jobs.db"
+        (self.home / "sessions").mkdir(parents=True, exist_ok=True)
+        (self.home / "storages").mkdir(parents=True, exist_ok=True)
+        (self.home / "storages" / "workspace.json").write_text(
+            json.dumps({"unit": {"name": "workspace", "version": 2},
+                        "global": {"initialized": True, "workspaceIds": ["ws1"], "archivedSessionIds": []},
+                        "tables": {"workspaces": {"ws1": {"path": str(self.td / "repo"), "title": "repo", "sessionIds": []}}}}),
+            encoding="utf-8",
+        )
+        (self.home / "storages" / "session_projcache.json").write_text(
+            json.dumps({"tables": {"sessions": {}}}), encoding="utf-8"
+        )
+
+        # Baseline sync fixtures for engine runs
+        prof_dir = self.home / "profiles" / "web"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        (prof_dir / "dsh-runtime-composition.json").write_text(json.dumps({"profileCombinationHash": "hash123"}), encoding="utf-8")
+        (prof_dir / "cordis.patch.yml").write_text(
+            "# AIC DSH RUNTIME COMPOSITION BEGIN\n- id: include:token-meter-pressure-guard\n# AIC DSH RUNTIME COMPOSITION END\n",
+            encoding="utf-8"
+        )
+        (self.home / "settings.yaml").write_text("agent-default-model:\n  model: deepseek-chat\n", encoding="utf-8")
+        preset_dir = self.home / ".agent-presets" / "cc"
+        preset_dir.mkdir(parents=True, exist_ok=True)
+        (preset_dir / "agent.cordis.yml").write_text("agent:\n  profile: cc\n", encoding="utf-8")
+        (self.home / "skills").mkdir(parents=True, exist_ok=True)
+
+        self.state_repo = self.td / "personal-ai-state"
+        (self.state_repo / "sync").mkdir(parents=True, exist_ok=True)
+        self.backup_root = self.td / "ai-backup"
+        (self.backup_root / "ledger").mkdir(parents=True, exist_ok=True)
+        (self.state_repo / "sync" / "this-device.yaml").write_text(
+            f"device_id: TEST\nbackup_root: {self.backup_root}\n", encoding="utf-8"
+        )
+        self._write_verified_backup_ledger()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _write_verified_backup_ledger(self, include_jobs: bool = True) -> None:
+        import datetime as dt
+        base = dt.datetime.now().astimezone() - dt.timedelta(hours=1)
+        ts = base.isoformat(timespec="seconds")
+        rows = [
+            {"job": "backup_sessions", "dataset": "sessions", "finished_at": ts,
+             "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_broker", "dataset": "broker:broker", "finished_at": ts,
+             "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_configs", "dataset": "configs", "finished_at": ts,
+             "status": "ok", "integrity_status": "verified"},
+            {"job": "backup_repos", "dataset": "repos", "finished_at": ts,
+             "status": "ok", "integrity_status": "verified"},
+            {"job": "restore_check", "dataset": "all", "finished_at": ts,
+             "status": "ok", "integrity_status": "verified"},
+        ]
+        if include_jobs:
+            rows.append({"job": "backup_jobs", "dataset": "jobs", "finished_at": ts,
+                         "status": "ok", "integrity_status": "verified"})
+
+        led = self.backup_root / "ledger" / "runs.jsonl"
+        led.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+        for sub, name, payload in (("sessions", "daily-x", None),
+                                   ("configs", "daily-x", None),
+                                   ("broker", "broker-x.sqlite", b"sqlite")):
+            d = self.backup_root / sub / name
+            if payload is None:
+                d.mkdir(parents=True, exist_ok=True)
+            else:
+                d.parent.mkdir(parents=True, exist_ok=True)
+                d.write_bytes(payload)
+        if include_jobs:
+            d = self.backup_root / "jobs" / "jobs-x.sqlite"
+            d.parent.mkdir(parents=True, exist_ok=True)
+            d.write_bytes(b"sqlite")
+
+    def _create_session_file(self, sid: str, events: list) -> Path:
+        import zstandard as zstd
+        s_dir = self.home / "sessions" / f"--test--/{sid}"
+        s_dir.mkdir(parents=True, exist_ok=True)
+        z_file = s_dir / "session.jsonl.zstd"
+        raw = ("\n".join(json.dumps(e) for e in events) + "\n").encode("utf-8")
+        z_file.write_bytes(zstd.ZstdCompressor().compress(raw))
+        return z_file
+
+    def _attach_sessions_to_workspace(self, sids: list) -> None:
+        ws_file = self.home / "storages" / "workspace.json"
+        data = json.loads(ws_file.read_text(encoding="utf-8"))
+        data["tables"]["workspaces"]["ws1"]["sessionIds"] = sids
+        ws_file.write_text(json.dumps(data), encoding="utf-8")
+
+    def _set_projcache_entries(self, sids: list) -> None:
+        pc_file = self.home / "storages" / "session_projcache.json"
+        data = json.loads(pc_file.read_text(encoding="utf-8"))
+        for sid in sids:
+            data["tables"]["sessions"][sid] = {"identity": {"createdAt": 1000, "cwd": str(self.td / "repo")}, "rows": {}}
+        pc_file.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_01_projcache_sparse_does_not_cause_session_loss(self) -> None:
+        # 5 physical sessions on disk, all attached in workspace.json
+        sids = [f"session-phys-{i}" for i in range(5)]
+        for sid in sids:
+            self._create_session_file(sid, [{"type": "session", "id": sid, "delegationDepth": 0}])
+        self._attach_sessions_to_workspace(sids)
+        # Only 1 in projcache (sparse cache!)
+        self._set_projcache_entries([sids[0]])
+
+        res = evaluate_session_continuity_health(self.home)
+        self.assertEqual(res.details["physical_count"], 5)
+        self.assertEqual(res.details["runtime_enumerable_count"], 5)
+        self.assertEqual(res.details["projcache_count"], 1)
+        self.assertFalse(res.details["projcache_used_as_runtime_truth"])
+        self.assertTrue(res.details["identity_match"])
+        self.assertFalse(res.details["session_data_loss"])
+        self.assertEqual(res.details["session_continuity_status"], "PASS")
+        self.assertEqual(res.status, PlaneStatus.HEALTHY)
+
+    def test_02_physical_runtime_identity_equality(self) -> None:
+        sids = [f"session-root-{i}" for i in range(3)]
+        for sid in sids:
+            self._create_session_file(sid, [{"type": "session", "id": sid, "delegationDepth": 0}])
+        self._attach_sessions_to_workspace(sids)
+
+        res = evaluate_session_continuity_health(self.home)
+        self.assertEqual(res.details["physical_count"], 3)
+        self.assertEqual(res.details["runtime_enumerable_count"], 3)
+        self.assertTrue(res.details["identity_match"])
+        self.assertEqual(res.details["physical_minus_runtime"], [])
+        self.assertEqual(res.details["runtime_minus_physical"], [])
+        self.assertEqual(res.details["session_continuity_status"], "PASS")
+
+    def test_03_true_physical_runtime_mismatch(self) -> None:
+        # Disk has session-1, but workspace attaches session-ghost which does not exist on disk
+        self._create_session_file("session-1", [{"type": "session", "id": "session-1", "delegationDepth": 0}])
+        self._attach_sessions_to_workspace(["session-1", "session-ghost-lost"])
+
+        res = evaluate_session_continuity_health(self.home)
+        self.assertEqual(res.status, PlaneStatus.HEALTH_FAILED)
+        self.assertFalse(res.details["identity_match"])
+        self.assertEqual(res.details["session_continuity_status"], "FAIL")
+        self.assertIn("PHYSICAL_RUNTIME_IDENTITY_MISMATCH", res.blockers)
+        self.assertTrue(res.details["session_data_loss"])
+        self.assertIn("session-ghost-lost", res.details["runtime_minus_physical"])
+
+    def test_04_child_lineage_semantics(self) -> None:
+        # session-root is root (delegationDepth=0)
+        self._create_session_file("session-root", [{"type": "session", "id": "session-root", "delegationDepth": 0}])
+        # session-child is subagent (delegationDepth=1, parentSession=session-root, origin=subagent)
+        self._create_session_file("session-child", [{
+            "type": "session", "id": "session-child", "delegationDepth": 1,
+            "parentSession": "session-root", "origin": "subagent"
+        }])
+        # Only session-root is attached to workspace; child is linked via parentSession lineage
+        self._attach_sessions_to_workspace(["session-root"])
+
+        res = evaluate_session_continuity_health(self.home)
+        self.assertEqual(res.details["root_count"], 1)
+        self.assertEqual(res.details["child_count"], 1)
+        self.assertIn("session-child", res.details["PARENT_INDEXED_CHILD_IDS"])
+        self.assertNotIn("session-child", res.details["UNEXPECTED_UNATTACHED_ROOT_IDS"])
+        self.assertEqual(res.details["unexpected_unattached_count"], 0)
+        self.assertEqual(res.status, PlaneStatus.HEALTHY)
+
+    def test_05_unexpected_unattached_root(self) -> None:
+        # Unattached root with real user text and tools
+        events = [
+            {"type": "session", "id": "session-orphan-real", "delegationDepth": 0},
+            {"type": "user/message", "role": "user", "data": {"content": [{"type": "text", "text": "Deploy production database"}]}},
+            {"type": "tool/call", "data": {"name": "Bash"}}
+        ]
+        self._create_session_file("session-orphan-real", events)
+        # Empty workspace attachment
+        self._attach_sessions_to_workspace([])
+
+        res = evaluate_session_continuity_health(self.home)
+        self.assertEqual(res.status, PlaneStatus.HEALTH_WARNING)
+        self.assertEqual(res.details["unexpected_unattached_count"], 1)
+        self.assertIn("session-orphan-real", res.details["UNEXPECTED_UNATTACHED_ROOT_IDS"])
+        self.assertEqual(res.details["session_continuity_status"], "PASS")
+        self.assertEqual(res.details["session_attachment_health"], "WARNING")
+
+    def _mock_convergence_in_sync(self):
+        mock_in_sync = ResourceRecord(
+            resource_id="mock",
+            plane=SyncPlane.MCP,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.IN_SYNC,
+            symbol="✓",
+            summary="mock in sync",
+        )
+        return (
+            mock.patch("sync_v2.engine.evaluate_deployment_mirror_plane", return_value=mock_in_sync),
+            mock.patch("sync_v2.engine.evaluate_dsh_config_plane", return_value=mock_in_sync),
+            mock.patch("sync_v2.engine.evaluate_dsh_plugins_plane", return_value=mock_in_sync),
+            mock.patch("sync_v2.engine.evaluate_skills_plane", return_value=mock_in_sync),
+            mock.patch("sync_v2.engine._find_live_dsh_process", return_value=None),
+        )
+
+    def test_06_health_warning_affects_overall(self) -> None:
+        # Create unattached unexpected root to trigger HEALTH_WARNING
+        events = [
+            {"type": "session", "id": "session-warn", "delegationDepth": 0},
+            {"type": "user/message", "role": "user", "data": {"content": [{"type": "text", "text": "Deploy cluster"}]}}
+        ]
+        self._create_session_file("session-warn", events)
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+
+        p1, p2, p3, p4, p5 = self._mock_convergence_in_sync()
+        with p1, p2, p3, p4, p5:
+            receipt, _ = engine.run(check_only=True)
+        self.assertEqual(receipt.convergence_status, "IN_SYNC")
+        self.assertEqual(receipt.health_status, "WARNING")
+        self.assertEqual(receipt.overall, OverallStatus.PASS_WITH_HEALTH_WARNINGS)
+        self.assertNotEqual(receipt.overall, OverallStatus.PASS_NO_CHANGE)
+
+    def test_07_health_failure_affects_overall(self) -> None:
+        # Create missing session in workspace to trigger HEALTH_FAILED in session continuity
+        self._attach_sessions_to_workspace(["session-missing-ghost"])
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+
+        p1, p2, p3, p4, p5 = self._mock_convergence_in_sync()
+        with p1, p2, p3, p4, p5:
+            receipt, _ = engine.run(check_only=True)
+        self.assertEqual(receipt.convergence_status, "IN_SYNC")
+        self.assertEqual(receipt.health_status, "FAILED")
+        self.assertEqual(receipt.overall, OverallStatus.PASS_WITH_HEALTH_FAILURE)
+        self.assertNotEqual(receipt.overall, OverallStatus.PASS_NO_CHANGE)
+
+    def test_08_warning_prevents_wu_xu_cao_zuo_false_statement(self) -> None:
+        events = [
+            {"type": "session", "id": "session-warn", "delegationDepth": 0},
+            {"type": "user/message", "role": "user", "data": {"content": [{"type": "text", "text": "Deploy cluster"}]}}
+        ]
+        self._create_session_file("session-warn", events)
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+
+        p1, p2, p3, p4, p5 = self._mock_convergence_in_sync()
+        with p1, p2, p3, p4, p5:
+            receipt, human = engine.run(check_only=True)
+        self.assertEqual(receipt.overall, OverallStatus.PASS_WITH_HEALTH_WARNINGS)
+        self.assertNotEqual(receipt.action_required_from_user, "无需你额外操作。")
+        self.assertIn("项健康状态需要关注", receipt.action_required_from_user)
+        self.assertNotIn("## 7. 需要用户做什么\n无需你额外操作。", human)
+        self.assertIn("项健康状态需要关注", human)
+
+    def test_09_failure_prevents_wu_xu_cao_zuo(self) -> None:
+        self._attach_sessions_to_workspace(["session-ghost"])
+        engine = SyncEngine(home=self.home, repo_root=REPO, db_path=self.db_path, state_repo=self.state_repo)
+
+        p1, p2, p3, p4, p5 = self._mock_convergence_in_sync()
+        with p1, p2, p3, p4, p5:
+            receipt, human = engine.run(check_only=True)
+        self.assertEqual(receipt.overall, OverallStatus.PASS_WITH_HEALTH_FAILURE)
+        self.assertNotIn("无需你额外操作", receipt.action_required_from_user)
+        self.assertNotIn("无需操作", receipt.action_required_from_user)
+        self.assertIn("检测到健康异常，需要后续处理", receipt.action_required_from_user)
+        self.assertIn("检测到健康异常，需要后续处理", human)
+
+    def test_10_jobs_no_backup_yields_warning(self) -> None:
+        import shutil
+        self._write_verified_backup_ledger(include_jobs=False)
+        shutil.rmtree(self.backup_root / "jobs", ignore_errors=True)
+
+        res = evaluate_backup_recovery_health(self.home, state_repo=self.state_repo)
+        self.assertEqual(res.status, PlaneStatus.HEALTH_WARNING)
+        self.assertFalse(res.details["BACKUP_INTEGRITY"]["jobs"])
+
+    def test_11_jobs_backup_verified_yields_local_backup_health_pass(self) -> None:
+        self._write_verified_backup_ledger(include_jobs=True)
+
+        res = evaluate_backup_recovery_health(self.home, state_repo=self.state_repo)
+        self.assertEqual(res.status, PlaneStatus.HEALTHY)
+        self.assertTrue(res.details["BACKUP_INTEGRITY"]["jobs"])
+        self.assertEqual(res.details["BACKUP_FRESHNESS_STATE"], "PASS")
+        self.assertEqual(res.details["BACKUP_INTEGRITY_STATE"], "PASS")
+        self.assertEqual(res.details["LOCAL_BACKUP_HEALTH"], "PASS")
+        self.assertIn(res.details["FULL_DR_READINESS"], ("INCOMPLETE", "MISSING"))
 
 
 if __name__ == "__main__":
