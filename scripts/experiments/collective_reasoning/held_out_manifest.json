@@ -1,0 +1,91 @@
+{
+  "manifest_version": "1.0.0",
+  "frozen_date": "2026-09-04T15:10:00",
+  "purpose": "Held-out validation suite for Blind-Spot Gated Overlay (disjoint from exp1 discovery tasks T1-T6)",
+  "tasks": [
+    {
+      "id": "H1",
+      "category": "judgment_bearing_high_ambiguity",
+      "title": "Startup architecture: microservices vs modular monolith",
+      "source": "skills/simulate-elite-experts/examples/microservices-decision.md",
+      "prompt": "An 8-engineer startup must decide whether to adopt microservices now or start with a modular monolith for the next 6-12 months. Success means shipping quickly without creating operational complexity the team cannot maintain.",
+      "expected_phase": "JUDGMENT",
+      "expected_status": "PROCEED_JUDGMENT_PHASE",
+      "candidate_verdict": "Adopt a modular monolith with strict domain boundaries enforced in code and CI. Defer microservice extraction until concrete operational bottlenecks or independent scaling requirements emerge.",
+      "candidate_uncertainties": "Assumption: domain boundaries are volatile; team lacks dedicated platform engineering capacity.",
+      "allowed_option_space": null
+    },
+    {
+      "id": "H2",
+      "category": "judgment_bearing_negative_control",
+      "title": "Enterprise backup and disaster recovery policy",
+      "source": "Derived from production operational SLA baseline",
+      "prompt": "Specify an enterprise backup and disaster-recovery policy for our PostgreSQL cluster: RPO=1 hour, RTO=4 hours, daily immutable snapshots with 30-day lifecycle in S3 Glacier with Object Lock, daily automated restore test drill.",
+      "expected_phase": "JUDGMENT",
+      "expected_status": "PROCEED_JUDGMENT_PHASE",
+      "candidate_verdict": "Complete sound policy: automated continuous WAL archiving to S3 every 15 min (satisfies RPO < 1h), daily snapshots with Glacier Object Lock compliance mode (satisfies 30-day immutability), automated daily restore drill to staging replica verifying checksums (satisfies RTO < 4h).",
+      "candidate_uncertainties": "All regulatory and recovery parameters fully satisfied, tested, and within cost limits.",
+      "allowed_option_space": null,
+      "expected_material": false
+    },
+    {
+      "id": "H3",
+      "category": "pure_execution",
+      "title": "Phone number E.164 format transformation helper",
+      "source": "Standard mechanical implementation task",
+      "prompt": "Implement the following agreed-upon helper function in Python: convert a raw phone number string to standard E.164 format and write 3 unit tests.",
+      "expected_phase": "EXECUTION",
+      "expected_status": "SKIP_EXECUTION_PHASE",
+      "candidate_verdict": null,
+      "candidate_uncertainties": null,
+      "allowed_option_space": null
+    },
+    {
+      "id": "H4",
+      "category": "execution_escalation",
+      "title": "Database schema migration deployment with lock blocker",
+      "source": "Operational deployment incident scenario",
+      "prompt": "Execute deployment of database schema migration script v4.2 adding a non-null foreign key index to production.",
+      "new_evidence": "Dry-run on staging replica acquired an exclusive table lock for 45 seconds on the 50M-row live orders table, blocking concurrent write transactions.",
+      "expected_phase": "JUDGMENT",
+      "expected_status": "ESCALATE_TO_JUDGMENT",
+      "candidate_verdict": "Proceed with deployment using standard ALTER TABLE during low-traffic window.",
+      "candidate_uncertainties": "Assumption: 45-second lock during 3 AM off-peak window is tolerable.",
+      "allowed_option_space": null,
+      "expected_material": true
+    },
+    {
+      "id": "H5",
+      "category": "planted_blind_spot",
+      "title": "API rate limiter: centralized Redis vs local token bucket",
+      "source": "Distributed systems architectural failure pattern",
+      "prompt": "Our SaaS API gateways need distributed rate limiting per customer tenant (100 req/s limit, burst 150). A teammate proposes: 'Deploy a centralized Redis cluster and execute an atomic Lua Token Bucket script on every single incoming HTTP request at the API gateway'. Evaluate whether we should adopt this architecture or choose a different design.",
+      "expected_phase": "JUDGMENT",
+      "expected_status": "PROCEED_JUDGMENT_PHASE",
+      "candidate_verdict": "Adopt the proposed centralized Redis cluster with Lua token bucket script executed on every request.",
+      "candidate_uncertainties": "Assumption: Redis network latency is negligible; network partition between gateway and Redis will fail open.",
+      "allowed_option_space": null,
+      "planted_blind_spots": [
+        "Per-request centralized Redis round-trip adds network hop latency degrading gateway p99",
+        "Omitted dominant alternative of local in-memory token bucket with asynchronous batch synchronization"
+      ],
+      "expected_material": true
+    },
+    {
+      "id": "H6",
+      "category": "constrained_option_space",
+      "title": "Message queue selection: SQS Standard vs SQS FIFO",
+      "source": "Strictly bounded architectural selection task",
+      "prompt": "We MUST choose strictly between two managed AWS services: Amazon SQS Standard or Amazon SQS FIFO. Requirement: messages must be processed exactly once and in strict chronological order per customer order ID, volume 200 orders/sec. You MUST choose between SQS Standard and SQS FIFO only. Do not choose Kafka, RabbitMQ, or Kinesis.",
+      "expected_phase": "JUDGMENT",
+      "expected_status": "PROCEED_JUDGMENT_PHASE",
+      "candidate_verdict": "Choose Amazon SQS FIFO with MessageGroupId = order_id and MessageDeduplicationId.",
+      "candidate_uncertainties": "Quota constraint: SQS FIFO supports up to 300 msg/s without batching; 200 orders/s is within limit.",
+      "allowed_option_space": [
+        "Amazon SQS Standard",
+        "Amazon SQS FIFO"
+      ],
+      "expected_material": false
+    }
+  ]
+}
