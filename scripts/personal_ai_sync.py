@@ -2606,7 +2606,33 @@ def main() -> int:
                     choices=["check", "pull", "push", "sync", "restore", "audit"])
     ap.add_argument("--detail", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--legacy", action="store_true", help="Run legacy v1 thin orchestrator instead of Sync V3 engine")
     args = ap.parse_args()
+
+    # Route default sync/check calls directly through Sync V3 True Convergence Engine unless --legacy requested
+    if not args.legacy and args.mode in ("sync", "check") and not args.json:
+        try:
+            from sync_v2.engine import run_sync as run_sync_v3
+            receipt, human_text = run_sync_v3(check_only=(args.mode == "check"))
+            print(human_text)
+            from sync_v2.models import OverallStatus
+            if receipt.overall in (
+                OverallStatus.PASS,
+                OverallStatus.PASS_NO_CHANGE,
+                OverallStatus.PASS_WITH_HEALTH_WARNINGS,
+                OverallStatus.PARTIAL_RESTART_REQUIRED,
+                OverallStatus.PARTIAL,
+            ):
+                return 0
+            elif receipt.overall in (
+                OverallStatus.PASS_WITH_HEALTH_FAILURE,
+                OverallStatus.REVIEW_REQUIRED,
+            ):
+                return 1
+            return 2
+        except Exception:
+            pass  # Fall back to legacy orchestrator on unexpected failure
+
     if args.mode == "restore":
         results = run_restore(args.detail)
     elif args.mode == "audit":

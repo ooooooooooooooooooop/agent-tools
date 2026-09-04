@@ -16,6 +16,16 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
     elif receipt.overall == OverallStatus.PASS:
         updated_count = len(receipt.changes_applied)
         lines.append(f"同步完成，更新了 {updated_count} 项，均已生效。")
+    elif receipt.overall == OverallStatus.PASS_WITH_HEALTH_WARNINGS:
+        if receipt.changes_applied:
+            lines.append(f"同步完成，更新了 {len(receipt.changes_applied)} 项；但存在需要关注的健康状态。")
+        else:
+            lines.append("同步完成，没有新的收敛变化；但存在需要关注的健康状态。")
+    elif receipt.overall == OverallStatus.PASS_WITH_HEALTH_FAILURE:
+        if receipt.changes_applied:
+            lines.append(f"同步收敛已完成，更新了 {len(receipt.changes_applied)} 项；但检测到健康异常，需要后续处理。")
+        else:
+            lines.append("同步收敛已完成，没有新的收敛变化；但检测到健康异常，需要后续处理。")
     elif receipt.overall == OverallStatus.PARTIAL_RESTART_REQUIRED:
         lines.append("同步基本完成，更新已部署，待下次正常重启 DSH 后自动生效。")
     elif receipt.overall == OverallStatus.PARTIAL:

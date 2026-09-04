@@ -35,11 +35,18 @@ def main() -> int:
         print(human_text)
 
     # Return exit code based on overall status
-    if receipt.overall in (OverallStatus.PASS, OverallStatus.PASS_NO_CHANGE, OverallStatus.PARTIAL_RESTART_REQUIRED):
+    if receipt.overall in (
+        OverallStatus.PASS,
+        OverallStatus.PASS_NO_CHANGE,
+        OverallStatus.PASS_WITH_HEALTH_WARNINGS,
+        OverallStatus.PARTIAL_RESTART_REQUIRED,
+        OverallStatus.PARTIAL,
+    ):
         return 0
-    elif receipt.overall == OverallStatus.PARTIAL:
-        return 0
-    elif receipt.overall == OverallStatus.REVIEW_REQUIRED:
+    elif receipt.overall in (
+        OverallStatus.PASS_WITH_HEALTH_FAILURE,
+        OverallStatus.REVIEW_REQUIRED,
+    ):
         return 1
     return 2
 

@@ -374,16 +374,49 @@ class SyncEngine:
                 overall = OverallStatus.PARTIAL_RESTART_REQUIRED
             elif convergence_status == "PARTIAL":
                 overall = OverallStatus.PARTIAL
+            elif health_status == "FAILED":
+                overall = OverallStatus.PASS_WITH_HEALTH_FAILURE
+            elif health_status == "WARNING":
+                overall = OverallStatus.PASS_WITH_HEALTH_WARNINGS
             elif not changes_applied:
                 overall = OverallStatus.PASS_NO_CHANGE
             else:
                 overall = OverallStatus.PASS
 
-            action_required = "无需你额外操作。"
-            if restart_required:
-                action_required = "下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。"
+            # Action Required Generation grounded in convergence, safety, and health observations
+            health_failures = [r for r in health_resources if r.status == PlaneStatus.HEALTH_FAILED]
+            health_warnings = [r for r in health_resources if r.status == PlaneStatus.HEALTH_WARNING]
+
+            warning_items = []
+            for r in health_warnings:
+                warning_items.append(f"- {r.plane.value}：{r.summary}")
+            backup_res = resources_map.get("Backup / Recovery Health")
+            if backup_res and backup_res.details.get("FULL_DR_READINESS") and backup_res.details.get("FULL_DR_READINESS") != "READY":
+                dr_state = backup_res.details.get("FULL_DR_READINESS")
+                dr_notes = "；".join(backup_res.details.get("FULL_DR_NOTES", [])) or "External key custody 尚未建立"
+                warning_items.append(f"- Disaster Recovery：{dr_state}（{dr_notes}）")
+
+            if overall == OverallStatus.FAILED:
+                action_required = "请查看上方失败原因，先修复阻断项后再尝试同步。"
             elif overall == OverallStatus.REVIEW_REQUIRED:
                 action_required = "请查看上方遇到的问题进行人工核对。"
+            elif restart_required:
+                if health_failures:
+                    fail_items = [f"- {r.plane.value}：{r.summary}" for r in health_failures]
+                    action_required = "下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。另外检测到健康异常，需要后续处理：\n" + "\n".join(fail_items)
+                elif warning_items:
+                    action_required = f"下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。另外有 {len(warning_items)} 项健康状态需要关注：\n" + "\n".join(warning_items)
+                else:
+                    action_required = "下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。"
+            elif health_failures:
+                fail_items = [f"- {r.plane.value}：{r.summary}" for r in health_failures]
+                action_required = "同步收敛已完成，但检测到健康异常，需要后续处理：\n" + "\n".join(fail_items)
+                if warning_items:
+                    action_required += "\n" + "\n".join(warning_items)
+            elif warning_items:
+                action_required = f"本次同步无需操作，但有 {len(warning_items)} 项健康状态需要关注：\n" + "\n".join(warning_items)
+            else:
+                action_required = "无需你额外操作。"
 
             receipt = SyncReceipt(
                 sync_id=sync_id,
