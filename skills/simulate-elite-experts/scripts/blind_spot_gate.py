@@ -59,10 +59,10 @@ class TaskPhaseVerdict:
 
 # Semantic keywords that signal forming, deciding, or revising high-stakes direction
 JUDGMENT_PATTERNS = [
-    r"\b(?:decide|decision|choose|recommend|recommendation|trade-?off|strategy|architect|architecture)\b",
-    r"\b(?:diagnose|diagnosis|root-?cause|causal|hypothesis|hypotheses|evaluate|evaluation|prioritize|priority)\b",
+    r"\b(?:decide|decision|choose|recommend|recommendation|trade-?off|strategy|architect|architecture|policy|propos\w*|design|assess\w*)\b",
+    r"\b(?:diagnose|diagnosis|root-?cause|causal|hypothesis|hypotheses|evaluate|evaluation|prioritize|priority|review)\b",
     r"\b(?:should we|which (?:is better|approach|option)|migration strategy|design space)\b",
-    r"(?:决策|选型|方案|架构|设计|因果|根因|优先级|权衡|评测|评估|方向|战略|优选)",
+    r"(?:决策|选型|方案|架构|设计|因果|根因|优先级|权衡|评测|评估|方向|战略|优选|策略)",
 ]
 
 # Semantic keywords that signal mechanical execution of already-agreed plans
@@ -164,14 +164,21 @@ class DecisionPacket:
 def _extract_option_space(prompt: str) -> Optional[List[str]]:
     """Detect if the prompt explicitly restricts the decision to a closed set."""
     t = prompt or ""
-    # Pattern: "choose between X and Y", "choose from: A, B, C", "either X or Y"
-    m1 = re.search(r"(?i)(?:choose|pick|select)\s+(?:only\s+)?between\s+([A-Za-z0-9_\-\s]+?)\s+and\s+([A-Za-z0-9_\-\s]+)(?:\.|\n|$)", t)
+    # Pattern 1: "between ... X and/or Y"
+    m1 = re.search(
+        r"(?i)between\s+(?:[^:;\n]+?[:：]\s*)?([A-Za-z0-9_\-\s]+?)\s+(?:and|or)\s+([A-Za-z0-9_\-\s]+?)(?:\s+only)?(?:\.|\n|;|$)",
+        t,
+    )
     if m1:
         opt1 = m1.group(1).strip()
         opt2 = m1.group(2).strip()
-        if len(opt1) < 50 and len(opt2) < 50:
+        if ":" in opt1 or "：" in opt1:
+            opt1 = re.split(r"[:：]", opt1)[-1].strip()
+        if 2 <= len(opt1) < 60 and 2 <= len(opt2) < 60:
             return [opt1, opt2]
-    m2 = re.search(r"(?i)(?:choose|pick|select)\s+(?:from|among)\s*(?:the following)?\s*[:：]\s*([^\.\n]+)", t)
+
+    # Pattern 2: "from / among: A, B, C"
+    m2 = re.search(r"(?i)(?:choose|pick|select)\s+(?:from|among)\s*(?:the following)?\s*[:：]\s*([^\.\n;]+)", t)
     if m2:
         raw_items = re.split(r"[,;、/]| or ", m2.group(1))
         items = [item.strip().strip("'\"`") for item in raw_items if item.strip()]
