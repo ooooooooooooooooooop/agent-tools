@@ -59,7 +59,7 @@
       "category": "planted_blind_spot",
       "title": "API rate limiter: centralized Redis vs local token bucket",
       "source": "Distributed systems architectural failure pattern",
-      "prompt": "Our SaaS API gateways need distributed rate limiting per customer tenant (100 req/s limit, burst 150). A teammate proposes: 'Deploy a centralized Redis cluster and execute an atomic Lua Token Bucket script on every single incoming HTTP request at the API gateway'.",
+      "prompt": "Our SaaS API gateways need distributed rate limiting per customer tenant (100 req/s limit, burst 150). A teammate proposes: 'Deploy a centralized Redis cluster and execute an atomic Lua Token Bucket script on every single incoming HTTP request at the API gateway'. Evaluate whether we should adopt this architecture or choose a different design.",
       "expected_phase": "JUDGMENT",
       "expected_status": "PROCEED_JUDGMENT_PHASE",
       "candidate_verdict": "Adopt the proposed centralized Redis cluster with Lua token bucket script executed on every request.",

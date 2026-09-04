@@ -11,19 +11,14 @@
     "clean_context_isolation_rate": 1.0,
     "option_space_discipline_verified": true,
     "reviewer_heterogeneity_verified": true,
+    "main_model": "claude-opus-5",
+    "resolved_reviewer_model": "gemini-3.8-flash-high",
     "negative_control_fast_path_verified": true,
     "planted_blind_spots_in_suite": 2,
     "planted_blind_spots_recalled": 2,
     "planted_blind_spot_status": "2/2 observed targets detected on H5 (physical count on planted case; general recall unverified)",
     "planted_blind_spot_material_gate": true,
-    "reentry_agency_verified": true,
-    "main_model": "claude-opus-5",
-    "resolved_reviewer_model": "gemini-3.8-flash-high"
-  },
-  "evidence_classification": {
-    "retrospective_concordance": "6/6 on exp1 discovery tasks (T1-T6)",
-    "held_out_generalization": "UNVERIFIED (H1-H6 represents observed acceptance counts, not statistical generalization)",
-    "production_prevalence_estimate": "UNVERIFIED (illustrative scenario assumption only; no empirical prior for blind-spot frequency)"
+    "reentry_agency_verified": true
   },
   "task_details": {
     "H1": {
@@ -38,7 +33,7 @@
       "clean_context": {
         "passed": true,
         "leaks_detected": [],
-        "verdict_length_chars": 171,
+        "verdict_length_chars": 192,
         "uncertainty_length_chars": 95
       }
     },
@@ -54,8 +49,8 @@
       "clean_context": {
         "passed": true,
         "leaks_detected": [],
-        "verdict_length_chars": 235,
-        "uncertainty_length_chars": 88
+        "verdict_length_chars": 279,
+        "uncertainty_length_chars": 87
       },
       "gate_result": {
         "material": false,
@@ -85,8 +80,8 @@
       "clean_context": {
         "passed": true,
         "leaks_detected": [],
-        "verdict_length_chars": 78,
-        "uncertainty_length_chars": 73
+        "verdict_length_chars": 77,
+        "uncertainty_length_chars": 68
       }
     },
     "H5": {
@@ -95,14 +90,14 @@
       "phase_verdict": {
         "phase": "JUDGMENT",
         "status": "PROCEED_JUDGMENT_PHASE",
-        "reason": "Task involves judgment formation/revision (matched 1 judgment patterns).",
+        "reason": "Task involves judgment formation/revision (matched 2 judgment patterns).",
         "can_escalate": false
       },
       "clean_context": {
         "passed": true,
         "leaks_detected": [],
-        "verdict_length_chars": 94,
-        "uncertainty_length_chars": 96
+        "verdict_length_chars": 100,
+        "uncertainty_length_chars": 108
       },
       "planted_recall": {
         "recalled": [
@@ -128,10 +123,15 @@
       "clean_context": {
         "passed": true,
         "leaks_detected": [],
-        "verdict_length_chars": 86,
-        "uncertainty_length_chars": 96
+        "verdict_length_chars": 81,
+        "uncertainty_length_chars": 99
       },
       "option_space_enforced": true
     }
+  },
+  "evidence_classification": {
+    "retrospective_concordance": "6/6 on exp1 discovery tasks (T1-T6)",
+    "held_out_generalization": "UNVERIFIED (H1-H6 represents observed acceptance counts, not statistical generalization)",
+    "production_prevalence_estimate": "UNVERIFIED (illustrative scenario assumption only; no empirical prior for blind-spot frequency)"
   }
 }
