@@ -48,10 +48,12 @@ Choose the execution mode before building the roster:
 
 - `one-shot` (default): Produce the complete output in one response. Use this when the user asks for an analysis, report, comparison, or direct recommendation and has not asked to co-design the panel.
 - `interactive`: Produce Section 1 only, ask the user to confirm or swap the roster, then wait before running dialogue rounds. Use this when the user explicitly asks to choose experts, workshop the panel, or collaborate step by step.
+- `blind-spot-gated` (opt-in overlay): Run the candidate deliberation, then perform a clean-context outside audit across 5 failure categories (hidden assumptions, wrong framing, omitted alternatives, second-order effects, simpler paths) evaluated by a materiality gate. If `material: true`, trigger a single-shot re-entry to revise the decision before final delivery. Use this only when explicitly requested (e.g. `--blind-spot-gated` or asking for "gated audit").
 
 Rules:
 - Do not pause after Section 1 in `one-shot` mode.
 - Do not continue past Section 1 in `interactive` mode until the user confirms or revises the roster.
+- `blind-spot-gated` is strictly opt-in; it must never be the implicit default for standard queries or execution tasks.
 - If profile and execution mode conflict with token or time constraints, preserve the profile's required section/round counts and compress content rather than dropping structure.
 
 ## When NOT to Use This Framework
@@ -342,6 +344,34 @@ Each dialogue round must contain one turn from each active role.
 7. User interaction and post-use reflection
 - After delivering the output, append the Post-Use Self-Check section.
 - If the session is interactive, invite the user to mark which positions they agree/disagree with and why.
+
+## Blind-Spot Gated Overlay Workflow (When execution_mode: blind-spot-gated)
+
+When the user explicitly invokes `blind-spot-gated` mode (or passes `--blind-spot-gated`):
+
+1. **Primary Candidate Formation**: Complete the standard profile (e.g. `classic` four-lens deliberation) through Moderator Synthesis and Uncertainty Ledger.
+2. **Clean-Context Extraction**: Extract a bounded brief containing ONLY:
+   - Original user problem prompt
+   - Candidate verdict summary (from Moderator Synthesis, <=150 words)
+   - Declared assumptions and uncertainties (from Uncertainty Ledger)
+   *Hard boundary:* NEVER leak dialogue transcripts, scratchpads, or persona turns to the reviewer.
+3. **Targeted Outside Audit**: An independent model or fresh context audits the brief against 5 failure modes:
+   - (a) Hidden or unexamined assumptions
+   - (b) Wrong framing of the decision space (e.g. false dichotomy)
+   - (c) Omitted viable alternatives
+   - (d) Neglected second-order operational/systemic effects
+   - (e) Dramatically simpler paths
+   *Constraint:* Reviewer must respect problem constraints; alternatives outside the stated choice set must be explicitly flagged as `[OUT-OF-FRAMEWORK]`.
+4. **Materiality Gate Circuit Breaker**: Evaluate if the audit critique is `material` (identifies a fatal flaw, false assumption, or strictly dominating option that should change the decision/action plan) vs `immaterial` (philosophical difference, already-acknowledged uncertainty, stylistic preference).
+   - If `material == False`: Deliver candidate output immediately with a clean audit pass note in the Uncertainty Ledger. (Zero re-entry overhead).
+   - If `material == True`: Pass the critique back to the primary engine for **single-shot re-entry**. The primary engine evaluates the critique (accept, adapt, or defend with reason) and produces the revised final judgment.
+5. **Observability**: Record the audit outcome inside the Uncertainty Ledger under `### Blind-Spot Audit Ledger`:
+   ```markdown
+   ### Blind-Spot Audit Ledger
+   - **Gate Status**: PASS (NO MATERIAL BLIND SPOT) | RE-ENTRY TRIGGERED
+   - **Material Finding**: YES | NO
+   - **Gate Rationale**: <1-2 sentence explanation>
+   ```
 
 ## User Interaction Guidance
 
