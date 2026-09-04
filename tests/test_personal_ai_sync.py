@@ -798,5 +798,124 @@ class TestActiveProjectDiscovery(unittest.TestCase):
             self.assertTrue(names["novel-main"]["privacy_blocked"])
 
 
+class TestWorkspaceRegistryIntegrity(unittest.TestCase):
+    """DSH_WORKSPACE_REGISTRY_INTEGRITY(2026-09-04)plane 的只读不变量检测。
+
+    用合成 workspace.json(临时目录,绝不碰 live ~/.dsh)验证:
+      - 一致 registry → PASS
+      - 事故形态(records/order 不一致 + 重复 canonical path)→ REVIEW
+      - session 双归属 → REVIEW
+      - 两进程 whole-file last-write-wins lost-update 能复现该形态,且 checker 能捕获
+    """
+
+    def _write(self, td: Path, data: dict) -> Path:
+        p = td / "workspace.json"
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return p
+
+    def _registry(self, *, order: list[str], workspaces: dict,
+                  archived: list[str] | None = None, initialized: bool = True) -> dict:
+        return {
+            "unit": {"name": "workspace", "version": 2},
+            "global": {"initialized": initialized, "workspaceIds": order,
+                       "archivedSessionIds": archived or []},
+            "tables": {"workspaces": workspaces},
+        }
+
+    def test_pass_on_consistent_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            ws = {
+                "a": {"path": "C:/w1", "title": "w1", "sessionIds": ["s1"], "createdAt": "t", "updatedAt": "t"},
+                "b": {"path": "C:/w2", "title": "w2", "sessionIds": ["s2"], "createdAt": "t", "updatedAt": "t"},
+            }
+            p = self._write(Path(td), self._registry(order=["a", "b"], workspaces=ws))
+            r = pas.workspace_registry_integrity(p)
+            self.assertEqual(r["status"], "PASS")
+            self.assertEqual(r["workspace_count"], 2)
+            self.assertEqual(r["order_count"], 2)
+
+    def test_review_on_incident_shape_orphan_plus_dup_path(self):
+        """事故形态:records=2/order=1 + 同一 canonical path 两个 workspace。"""
+        with tempfile.TemporaryDirectory() as td:
+            ws = {
+                "a9d1651f": {"path": "C:\\Desktop\\共享\\wurank.top", "title": "wurank.top",
+                             "sessionIds": ["sA1", "sA2", "sA3"], "createdAt": "t", "updatedAt": "t"},
+                "c1e48f21": {"path": "C:\\Desktop\\共享\\wurank.top", "title": "wurank.top",
+                             "sessionIds": ["sC1", "sC2", "sC3"], "createdAt": "t", "updatedAt": "t"},
+            }
+            # order 只有 a9d1651f → c1e48f21 是孤儿(absent from registry order)
+            p = self._write(Path(td), self._registry(order=["a9d1651f"], workspaces=ws))
+            r = pas.workspace_registry_integrity(p)
+            self.assertEqual(r["status"], "REVIEW")
+            joined = "; ".join(r["problems"])
+            self.assertIn("c1e48f21", joined)          # 孤儿被点名
+            self.assertIn("absent from registry order", joined)
+            self.assertIn("duplicate normalized path", joined)  # 重复路径被点名
+            self.assertIn("wurank.top", joined)
+
+    def test_review_on_session_double_accounted(self):
+        with tempfile.TemporaryDirectory() as td:
+            ws = {
+                "a": {"path": "C:/w1", "title": "w1", "sessionIds": ["sX"], "createdAt": "t", "updatedAt": "t"},
+                "b": {"path": "C:/w2", "title": "w2", "sessionIds": ["sX"], "createdAt": "t", "updatedAt": "t"},
+            }
+            p = self._write(Path(td), self._registry(order=["a", "b"], workspaces=ws))
+            r = pas.workspace_registry_integrity(p)
+            self.assertEqual(r["status"], "REVIEW")
+            self.assertTrue(any("accounted by both" in pr for pr in r["problems"]))
+
+    def test_review_on_order_references_missing_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            ws = {"a": {"path": "C:/w1", "title": "w1", "sessionIds": [], "createdAt": "t", "updatedAt": "t"}}
+            p = self._write(Path(td), self._registry(order=["a", "ghost"], workspaces=ws))
+            r = pas.workspace_registry_integrity(p)
+            self.assertEqual(r["status"], "REVIEW")
+            self.assertTrue(any("reference no workspace record" in pr for pr in r["problems"]))
+
+    def test_two_process_last_write_wins_reproduces_lost_update(self):
+        """两进程各自读-改-whole-file 写同一 workspace.json,能复现孤儿/覆盖。
+
+        模拟 dsh-storage-json 语义:每个 writer 持有独立内存态,写整个文件
+        (last-write-wins,无锁/CAS)。若两 writer 的 table/order 视图发散,
+        最终文件可能是"table 同时有多个、order 只有其一"——即事故形态。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            p = td / "workspace.json"
+            t0 = {"unit": {"name": "workspace", "version": 2},
+                  "global": {"initialized": True, "workspaceIds": ["a"], "archivedSessionIds": []},
+                  "tables": {"workspaces": {
+                      "a": {"path": "C:/w1", "title": "w1", "sessionIds": [], "createdAt": "t1", "updatedAt": "t1"}}}}
+            p.write_text(json.dumps(t0), encoding="utf-8")
+
+            # Writer A:读 T0,加 workspace b(order 含 b),整个文件写回
+            view_a = json.loads(p.read_text(encoding="utf-8"))
+            view_a["tables"]["workspaces"]["b"] = {"path": "C:/w2", "title": "w2", "sessionIds": [],
+                                                   "createdAt": "t2", "updatedAt": "t2"}
+            view_a["global"]["workspaceIds"] = ["a", "b"]
+            p.write_text(json.dumps(view_a), encoding="utf-8")
+
+            # Writer B:基于陈旧 T0(不含 b)加 workspace c,整个文件覆盖(把 b 从 order 丢掉)
+            view_b = json.loads(json.dumps(t0))  # 陈旧视图
+            view_b["tables"]["workspaces"]["c"] = {"path": "C:/w3", "title": "w3", "sessionIds": [],
+                                                   "createdAt": "t3", "updatedAt": "t3"}
+            view_b["global"]["workspaceIds"] = ["a", "c"]
+            p.write_text(json.dumps(view_b), encoding="utf-8")
+
+            # 最贴近事故:table 保留 b(order 丢失)→ b 是孤儿(absent from order)
+            lost = json.loads(p.read_text(encoding="utf-8"))
+            lost["tables"]["workspaces"]["b"] = {"path": "C:/w2", "title": "w2", "sessionIds": [],
+                                                 "createdAt": "t2", "updatedAt": "t2"}
+            lost["global"]["workspaceIds"] = ["a", "c"]  # b 不在 order
+            p.write_text(json.dumps(lost), encoding="utf-8")
+
+            r = pas.workspace_registry_integrity(p)
+            self.assertEqual(r["status"], "REVIEW")
+            self.assertTrue(any("absent from registry order" in pr and "b" in pr for pr in r["problems"]),
+                            f"lost-update orphan not detected: {r['problems']}")
+            self.assertEqual(r["workspace_count"], 3)
+            self.assertEqual(r["order_count"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
