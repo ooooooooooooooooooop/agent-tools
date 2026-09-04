@@ -13,9 +13,11 @@ drift of full open collective reasoning.
 1. **What works with evidence:**
    - Fresh-context blind-spot reviewers surfaced decision-relevant, plausible novel
      insights in 6/6 evaluations across all open tasks (T3-T5).
-   - The materiality gate discriminated cleanly: `material=False` on complete
-     objective tasks (T1, T2, T6; no over-intervention), `material=True` on all three
-     open tasks where the group held shared blind spots.
+   - Retrospective concordance on the 6 discovery tasks: `RETROSPECTIVE_CONCORDANCE = 6/6`
+     (`material=False` on complete objective tasks T1, T2, T6; `material=True` on open
+     tasks T3-T5 where the group held shared blind spots).
+   - Generalization to unseen tasks: `HELD_OUT_GENERALIZATION = UNVERIFIED` pending
+     dedicated held-out validation on fresh datasets.
    - Gated re-entry drove verifiable stance shifts in 4-5/5 participants per open task.
 2. **What does NOT work / is not evidenced:**
    - Full open-ended debate (multi-turn free rounds) added almost nothing: stopping
@@ -28,21 +30,27 @@ drift of full open collective reasoning.
 
 ---
 
-## 2. Trigger Boundaries (When This Runs)
+## 2. Trigger Boundaries & Task-Phase Gate
 
-### MUST Trigger On
-- Explicit high-stakes decision requests ("decide", "recommend architecture",
-  "trade-off analysis", "strategic priority", "diagnose root cause").
-- When invoked under `simulate-elite-experts` (or future replacement) in `deep`
-  or `thorough` profile.
+The overlay does NOT rely solely on standard Gate 0. It executes a dedicated semantic
+**Task-Phase Gate** before any outside review:
 
-### MUST NOT Trigger On
-- Pure execution tasks (code generation, file edits, git operations, lint fixes,
-  mechanical refactoring, script execution).
-- Fact lookup, syntax questions, direct queries with unambiguous answers.
-- Mid-turn interactive conversational clarifications.
-- Any task where the primary answer confidence is marked HIGH and uncertainty
-  ledger has no stated empirical dependencies.
+### Task Phases
+1. **JUDGMENT Phase (Eligible for Blind-Spot Audit):**
+   - Active formation, selection, or revision of: judgments, decisions, architectures/schemes,
+     causal/root-cause diagnoses, research conclusions, strategic priorities, or trade-offs.
+   - High reversibility cost (irreversible or expensive to undo).
+   - Significant information ambiguity / competing stakeholder constraints.
+
+2. **EXECUTION Phase (Default Skipped):**
+   - Mechanical implementation of an already-decided specification (coding, deployment, file edits,
+     renaming, format transforms, running established test suites, standard operations).
+   - Fast path: returns `SKIP_EXECUTION_PHASE` immediately with zero reviewer calls.
+
+3. **Execution-to-Judgment Escalation:**
+   - If an execution task encounters unexpected empirical evidence that invalidates the original
+     premise, goal, architecture, or acceptance criteria (e.g. fatal table lock, memory leak,
+     broken invariant), it escalates with `ESCALATE_TO_JUDGMENT` to enter blind-spot review.
 
 ---
 
@@ -52,72 +60,84 @@ drift of full open collective reasoning.
 [User Task]
      │
      ▼
-[Primary Reasoning Engine]
-  (Can be single-model classic, existing skill, or light ensemble)
+[Task-Phase Classifier] ──► EXECUTION (no blocker) ──► Fast Path: Execute & Deliver (0 calls)
+     │
+     ▼ (JUDGMENT or ESCALATED)
+[Primary Reasoning Engine (Main Model A)]
+  (Single-model classic 4-lens deliberation)
      │
      ▼
 [Candidate Answer Formed]
-  - Decision / Recommendation
-  - Stated Key Reasons
-  - Declared Assumptions & Remaining Uncertainties
      │
      ▼
+[DecisionPacket Extractor]
+  Extracts canonical bounded brief (<=150 words verdict, <=150 words uncertainties,
+  <=200 words rationale, known facts, declared option space).
+  *HARD BOUNDARY: Zero transcripts, zero scratchpads, zero model names leaked.*
+     │
+     ▼
+[Heterogeneous Reviewer Resolver] ──► No admitted heterog model ──► Status: HETEROGENEOUS_REVIEW_UNAVAILABLE
+     │                                                              (Safe governance fallback; no fake audit)
+     ▼ (Heterogeneous Model B, different vendor family)
 ┌─────────────────────────────────────────────────────────┐
-│ Clean-Context Blind-Spot Search (1 or 2 fresh calls)    │
-│                                                         │
-│ Input (STRICTLY LIMITED — NO TRANSCRIPT):               │
-│   1. Original user prompt                               │
-│   2. Candidate decision (terse summary, <=150 words)    │
-│   3. Declared assumptions & uncertainties               │
-│                                                         │
-│ Search prompt targets 5 specific failure modes:         │
-│   (a) Hidden / unexamined assumption                    │
-│   (b) Wrong framing of the decision space               │
-│   (c) Omitted viable alternative                        │
-│   (d) Neglected second-order effect                     │
+│ Clean-Context Blind-Spot Search (1 fresh call)          │
+│ Targets 5 specific failure modes:                       │
+│   (a) Hidden/unexamined assumptions                     │
+│   (b) Wrong framing of decision space                   │
+│   (c) Omitted viable alternatives                       │
+│   (d) Neglected second-order effects                    │
 │   (e) A dramatically simpler path                       │
+│ *Constraint:* Bounded choices must be evaluated first;  │
+│ outside choices labeled '[OUT-OF-FRAMEWORK]'.           │
 └─────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Materiality Gate (1 cheap utility call)                 │
-│                                                         │
-│ Evaluates blind-spot outputs against Candidate Answer:  │
-│   "Does this raise a MATERIAL consideration that would  │
-│    change the decision or its primary risk profile if   │
-│    taken seriously? (material = true/false + reason)"   │
+│ Materiality Gate (1 fast utility call)                  │
+│ Evaluates if critique raises MATERIAL decision-altering │
+│ findings not already addressed by Candidate Answer.     │
 └─────────────────────────────────────────────────────────┘
      │
-     ├── material == FALSE ──► Deliver Candidate Answer immediately
-     │                         (Zero overhead beyond 2-3 audit calls)
+     ├── material == FALSE ──► Clean Delivery: Candidate Answer directly (0 process noise)
      │
-     └── material == TRUE  ──► [Single-Shot Re-Entry]
-                               Primary engine receives:
-                                 Candidate Answer + Blind-Spot Reviewer Critique
-                               Produces: Revised Final Answer
-                               (Maximum 1 re-entry; no looping)
+     └── material == TRUE  ──► [Sovereign Single-Shot Re-Entry]
+                               Primary Engine A receives Candidate + Audit Critique.
+                               Engine A evaluates with full agency:
+                                 - ACCEPT: update recommendation & actions
+                                 - PARTIALLY ACCEPT: integrate contingency
+                                 - REJECT WITH REASON: defend original decision
+                               Produces: Revised Final Answer + Transparent Update Note
 ```
 
 ---
 
-## 4. Anti-Patterns (Explicitly Forbidden)
+## 4. Canonical Contracts & Anti-Patterns
 
-1. **NO 4-model debate by default:** Does not spin up multi-agent conversational
-   loops. The baseline is a single primary engine + 1-2 blind reviewers.
-2. **NO pre-assigned personas:** Reviewers are NOT assigned thought-role personas
-   ("Devil's Advocate", "Skeptical CFO"). They are instructed neutrally:
-   `"You are a fresh outside reviewer with no stake in the prior analysis."`
-3. **NO transcript leaking:** Reviewers NEVER see the debate/scratchpad that
-   produced the candidate answer. They see ONLY the prompt + terse candidate
-   verdict + stated assumptions. This preserves the clean-context property that
-   made exp1's blind-spot search effective.
-4. **NO neutral-scribe rendering:** The final product is ALWAYS delivered by a
-   decision synthesizer (actionable, sequenced, committed judgment) with an
-   explicit "Unresolved Uncertainties" ledger — never a passive debate summary.
-5. **NO option-space drift:** Reviewer prompts explicitly instruct:
-   `"If the user prompt restricts the decision to specific alternatives, evaluate `
-   `within that space first; if you propose an alternative outside the stated space, `
-   `explicitly label it as an OUT-OF-FRAMEWORK option and state why the stated space fails."`
+### Canonical DecisionPacket Contract (Unified)
+- `verdict_summary`: Max 150 words / ~1000 characters.
+- `core_rationale`: Max 200 words / ~1200 characters.
+- `declared_uncertainties`: Max 150 words / ~900 characters.
+- `hard_constraints_and_facts`: Max 200 words / ~1200 characters.
+- `allowed_option_space`: Explicit list if constrained by prompt (e.g. `["SQS Standard", "SQS FIFO"]`).
+- **Strictly Prohibited:** Full debate transcripts, internal scratchpads, persona names/rosters, model vote tallies, majority opinions.
+
+### Option-Space Discipline (Preserving Innovation without Chaos)
+- If user prompt restricts choices, reviewer MUST evaluate within bounded space first.
+- If reviewer identifies a strictly dominating option outside the set, it MUST label it `[OUT-OF-FRAMEWORK]` and present it as a meta-level challenge rather than an answer substitution.
+- Primary engine evaluates the meta-challenge during re-entry.
+
+### Clean User-Facing Delivery
+- **No Material Finding:** Deliver candidate answer cleanly with zero internal process clutter.
+- **Material Challenge Evaluated but Defended/Rejected:** Append concise 1-sentence note explaining why the original choice stands.
+- **Material Challenge Adopted:** Append clear `### Decision Update: Addressed Blind Spot` section stating what was found and why it changed the recommendation.
+- Full debug audit ledger is preserved in execution metadata / trace files, never polluting default user experience.
+
+### Anti-Patterns (Explicitly Forbidden)
+1. **NO 4-model debate by default:** Does not spin up multi-agent conversational loops.
+2. **NO pre-assigned personas:** Reviewers are instructed neutrally with no roleplay.
+3. **NO transcript leaking:** Reviewers NEVER see internal scratchpads or dialogue turns.
+4. **NO neutral-scribe rendering:** The final product is ALWAYS delivered by a committed decision synthesizer.
+5. **NO silent homogeneous fallback:** If a reviewer from a different vendor family is unavailable, output `HETEROGENEOUS_REVIEW_UNAVAILABLE` rather than pretending an echo-chamber review succeeded.
    (Directly addresses the harm observed in T3 where COLLECTIVE dropped CRDTs for
    an unlisted option.)
 

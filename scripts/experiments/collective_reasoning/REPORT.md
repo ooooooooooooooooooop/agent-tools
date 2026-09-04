@@ -347,10 +347,12 @@ by the 2-4 loss against R0 itself.
    - **Rationale:** 6/6 verified novel insights on open tasks (T3-T5) where primary
      models had shared blind spots; clean context prevents groupthink contamination.
 4. **MATERIALITY GATE:**
-   - **Status: PRODUCTION CANDIDATE.**
-   - **Rationale:** 100% precision across 6 tasks (gate=False on complete objective
-     tasks T1/T2/T6; gate=True on all three open tasks). Successfully prevents
-     unnecessary downstream re-entry and cost inflation.
+   - **Status: PRODUCTION CANDIDATE (RETROSPECTIVE_CONCORDANCE = 6/6, HELD_OUT_GENERALIZATION = UNVERIFIED).**
+   - **Rationale:** Retrospective concordance across exp1's 6 discovery tasks is 6/6
+     (gate=False on complete objective tasks T1/T2/T6; gate=True on all three open tasks).
+     Because these 6 tasks informed mechanism design, this concordance must not be
+     called "100% precision"; generalization to unseen tasks remains unverified pending
+     held-out validation. Functionally, it acts as a lightweight circuit breaker.
 5. **CURRENT `simulate-elite-experts` Baseline:**
    - **Status: PRODUCTION ANCHOR.**
    - **Rationale:** Remains the most cost-effective and robust single performer:
@@ -389,11 +391,13 @@ unpredictable multi-turn dynamics, and option-space drift risk, full open collec
 reasoning is not a viable production architecture.
 
 ### Q5: Is the Blind-Spot + Materiality Gate independently viable for production?
-**Yes, unequivocally.** It is the sole mechanism with unambiguous, high-ROI empirical
-support:
-- 100% precision: `material=False` on complete objective tasks (T1, T2, T6; zero
-  over-intervention), `material=True` on open tasks with real shared blind spots (T3-T5).
-- Achieves ~92-96% token savings compared to running a full collective debate loop.
+**Yes, as an opt-in production candidate with strictly bounded evidence:**
+- Retrospective concordance: `RETROSPECTIVE_CONCORDANCE = 6/6` on discovery tasks
+  (`material=False` on complete objective tasks T1, T2, T6; `material=True` on open
+  tasks with real shared blind spots T3-T5).
+- Generalization status: `HELD_OUT_GENERALIZATION = UNVERIFIED` until validated on
+  a fresh, held-out evaluation suite.
+- Efficiency: Achieves ~92-96% token savings compared to running a full collective debate loop.
 - Decouples cleanly from multi-agent chat; operates as a lightweight, clean-context
   audit overlay on top of existing single-model or council baselines.
 
