@@ -502,6 +502,113 @@ def format_user_output(
 
 
 # =============================================================================
+# 7. End-to-End Production Pipeline Driver
+# =============================================================================
+
+def execute_blind_spot_pipeline(
+    user_prompt: str,
+    candidate_answer: str,
+    call_model_fn: Optional[Any] = None,
+    main_model_id: str = "claude-opus-5",
+    new_evidence: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """Production entry point for the Blind-Spot Gated Overlay.
+
+    Executes the attested 6-step lifecycle:
+    1. Task-Phase Gate: fast-skips mechanical execution; escalates on blocker evidence.
+    2. Canonical DecisionPacket: bounds brief (<=150w verdict, <=150w uncertainties).
+    3. Heterogeneous Reviewer: resolves cross-vendor model; fails safely if unavailable.
+    4. Clean-Context Review: audits 5 targets with [OUT-OF-FRAMEWORK] option discipline.
+    5. Circuit-Breaker Materiality Gate: parses binary material flag.
+    6. Sovereign Single-Shot Re-entry: primary engine evaluates critique; delivers clean output.
+
+    Returns (user_facing_output, attested_audit_trace).
+    """
+    trace: Dict[str, Any] = {
+        "user_prompt": user_prompt,
+        "main_model_id": main_model_id,
+        "new_evidence": new_evidence,
+    }
+
+    # Step 1: Task-Phase Gate
+    phase_verdict = classify_task_phase(user_prompt, new_evidence=new_evidence)
+    trace["task_phase"] = phase_verdict.to_dict()
+    if phase_verdict.phase == TaskPhase.EXECUTION and phase_verdict.status == "SKIP_EXECUTION_PHASE":
+        trace["final_disposition"] = "SKIP_EXECUTION_PHASE"
+        return candidate_answer, trace
+
+    # Step 2: DecisionPacket Extraction
+    packet = extract_decision_packet(candidate_answer, user_prompt)
+    trace["decision_packet"] = {
+        "verdict_length": len(packet.current_best_judgment),
+        "uncertainties_length": len(packet.declared_uncertainties),
+        "option_space": packet.allowed_option_space,
+    }
+
+    # Step 3: Heterogeneous Reviewer Resolution
+    reviewer_model, rev_status = resolve_heterogeneous_reviewer(main_model_id)
+    trace["reviewer_resolution"] = {
+        "resolved_model": reviewer_model,
+        "status": rev_status,
+        "main_family": MODEL_FAMILIES.get(main_model_id, "unknown"),
+        "reviewer_family": MODEL_FAMILIES.get(reviewer_model, "unknown") if reviewer_model else None,
+    }
+    if not reviewer_model or rev_status == "HETEROGENEOUS_REVIEW_UNAVAILABLE":
+        trace["final_disposition"] = "HETEROGENEOUS_REVIEW_UNAVAILABLE"
+        # Safe governance downgrade: deliver candidate answer without false audit claim
+        note = "\n\n---\n*Governance Note: Heterogeneous outside reviewer unavailable; delivered primary answer without blind-spot audit.*"
+        return candidate_answer + note, trace
+
+    # If no real call function provided (e.g. unit testing or dry-run), return prepared prompts
+    if call_model_fn is None:
+        trace["dry_run_prompts"] = {
+            "blindspot_prompt": build_blindspot_prompt(packet),
+            "reviewer_model": reviewer_model,
+        }
+        trace["final_disposition"] = "DRY_RUN_PREPARED"
+        return candidate_answer, trace
+
+    # Step 4: Clean-Context Outside Review
+    blindspot_prompt = build_blindspot_prompt(packet)
+    reviewer_critique = call_model_fn(reviewer_model, blindspot_prompt, tag="blindspot-review")
+    trace["reviewer_critique"] = reviewer_critique
+
+    # Step 5: Materiality Gate
+    mat_prompt = build_materiality_prompt(packet, reviewer_critique)
+    mat_raw = call_model_fn(reviewer_model, mat_prompt, tag="materiality-gate")
+    verdict = parse_materiality_json(mat_raw)
+    trace["materiality_verdict"] = verdict.to_dict()
+
+    if not verdict.material:
+        trace["final_disposition"] = "NO_MATERIAL_CHANGE"
+        clean_out = format_user_output(candidate_answer, verdict, reentry_occurred=False)
+        return clean_out, trace
+
+    # Step 6: Sovereign Single-Shot Re-entry
+    reentry_prompt = build_reentry_prompt(candidate_answer, reviewer_critique, user_prompt)
+    revised_answer = call_model_fn(main_model_id, reentry_prompt, tag="reentry-synthesis")
+
+    # Detect disposition from revised output
+    disposition = "ACCEPTED"
+    if "defend" in revised_answer.lower() or "confirm original" in revised_answer.lower():
+        disposition = "REJECTED_WITH_REASON"
+    elif "partially" in revised_answer.lower() or "contingency" in revised_answer.lower():
+        disposition = "PARTIALLY_ACCEPTED"
+
+    trace["final_disposition"] = disposition
+    trace["reentry_occurred"] = True
+    user_out = format_user_output(
+        candidate_answer=candidate_answer,
+        verdict=verdict,
+        reentry_occurred=True,
+        revised_answer=revised_answer,
+        disposition=disposition,
+        explanation=verdict.reason,
+    )
+    return user_out, trace
+
+
+# =============================================================================
 # CLI Self-Test
 # =============================================================================
 

@@ -347,31 +347,37 @@ Each dialogue round must contain one turn from each active role.
 
 ## Blind-Spot Gated Overlay Workflow (When execution_mode: blind-spot-gated)
 
-When the user explicitly invokes `blind-spot-gated` mode (or passes `--blind-spot-gated`):
+When the user explicitly invokes `blind-spot-gated` mode (canonical invocation surfaces):
+- **Natural Language**: `"使用 simulate-elite-experts 技能，指定 execution_mode 为 blind-spot-gated，评估..."`
+- **Tool / Slash Command**: `/simulate-elite-experts execution_mode: blind-spot-gated: <problem>` or `Skill(skill="simulate-elite-experts", args="execution_mode: blind-spot-gated ...")`
+- **Programmatic Pipeline**: `execute_blind_spot_pipeline(prompt, candidate_answer, call_model_fn=...)`
 
-1. **Primary Candidate Formation**: Complete the standard profile (e.g. `classic` four-lens deliberation) through Moderator Synthesis and Uncertainty Ledger.
-2. **Clean-Context Extraction**: Extract a bounded brief containing ONLY:
+Execution Lifecycle:
+1. **Task-Phase Gate**: Verify the task is in `JUDGMENT` phase (forming/revising high-stakes choices, architectures, root-cause diagnoses, directions). Pure execution tasks (coding, deployment, mechanical refactoring) fast-path skip review (`SKIP_EXECUTION_PHASE`). Execution tasks with premise-invalidating blockers escalate (`ESCALATE_TO_JUDGMENT`).
+2. **Primary Candidate Formation**: Primary engine completes the standard four-lens deliberation through Moderator Synthesis and Uncertainty Ledger.
+3. **Clean-Context Extraction**: Extract canonical `DecisionPacket` containing ONLY:
    - Original user problem prompt
-   - Candidate verdict summary (from Moderator Synthesis, <=150 words)
-   - Declared assumptions and uncertainties (from Uncertainty Ledger)
-   *Hard boundary:* NEVER leak dialogue transcripts, scratchpads, or persona turns to the reviewer.
-3. **Targeted Outside Audit**: An independent model or fresh context audits the brief against 5 failure modes:
+   - Hard constraints & known facts (<=200 words / ~1200 chars)
+   - Candidate verdict summary (from Moderator Synthesis, <=150 words / ~1000 chars)
+   - Core rationale summary (<=200 words / ~1200 chars)
+   - Declared assumptions and uncertainties (<=150 words / ~900 chars)
+   - Declared option space (if choices restricted by prompt)
+   *Hard boundary:* NEVER leak dialogue transcripts, scratchpads, persona turns, or vote tallies to the reviewer.
+4. **Targeted Heterogeneous Audit**: Resolved from canonical `registry/models.yaml` to an admitted model of a different vendor family (e.g. Anthropic -> Google/Moonshot). If heterogeneous model is unavailable, return `HETEROGENEOUS_REVIEW_UNAVAILABLE` (no fake homogeneous reviews). Reviewer audits across 5 failure categories:
    - (a) Hidden or unexamined assumptions
    - (b) Wrong framing of the decision space (e.g. false dichotomy)
    - (c) Omitted viable alternatives
    - (d) Neglected second-order operational/systemic effects
    - (e) Dramatically simpler paths
-   *Constraint:* Reviewer must respect problem constraints; alternatives outside the stated choice set must be explicitly flagged as `[OUT-OF-FRAMEWORK]`.
-4. **Materiality Gate Circuit Breaker**: Evaluate if the audit critique is `material` (identifies a fatal flaw, false assumption, or strictly dominating option that should change the decision/action plan) vs `immaterial` (philosophical difference, already-acknowledged uncertainty, stylistic preference).
-   - If `material == False`: Deliver candidate output immediately with a clean audit pass note in the Uncertainty Ledger. (Zero re-entry overhead).
-   - If `material == True`: Pass the critique back to the primary engine for **single-shot re-entry**. The primary engine evaluates the critique (accept, adapt, or defend with reason) and produces the revised final judgment.
-5. **Observability**: Record the audit outcome inside the Uncertainty Ledger under `### Blind-Spot Audit Ledger`:
-   ```markdown
-   ### Blind-Spot Audit Ledger
-   - **Gate Status**: PASS (NO MATERIAL BLIND SPOT) | RE-ENTRY TRIGGERED
-   - **Material Finding**: YES | NO
-   - **Gate Rationale**: <1-2 sentence explanation>
-   ```
+   *Option-space rule:* Reviewer must evaluate within bounded space first; alternatives outside must be explicitly labeled `[OUT-OF-FRAMEWORK]` as meta-challenges.
+5. **Materiality Gate Circuit Breaker**: Evaluate if audit critique is `material` (fatal flaw, false assumption, dominating option that should alter the recommendation/actions) vs `immaterial` (philosophical difference, declared risk, stylistic preference).
+   - If `material == False`: Deliver candidate output cleanly with zero process noise (fast path).
+   - If `material == True`: Pass critique back to primary engine for **sovereign single-shot re-entry**. The primary engine retains full agency (accept, partially adapt, or defend with reason).
+6. **Clean User Output Delivery**:
+   - `material == False`: Deliver candidate answer directly, zero internal ledger clutter.
+   - `material == True` (defended): Append brief 1-line note that outside review was evaluated and original choice confirmed.
+   - `material == True` (decision changed): Append transparent `### Decision Update: Addressed Blind Spot` section stating what was identified and why the decision changed.
+   - Full debug audit ledger is preserved in execution metadata / trace files.
 
 ## User Interaction Guidance
 

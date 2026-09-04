@@ -72,8 +72,12 @@ def run_held_out_validation() -> dict:
 
         results["task_details"][tid] = detail
 
-    results["metrics"]["execution_false_trigger_rate"] = (
-        execution_false_triggers / execution_tasks_total if execution_tasks_total else 0.0
+    results["metrics"]["execution_tasks_in_suite"] = execution_tasks_total
+    results["metrics"]["execution_tasks_correctly_skipped"] = execution_tasks_total - execution_false_triggers
+    results["metrics"]["execution_false_triggers_observed"] = execution_false_triggers
+    results["metrics"]["execution_held_out_status"] = (
+        f"{execution_tasks_total - execution_false_triggers}/{execution_tasks_total} correctly skipped "
+        "(observed physical count on H3; general false-trigger rate unverified)"
     )
     results["metrics"]["escalation_precision"] = (
         escalations_passed / escalations_total if escalations_total else 1.0
@@ -177,7 +181,12 @@ def run_held_out_validation() -> dict:
             "local in-memory token bucket",
         ] if target.lower() in h5_critique.lower()
     ]
-    results["metrics"]["planted_blind_spot_recall_rate"] = len(recalled) / 2.0
+    results["metrics"]["planted_blind_spots_in_suite"] = 2
+    results["metrics"]["planted_blind_spots_recalled"] = len(recalled)
+    results["metrics"]["planted_blind_spot_status"] = (
+        f"{len(recalled)}/2 observed targets detected on H5 "
+        "(physical count on planted case; general recall unverified)"
+    )
     results["metrics"]["planted_blind_spot_material_gate"] = h5_gate.material
     results["task_details"]["H5"]["planted_recall"] = {
         "recalled": recalled,
@@ -196,6 +205,13 @@ def run_held_out_validation() -> dict:
         and "REJECT WITH REASON" in reentry_prompt
     )
     results["metrics"]["reentry_agency_verified"] = agency_verified
+
+    # 8. Formal Evidence Stratification
+    results["evidence_classification"] = {
+        "retrospective_concordance": "6/6 on exp1 discovery tasks (T1-T6)",
+        "held_out_generalization": "UNVERIFIED (H1-H6 represents observed acceptance counts, not statistical generalization)",
+        "production_prevalence_estimate": "UNVERIFIED (illustrative scenario assumption only; no empirical prior for blind-spot frequency)",
+    }
 
     return results
 

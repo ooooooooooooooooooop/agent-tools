@@ -3,17 +3,27 @@
   "frozen_date": "2026-09-04T15:10:00",
   "tasks_evaluated": 6,
   "metrics": {
-    "execution_false_trigger_rate": 0.0,
+    "execution_tasks_in_suite": 1,
+    "execution_tasks_correctly_skipped": 1,
+    "execution_false_triggers_observed": 0,
+    "execution_held_out_status": "1/1 correctly skipped (observed physical count on H3; general false-trigger rate unverified)",
     "escalation_precision": 1.0,
     "clean_context_isolation_rate": 1.0,
     "option_space_discipline_verified": true,
     "reviewer_heterogeneity_verified": true,
     "negative_control_fast_path_verified": true,
-    "planted_blind_spot_recall_rate": 1.0,
+    "planted_blind_spots_in_suite": 2,
+    "planted_blind_spots_recalled": 2,
+    "planted_blind_spot_status": "2/2 observed targets detected on H5 (physical count on planted case; general recall unverified)",
     "planted_blind_spot_material_gate": true,
     "reentry_agency_verified": true,
     "main_model": "claude-opus-5",
     "resolved_reviewer_model": "gemini-3.8-flash-high"
+  },
+  "evidence_classification": {
+    "retrospective_concordance": "6/6 on exp1 discovery tasks (T1-T6)",
+    "held_out_generalization": "UNVERIFIED (H1-H6 represents observed acceptance counts, not statistical generalization)",
+    "production_prevalence_estimate": "UNVERIFIED (illustrative scenario assumption only; no empirical prior for blind-spot frequency)"
   },
   "task_details": {
     "H1": {
