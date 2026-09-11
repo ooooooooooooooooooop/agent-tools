@@ -28,7 +28,8 @@ if ([string]::IsNullOrWhiteSpace($nodeRel) -or [string]::IsNullOrWhiteSpace($bas
   throw 'Managed composition state unavailable (dsh-managed-state.json / dsh-runtime-composition.json)'
 }
 $distributionRoot = Join-Path $ProfileRoot "base-dsh-$baseVersion"
-$managedNodePath = Join-Path $DshHome $nodeRel
+$managedNodePath = Join-Path $DshHome ($nodeRel -replace '/', '\')
+$managedNodePath = Join-Path $managedNodePath 'node.exe'
 if ([string]::IsNullOrWhiteSpace($NodePath)) { $NodePath = $managedNodePath }
 $entry = Join-Path $DshHome ($entryRel -replace '/', '\')
 $packageJson = Join-Path $distributionRoot 'node_modules\@deepseek-ai\dsh\package.json'

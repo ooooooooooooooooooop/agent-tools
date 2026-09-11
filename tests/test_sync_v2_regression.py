@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -371,6 +372,27 @@ class FakeSyncRegressionTests(unittest.TestCase):
         r2, _ = self.engine.run(check_only=True)
         self.assertEqual(r1.overall, r2.overall)
 
+
+    def test_18_entrypoint_delegation_emits_v3_canonical_receipt(self) -> None:
+        """Scenario 18: The top-level scripts/personal_ai_sync.py MUST delegate to V3 engine by default.
+
+        Guarantees that invoking 'python scripts/personal_ai_sync.py sync' or 'check'
+        never regresses to the obsolete unsegmented plaintext output.
+        """
+        proc = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "personal_ai_sync.py"), "check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        output = proc.stdout
+        self.assertIn("## 1. 一句话结果", output)
+        self.assertIn("## 5. 同步结果", output)
+        self.assertIn("## 6. 安全与健康检查", output)
+        self.assertIn("Personal AI State", output)
+        self.assertIn("Agent Tools", output)
+        self.assertIn("DSH Runtime", output)
 
 class SessionResidueSemanticsTests(unittest.TestCase):
     """Session health semantics: EXPECTED / UNEXPECTED / UNKNOWN + identity."""

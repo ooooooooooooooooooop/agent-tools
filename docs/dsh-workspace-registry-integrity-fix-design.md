@@ -148,6 +148,12 @@ Recommended first concrete deliverable: **Layer C + Layer B1**, both fully repo-
 
 ---
 
+### Implementation status (2026-09-04)
+
+- **Phase 1 done** (scoped commit `58d6569`, branch `workspace-registry-phase1`): Layer C (launcher single-instance + fail-closed port wait in `dsh_desktop_restart.ps1` + `dsh-launch-web.ps1`), Layer E (`workspace_registry_integrity()` in `personal_ai_sync.py`), 5 adversarial tests, design doc.
+- **Layer B1** (true write-time prevention) **blocked on upstream**: the storage domain exposes no pre-write seam (`domain/changed` fires post-commit). Real prevention needs Layer A.
+- **Layer A** = **SPEC + ADVERSARIAL TESTS delivered** (see `docs/dsh-workspace-registry-root-fix-spec.md` + `dsh/workspace-registry-root-fix/test/storage-lost-update.test.mjs`, which proves the lost-update/orphan on real upstream `dsh-storage-json`). Root fix is an **upstream change / base rebuild**; the repo does not hot-patch deep base packages.
+
 ## 6. Risk of change / rollback
 
 - **Layer A** (upstream): highest risk (core storage semantics). Rollback = revert to the pre-patch base install; must be tested against the existing overlay set. The CAS changes last-write-wins to fail-on-stale, so any latent single-process write bug will surface loudly — desirable, but needs a migration window.
