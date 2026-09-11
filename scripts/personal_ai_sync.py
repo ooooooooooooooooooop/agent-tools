@@ -31,7 +31,6 @@ CHECKPOINT = Path.home() / ".dsh" / ".personal-ai-sync" / "status.json"
 AIC = REPO / "scripts" / "aic" / "aic.py"
 SYNC_SKILLS = REPO / "scripts" / "sync_skills.py"
 GOVERNANCE_TASKS = REPO / "scripts" / "governance" / "register_governance_tasks.ps1"
-CANONICAL_GOVERNANCE_ROOT = Path(r"C:\Desktop\skills")
 PROVIDER_DIR = REPO / "scripts" / "memory"
 SETTINGS = Path.home() / ".dsh" / "settings.yaml"
 MUTATION_LOCK_ROOT = Path.home() / ".dsh" / ".personal-ai-mutation"
@@ -68,6 +67,38 @@ class MutationOwnershipError(RuntimeError):
 def _path_key(path: Path) -> str:
     """Return a stable, case-insensitive absolute path key."""
     return os.path.normcase(str(path.resolve(strict=False)))
+
+
+def _resolve_canonical_governance_root() -> Path:
+    """解析本设备的 canonical agent-tools checkout。
+
+    顺序：PERSONAL_AI_CANONICAL_GOVERNANCE_ROOT 环境变量 →
+    this-device.yaml repos 中携带本控制面（scripts/personal_ai_sync.py）的条目
+    （优先取等于 REPO 者）→ 兜底 REPO 自身。禁止硬编码单机路径。
+    """
+    env = os.environ.get("PERSONAL_AI_CANONICAL_GOVERNANCE_ROOT", "").strip()
+    if env:
+        return Path(env)
+    dev = STATE_REPO / "sync" / "this-device.yaml"
+    if dev.is_file():
+        try:
+            import yaml  # noqa: PLC0415
+            cfg = yaml.safe_load(dev.read_text(encoding="utf-8-sig")) or {}
+            candidates = [
+                Path(str(entry)) for entry in (cfg.get("repos") or [])
+                if (Path(str(entry)) / "scripts" / "personal_ai_sync.py").is_file()
+            ]
+            for cand in candidates:
+                if _path_key(cand) == _path_key(REPO):
+                    return cand
+            if candidates:
+                return candidates[0]
+        except Exception:  # noqa: BLE001
+            pass
+    return REPO
+
+
+CANONICAL_GOVERNANCE_ROOT = _resolve_canonical_governance_root()
 
 
 def _canonical_repository_roots() -> tuple[Path, ...]:
