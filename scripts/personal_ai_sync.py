@@ -585,17 +585,20 @@ NON_CANONICAL_PATTERNS = (
 CURATED_PREFIXES = ("state/", "registry/", "sync/", "projects/", "README")
 MEMORY_PREFIX = "memory/records/"
 
-# push 前隐私扫描（public 仓库用）
+# push 前隐私扫描（public 仓库用）：只匹配密钥内容形态，不匹配文件名引用
 PRIVACY_PATTERNS = [
     r"api[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}",
     r"Bearer\s+[A-Za-z0-9_\-\.]{16,}",
-    r"\.credentials\.yaml",
     r"C:\\Users\\(?!admin\b)",  # 其他用户目录
     r"sk-[A-Za-z0-9]{20,}",
 ]
 
-# push 禁推路径清单：changed paths 命中即拒（public 仓库）
+# push 禁推路径清单：changed paths 前缀命中即拒（public 仓库）
 PUSH_FORBIDDEN_PATHS = ("skills/weekly-work-summary/",)
+
+# 禁入库文件名：changed/staged path 的 basename 命中即拒，commit 与 push 双阶段生效。
+# 文件名引用（docs/code 提到 ".credentials.yaml"）不拦截，只有文件本身入库才拒。
+PRIVACY_FORBIDDEN_FILE_NAMES = (".credentials.yaml",)
 
 # 本机隐私 pattern 文件（永不入库）：每行一个正则，# 开头为注释
 PRIVACY_PATTERNS_FILE = Path(os.environ.get(
@@ -2008,6 +2011,13 @@ def _commit_owned_files_locked(
     foreign_after = sorted(path for path in staged_after if not _path_in_scope(path, owned))
     if foreign_after:
         return False, f"ABORT: staged scope violation: {foreign_after}"
+    forbidden_staged = sorted(
+        path for path in staged_after
+        if path.rsplit("/", 1)[-1] in PRIVACY_FORBIDDEN_FILE_NAMES
+        or any(path == f.rstrip("/") or path.startswith(f) for f in PUSH_FORBIDDEN_PATHS)
+    )
+    if forbidden_staged:
+        return False, f"ABORT: forbidden path staged: {forbidden_staged}"
 
     rc, diff = git(lock.repo, "diff", "--cached")
     if rc != 0:
@@ -2285,6 +2295,9 @@ def privacy_scan(repo: Path, refspec: str) -> list[str]:
         if re.search(pat, diff):
             hits.append(pat)
     for changed in changed_paths(repo, refspec):
+        if changed.rsplit("/", 1)[-1] in PRIVACY_FORBIDDEN_FILE_NAMES:
+            hits.append(f"forbidden-file:{changed}")
+            continue
         for forbidden in PUSH_FORBIDDEN_PATHS:
             if changed == forbidden.rstrip("/") or changed.startswith(forbidden):
                 hits.append(f"forbidden-path:{changed}")

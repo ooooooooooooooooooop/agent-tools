@@ -401,6 +401,22 @@ class TestPrivacyScan(unittest.TestCase):
             hits = pas.privacy_scan(work, "origin/main..HEAD")
             self.assertTrue(any(h.startswith("forbidden-path:") for h in hits))
 
+    def test_forbidden_file_name_hit(self):
+        with tempfile.TemporaryDirectory() as td:
+            remote, work = make_remote_with_clone(Path(td))
+            (work / ".dsh").mkdir(exist_ok=True)
+            (work / ".dsh" / ".credentials.yaml").write_text("version: 1", encoding="utf-8")
+            git(work, "add", "-A")
+            git(work, "commit", "-m", "forbidden file")
+            hits = pas.privacy_scan(work, "origin/main..HEAD")
+            self.assertTrue(any(h.startswith("forbidden-file:") for h in hits))
+
+    def test_filename_mention_is_not_hit(self):
+        with tempfile.TemporaryDirectory() as td:
+            remote, work = make_remote_with_clone(Path(td))
+            commit_file(work, "doc.md", "backups include .credentials.yaml metadata")
+            self.assertEqual(pas.privacy_scan(work, "origin/main..HEAD"), [])
+
     def test_extra_patterns_file_hit(self):
         with tempfile.TemporaryDirectory() as td:
             remote, work = make_remote_with_clone(Path(td))
