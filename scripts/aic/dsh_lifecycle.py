@@ -181,7 +181,9 @@ def ensure_deployment_mirror(home: Path | None = None,
             raise RuntimeError(f"failed to initialize deployment mirror: {rc.stderr}")
 
     subprocess.run(["git", "-C", str(mirror_dir), "fetch", "--quiet", str(src),
-                    "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"],
+                    "+refs/heads/*:refs/remotes/origin/*",
+                    "+refs/remotes/origin/*:refs/remotes/origin/*",
+                    "+refs/tags/*:refs/tags/*"],
                    capture_output=True, text=True)
 
     if not target_commit:
