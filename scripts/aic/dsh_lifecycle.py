@@ -182,12 +182,14 @@ def ensure_deployment_mirror(home: Path | None = None,
 
     subprocess.run(["git", "-C", str(mirror_dir), "fetch", "--quiet", str(src),
                     "+refs/heads/*:refs/remotes/origin/*",
-                    "+refs/remotes/origin/*:refs/remotes/origin/*",
+                    "+refs/remotes/origin/*:refs/remotes/upstream/*",
                     "+refs/tags/*:refs/tags/*"],
                    capture_output=True, text=True)
 
     if not target_commit:
-        rc, out = _git(mirror_dir, "rev-parse", "refs/remotes/origin/main")
+        rc, out = _git(mirror_dir, "rev-parse", "refs/remotes/upstream/main")
+        if rc != 0:
+            rc, out = _git(mirror_dir, "rev-parse", "refs/remotes/origin/main")
         if rc != 0:
             rc, out = _git(mirror_dir, "rev-parse", "HEAD")
         target_commit = out.strip()
