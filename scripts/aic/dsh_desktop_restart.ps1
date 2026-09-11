@@ -153,6 +153,46 @@ function Wait-PortFree {
     Write-Log "Warning: port $Port still has residual connections after ${TimeoutMs}ms, proceeding anyway."
 }
 
+function Resolve-DshNodeCommand {
+    # Resolve the node.exe path and DSH entry point from the managed state,
+    # exactly as dsh-launch-web.ps1 does, but without needing the intermediate
+    # powershell.exe process that Windows Job Object kills in shortcut scenarios.
+    $profileRoot = Split-Path -Parent $LauncherPath
+    $statePath = Join-Path $profileRoot 'dsh-managed-state.json'
+    $manifestPath = Join-Path $profileRoot 'dsh-runtime-composition.json'
+
+    $nodeRel = $null
+    $baseVersion = $null
+    $entryRel = 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+    if (Test-Path -LiteralPath $statePath) {
+        $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $nodeRel = $st.current.nodeRelativePath
+        $baseVersion = $st.current.version
+        if ($st.current.entryRelative) { $entryRel = $st.current.entryRelative }
+    } elseif (Test-Path -LiteralPath $manifestPath) {
+        $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $nodeRel = $m.node.relativePath
+        $baseVersion = $m.base.version
+        $entryRel = $m.base.entryRelative
+    }
+    if ([string]::IsNullOrWhiteSpace($nodeRel) -or [string]::IsNullOrWhiteSpace($baseVersion)) {
+        throw 'Managed composition state unavailable (dsh-managed-state.json / dsh-runtime-composition.json)'
+    }
+
+    $nodePath = Join-Path $DshHome ($nodeRel -replace '/', '\')
+    $nodePath = Join-Path $nodePath 'node.exe'
+    $entryPath = Join-Path $DshHome ($entryRel -replace '/', '\')
+
+    if (-not (Test-Path -LiteralPath $nodePath)) { throw "Managed Node runtime not found: $nodePath" }
+    if (-not (Test-Path -LiteralPath $entryPath)) { throw "Pinned DSH entry point not found: $entryPath" }
+
+    return @{
+        NodePath     = $nodePath
+        EntryPath    = $entryPath
+        ProfileRoot  = $profileRoot
+    }
+}
+
 try {
     Write-Log 'Starting silent DSH Web restart.'
 
@@ -170,6 +210,11 @@ try {
         exit 0
     }
 
+    # Resolve node.exe and entry point paths before killing anything
+    $dshCmd = Resolve-DshNodeCommand
+    Write-Log ("Resolved node: {0}" -f $dshCmd.NodePath)
+    Write-Log ("Resolved entry: {0}" -f $dshCmd.EntryPath)
+
     Stop-DshWeb -Snapshot (Get-ProcessSnapshot)
 
     # Wait for port 3080 to be fully released before starting the new process.
@@ -180,11 +225,11 @@ try {
     # Use WMI Win32_Process.Create to launch a fully detached process that is
     # not part of this process's Windows Job Object. This prevents Windows from
     # killing the DSH Web node process when the shortcut's shell process exits.
-    $launcherDir = Split-Path -Parent $LauncherPath
-    $cmdLine = "powershell.exe -NoProfile -WindowStyle Hidden -File `"$LauncherPath`""
+    # Launch node.exe DIRECTLY via WMI Win32_Process.Create (no powershell intermediate).
+    $cmdLine = "`"$($dshCmd.NodePath)`" `"$($dshCmd.EntryPath)`" web --no-open"
     $startInfo = ([wmiclass]"Win32_ProcessStartup").CreateInstance()
     $startInfo.ShowWindow = 0  # SW_HIDE
-    $result = ([wmiclass]"Win32_Process").Create($cmdLine, $launcherDir, $startInfo)
+    $result = ([wmiclass]"Win32_Process").Create($cmdLine, $dshCmd.ProfileRoot, $startInfo)
     if ($result.ReturnValue -ne 0) {
         throw "WMI Win32_Process.Create failed with return value $($result.ReturnValue)"
     }

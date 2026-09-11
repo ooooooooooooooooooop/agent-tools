@@ -178,6 +178,12 @@ def _extract_option_space(prompt: str) -> Optional[List[str]]:
             return [opt1, opt2]
 
     # Pattern 2: "from / among: A, B, C"
+    m1b = re.search(r"(?i)(?:choose|pick|select)[a-z ]*between[^:：\n]*[:：]\s*([^\.\n]+)", t)
+    if m1b:
+        raw_items = re.split(r"[,;、/]| or ", m1b.group(1))
+        items = [item.strip().strip("'\"`") for item in raw_items if item.strip()]
+        if 2 <= len(items) <= 6:
+            return items
     m2 = re.search(r"(?i)(?:choose|pick|select)\s+(?:from|among)\s*(?:the following)?\s*[:：]\s*([^\.\n;]+)", t)
     if m2:
         raw_items = re.split(r"[,;、/]| or ", m2.group(1))
