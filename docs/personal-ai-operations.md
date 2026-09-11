@@ -79,6 +79,43 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 | DSH 丢失 | canonical（registry/）+ personal-ai-state 已推送远端；另一 Harness 仅凭 `.ai/state/` + Context Package 即可接手（Phase5 实测） |
 | 本机磁盘全毁 | **BLOCKED_BY_KEY_CUSTODY**：密文在，Gen2 key 不在 → 不可恢复（诚实状态，见 §10） |
 
+### 7.1 Nightly Backup 生产恢复闭环与状态判定（SSOT 契约）
+
+1. **Canonical 任务入口与执行账户**：
+   - Windows 计划任务名称：`PersonalAI-Durability-Nightly`，Daily 03:30 触发。
+   - 运行账户：`admin` (InteractiveToken，禁止 ephemeral/Temp/bootstrap-drill 入口依赖)。
+   - Action Target：`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\admin\Desktop\skills\scripts\durability\run_nightly.ps1"`。
+   - 调度主控：`scripts/durability/run_backup.py`（生成唯一 Run Identity 并编排各子任务）。
+2. **实际 Destination**：
+   - `D:\ai-backup`（与 `personal-ai-state/sync/this-device.yaml#backup_root` 严格一致）。
+3. **真实一致性模型（Consistency Model & Boundaries）**：
+   - 采用 `composite-per-dataset-transactional-and-stable-copy` 模型，不虚构跨全部文件系统和数据库的全局瞬时原子锁：
+     * **事务级快照 (ACID Transaction Snapshot)**：`durable_jobs.db`、`broker/state.sqlite`、`broker/cc-switch.db` 通过 SQLite Online Backup API（`sqlite3.backup`）在并发写安全状态下生成点时间事务快照，并通过 `PRAGMA integrity_check`。
+     * **单文件稳定副本一致性 (Stable Copy Consistency)**：`.credentials.yaml`、各类 configs 与全部 sessions 文件在各自捕获窗口内通过 copy-before/after SHA-256 审计与并发 mutation 重试，保证文件内容无撕裂。
+     * **运行时间语义**：明确区分 `run_started_at`、各组件捕获窗口 `component_capture_intervals`、`run_finished_at`。
+     * **满足恢复契约的判定依据**：Personal AI 各子系统松耦合（Job 状态机由持久数据库维护，Session 为独立追加日志，凭据为静态配置），单组件事务一致性与稳定副本足以保证隔离恢复后各真实 reader/loader 正常工作。
+4. **Run-level Evidence**：
+   - 每次运行绑定唯一 `run_id`（`nightly-YYYYMMDD-HHMMSS-<nonce>`），关联 `actor`、`scheduled_task`、`task_version` (git sha)、`config_version` (device cfg sha256)、`run_started_at`、`component_capture_intervals`、`destination`。
+   - 产物 Manifest：`D:\ai-backup\runs\<run_id>\manifest.json`，并将结构化 run 记录写入 `D:\ai-backup\ledger\runs.jsonl`。
+5. **隔离恢复验收（Isolated Restore Verification）**：
+   - 脚本：`scripts/durability/restore_check.py`，必须且仅从备份产物恢复到临时隔离沙箱，禁止生产原始文件补齐。
+   - **全量覆盖要求（Zero Sampling）**：本次 run manifest 中声明的**全部 session 文件**（例如 838 个）全部逐一完成：
+     * 从 backup artifact 恢复到隔离沙箱；
+     * SHA-256 / manifest 完整性匹配；
+     * zstd 完整流式解压；
+     * JSONL 结构反序列化与事件合法性检验；
+     * 严禁抽样 PASS 推导全量 PASS；统计 `manifest_total`、`restored_count`、`integrity_verified_count`、`reader_verified_count` 必须严格一致。
+   - **其他验证项**：
+     * 数据库完整性（`PRAGMA integrity_check == ok`）；
+     * Durable Jobs 真实读取链路：`from jobs.registry import DurableJobRegistry` 实例化并成功读取恢复后的 jobs 记录与未完成计数；
+     * Credentials 真实读取链路：使用原生 Node `@deepseek-ai/dsh-credentials-local` 及 YAML Loader 校验结构（version 1, refs/records），零明文泄露；
+     * 恢复验收全程无外部网络调用、无真实 job 启动、无生产副作用。
+6. **必做反证（Negative Testing）**：
+   - 人为在隔离副本中移除必需恢复对象（`--tamper-remove durable_jobs` 或 `--tamper-remove credentials` 或 `--tamper-remove broker`），验收结果必须严格返回 FAIL (Exit Code 1)，证明拦截门禁真实敏感。
+7. **状态语义防 False-Pass**：
+   - 状态检查（`scripts/governance/durability_gov.py`）严格区分最近一次真实 backup run 结果与最近一次 restore verification 结果和截点；
+   - 严禁凭 task enabled、destination 存在、旧备份存在或历史 receipt 推导“当前正常”；只有两者均 OK 且针对同一 `run_id` 匹配时才判定 PASS。
+
 ## 8. Known External Blockers
 
 - **BACKUP_KEY_CUSTODY = WAITING_FOR_CUSTODY_ROOT**：Gen3 架构 READY，实现 DEFERRED。等 Cloud KMS / 密码管理器 / 硬件根 / 可信第二设备出现再启动 `GEN3_KEY_CUSTODY_MIGRATION`。**在那之前 FULL_DR_READINESS 永远 = PARTIAL，这是设计而非故障。**

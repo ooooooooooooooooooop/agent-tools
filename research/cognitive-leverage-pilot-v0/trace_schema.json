@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CognitiveLeverageTraceRecord",
+  "description": "Minimal machine-readable trace contract for Cognitive Leverage Pilot V0. Captures observable decisions and state without requiring chain-of-thought.",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "case_id",
+    "baseline_id",
+    "step_index",
+    "timestamp",
+    "observed_reality",
+    "decisions",
+    "tool_calls"
+  ],
+  "properties": {
+    "trace_id": { "type": "string" },
+    "case_id": { "type": "string" },
+    "baseline_id": {
+      "type": "string",
+      "enum": ["CURRENT_PERSONAL_AI", "MINIMAL_STRONG_SINGLE_AGENT", "CURRENT_MANAGER_EXECUTOR"]
+    },
+    "step_index": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "observed_reality": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "observation", "freshness"],
+        "properties": {
+          "source": { "type": "string" },
+          "observation": { "type": "string" },
+          "freshness": { "type": "string", "enum": ["CURRENT", "LAST_KNOWN", "UNKNOWN"] }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "statement", "reversibility"],
+        "properties": {
+          "id": { "type": "string" },
+          "statement": { "type": "string" },
+          "reversibility": { "type": "string", "enum": ["REVERSIBLE", "IRREVERSIBLE"] }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action", "rational_basis"],
+        "properties": {
+          "action": { "type": "string" },
+          "rational_basis": { "type": "string" },
+          "next_best_action": { "type": "string" }
+        }
+      }
+    },
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool_name", "parameters", "status"],
+        "properties": {
+          "tool_name": { "type": "string" },
+          "parameters": { "type": "object" },
+          "status": { "type": "string", "enum": ["PENDING", "SUCCESS", "ERROR", "BLOCKED"] },
+          "duration_ms": { "type": "number" },
+          "error_message": { "type": "string" }
+        }
+      }
+    },
+    "evidence_discovered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["evidence_id", "fact_statement", "artifact_ref"],
+        "properties": {
+          "evidence_id": { "type": "string" },
+          "fact_statement": { "type": "string" },
+          "artifact_ref": { "type": "string" },
+          "digest_sha256": { "type": "string" }
+        }
+      }
+    },
+    "plan_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["change_reason", "previous_plan_item", "new_plan_item"],
+        "properties": {
+          "change_reason": { "type": "string" },
+          "previous_plan_item": { "type": "string" },
+          "new_plan_item": { "type": "string" }
+        }
+      }
+    },
+    "verification_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target_item", "verification_method", "passed", "evidence_ref"],
+        "properties": {
+          "target_item": { "type": "string" },
+          "verification_method": { "type": "string", "enum": ["TEST", "DIFF", "HASH", "COMMAND_OUTPUT", "STATIC_ANALYSIS"] },
+          "passed": { "type": "boolean" },
+          "evidence_ref": { "type": "string" }
+        }
+      }
+    },
+    "completion_claim": {
+      "type": "object",
+      "properties": {
+        "claimed": { "type": "boolean" },
+        "verdict": { "type": "string", "enum": ["PASS", "PARTIAL", "FAIL", "BLOCKED"] },
+        "summary": { "type": "string" },
+        "done_criteria_checked": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "properties": {
+        "escalated": { "type": "boolean" },
+        "escalation_type": { "type": "string", "enum": ["GOOD_ESCALATION", "REPAIR_INTERVENTION", "NONE"] },
+        "escalation_reason": { "type": "string" },
+        "user_question": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "operation"],
+        "properties": {
+          "path": { "type": "string" },
+          "operation": { "type": "string", "enum": ["CREATE", "MODIFY", "DELETE", "READ"] },
+          "digest_sha256": { "type": "string" }
+        }
+      }
+    },
+    "resource_usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "cached_tokens": { "type": "integer" },
+        "estimated_cost_usd": { "type": "number" },
+        "wall_time_ms": { "type": "integer" }
+      }
+    }
+  }
+}

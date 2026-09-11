@@ -1,0 +1,33 @@
+{
+  "baseline_id": "MINIMAL_STRONG_SINGLE_AGENT",
+  "name": "Minimal Strong Single Agent Baseline",
+  "version": "v0",
+  "description": "Single primary agent with full tool access and autonomous goal continuation, with no forced Manager-Executor hierarchy or delegation.",
+  "mode": "single_agent_autonomous",
+  "primary_model": "cpa/gpt-5.6-sol-xhigh",
+  "fallback_model": "none",
+  "compaction_model": "cpa/gemini-3.8-flash-high",
+  "tools_allowed": [
+    "read", "write", "edit", "glob", "grep", "pwsh",
+    "todo_write", "get_goal", "create_goal", "update_goal", "job_*"
+  ],
+  "tools_forbidden": [
+    "subagent", "subagent_fork", "workflow", "ralph",
+    "web_search", "mcp__agent-switchboard__*"
+  ],
+  "skills_injected": [
+    "minimal-implementation"
+  ],
+  "skills_forbidden": [
+    "agent-switchboard-ops",
+    "subagent-execution-governance",
+    "decision-gates"
+  ],
+  "max_goal_rounds": 10,
+  "state_access": {
+    "personal_ai_state": true,
+    "project_state": true,
+    "dynamic_memory": false
+  },
+  "delegation_enabled": false
+}

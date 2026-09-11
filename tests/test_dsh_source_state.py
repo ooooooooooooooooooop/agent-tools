@@ -144,7 +144,10 @@ class DshSourceStateMatrixTests(unittest.TestCase):
         (client_root / "package.json").write_text(json.dumps({"name": cfg["ui"]["client_package"]}), encoding="utf-8")
         (client_root / "lib").mkdir()
         client = client_root / "lib" / "client.js"
-        client.write_text("client", encoding="utf-8")
+        # A conformant runtime bundle must declare a parseable inject list; the
+        # compatibility inspect treats an unparseable critical bundle as
+        # SERVICE_CONTRACT_DRIFT (fail-closed against Cordis pending hangs).
+        client.write_text('const inject=["slots","layout"];', encoding="utf-8")
         frontend_root = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-web-frontend"
         frontend_root.mkdir(parents=True)
         (frontend_root / "package.json").write_text(json.dumps({"name": cfg["ui"]["web_package"]}), encoding="utf-8")

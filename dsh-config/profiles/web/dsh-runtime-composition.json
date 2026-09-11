@@ -14,15 +14,15 @@
   },
   "ui": {
     "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
-    "baselineCommit": "dd6322d604e00eec1ba5e0c8541159906a21094a",
-    "sourceState": "dd6322d604e00eec1ba5e0c8541159906a21094a",
+    "baselineCommit": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+    "sourceState": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
     "fixCommit": "68826e9a6d8911239770016223719559c2842885",
     "patchFile": "dsh/ui/deepseek-harness-68826e9.patch",
     "patchSha256": "6b3d1f9bac533f6e9de06441b6916173b229afb0590c1adbfa53bfd712fc931e",
     "clientBundleRelative": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js",
-    "clientBundleSha256": "1ede75bbbdba073be8ea7f6e505d9f21e91399d12dd01f145e5c878e188938da",
+    "clientBundleSha256": "d034792add8b8f048821e2d20b6ea08e48fa6107ddc2bb996f440539ed37db9a",
     "webDistRelative": "profiles/web/base-dsh-0.1.1-rc.2/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist",
-    "webDistSha256": "8cee982409902c91bc53174c8b696ac418a67d1c73a68e77f68cbccae45845ff"
+    "webDistSha256": "6066ecbab9846ba059ead2ff775967aa0fe24d37e742d317fff774cfb08211cd"
   },
   "overlays": [
     {

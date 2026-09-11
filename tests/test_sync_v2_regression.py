@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -417,7 +418,19 @@ class SessionResidueSemanticsTests(unittest.TestCase):
                  events=self._header_events(text="real work"))
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            # Windows: a real-time scanner or a lingering child handle can
+            # recreate entries mid-rmtree (WinError 145 "directory not empty")
+            # deep inside pnpm node_modules caches. The test verdict must not
+            # depend on temp-dir janitorial work: retry once, then degrade to
+            # best-effort cleanup (cleanup() has no ignore_errors on 3.11).
+            time.sleep(1.0)
+            try:
+                self.temp_dir.cleanup()
+            except OSError:
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def _mk(self, sid, title=None, events=None, created=None):
         d = self.home / "sessions" / sid
@@ -630,7 +643,19 @@ class SyncV3TruthAndHealthAdjudicationTests(unittest.TestCase):
         self._write_verified_backup_ledger()
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            # Windows: a real-time scanner or a lingering child handle can
+            # recreate entries mid-rmtree (WinError 145 "directory not empty")
+            # deep inside pnpm node_modules caches. The test verdict must not
+            # depend on temp-dir janitorial work: retry once, then degrade to
+            # best-effort cleanup (cleanup() has no ignore_errors on 3.11).
+            time.sleep(1.0)
+            try:
+                self.temp_dir.cleanup()
+            except OSError:
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def _write_verified_backup_ledger(self, include_jobs: bool = True) -> None:
         import datetime as dt
@@ -931,7 +956,19 @@ class SyncV3ConvergenceDriftReconciliationTests(unittest.TestCase):
         self._write_verified_backup_ledger()
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            # Windows: a real-time scanner or a lingering child handle can
+            # recreate entries mid-rmtree (WinError 145 "directory not empty")
+            # deep inside pnpm node_modules caches. The test verdict must not
+            # depend on temp-dir janitorial work: retry once, then degrade to
+            # best-effort cleanup (cleanup() has no ignore_errors on 3.11).
+            time.sleep(1.0)
+            try:
+                self.temp_dir.cleanup()
+            except OSError:
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def _call_git(self, repo, *args, **kwargs):
         """Deterministic git stand-in for hermetic engine runs.

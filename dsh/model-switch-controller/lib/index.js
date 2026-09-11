@@ -34,7 +34,7 @@ import {
 } from "./decision.js";
 
 export const name = "model-switch-controller";
-export const inject = [];
+export const inject = ["llm"];
 
 const DEFAULTS = {
   safetyMargin: 16384,
@@ -159,7 +159,11 @@ export function apply(ctx, rawConfig = {}) {
     };
     let resolved;
     try {
-      resolved = await ctx.llm.resolveModelInfo(provider, model, signal);
+      const llm = ctx.llm ?? ctx.get?.("llm");
+      if (!llm?.resolveModelInfo) {
+        throw new Error("llm service unavailable");
+      }
+      resolved = await llm.resolveModelInfo(provider, model, signal);
     } catch (err) {
       // Route not registered / adapter missing: the target is not runtime
       // admitted. Fail closed; the controller maps this to BLOCKED.

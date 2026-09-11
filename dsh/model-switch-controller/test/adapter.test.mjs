@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const { apply } = await import("../lib/index.js");
+const { apply, inject } = await import("../lib/index.js");
 
 // --- fixtures ---------------------------------------------------------------
 
@@ -277,4 +277,9 @@ test("capacity evidence honest: UNKNOWN declared window never used as truth", as
   assert.deepEqual(out, GEMINI); // 540000 + 81920 <= 1048576 -> IN_PLACE
   const resolved = events(dir).find((e) => e.type === "TARGET_CAPABILITY_RESOLVED");
   assert.equal(resolved.capacityProvenance, "PROVIDER_ATTESTED");
+});
+
+test("Cordis plugin inject declares 'llm' service", async () => {
+  assert.ok(Array.isArray(inject));
+  assert.ok(inject.includes("llm"), "inject must declare 'llm' for ctx.llm access");
 });

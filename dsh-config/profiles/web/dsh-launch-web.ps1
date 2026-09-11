@@ -41,6 +41,34 @@ if ($nodeVersion -notmatch '^v(22\.(?:19|2[0-9])|(?:2[4-9]|[3-9][0-9])\.)') { th
 $package = Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json
 if ($package.name -ne '@deepseek-ai/dsh' -or $package.version -ne $baseVersion) { throw "Pinned DSH package mismatch: $($package.name)@$($package.version) (expected @deepseek-ai/dsh@$baseVersion)" }
 
+# Runtime Composition Preflight Gate (fail-closed, self-contained). The gate
+# script is GENERATED at deploy time (engine + frozen SSOT embedded) — see
+# scripts/aic/dsh_compatibility.py deploy_gate(). The launch decision is taken
+# on the exit code only, so stderr noise can never become a terminating error,
+# and a missing gate blocks the launch instead of silently skipping it.
+$compatScript = Join-Path $ProfileRoot 'dsh-preflight.py'
+if (-not (Test-Path -LiteralPath $compatScript)) {
+  throw "PREFLIGHT_GATE_MISSING: $compatScript not found. Regenerate it with: python scripts/aic/dsh_compatibility.py --action deploy --profile `"$ProfileRoot`""
+}
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+  throw 'PREFLIGHT_GATE_UNAVAILABLE: python was not found on PATH; the DSH preflight gate requires it.'
+}
+$eapPrevious = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  $preflightErrLog = Join-Path $env:TEMP ("dsh-preflight-err-{0}.log" -f [guid]::NewGuid().ToString('N'))
+  $preflightReport = & python $compatScript --profile $ProfileRoot --json 2> $preflightErrLog
+  $preflightExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $eapPrevious
+}
+if ($preflightExit -ne 0) {
+  $preflightStderr = ''
+  if (Test-Path -LiteralPath $preflightErrLog) { $preflightStderr = Get-Content -LiteralPath $preflightErrLog -Raw }
+  throw "PREFLIGHT_GATE_REJECT (exit=$preflightExit): DSH runtime composition preflight failed.`n$preflightStderr"
+}
+Write-Host 'Preflight gate: PASS (version cohesion / service contracts / ownership / artifact identity)'
+
 # Single-instance guard: refuse to start a second DSH Web host when one is
 # already bound to the port. Two hosts sharing ~/.dsh/storages/workspace.json
 # is the cross-process lost-update that produced the workspace-registry

@@ -38,6 +38,7 @@ MUTATION_LOCK_ROOT = Path.home() / ".dsh" / ".personal-ai-mutation"
 MUTATION_LOCK_STALE_SECONDS = 6 * 60 * 60
 MUTATION_LOCK_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_LOCK_V1"
 MUTATION_RECEIPT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_RECEIPT_V1"
+WRITE_RECEIPT_SCHEMA = "CONTROLLED_MUTATION_WRITE_RECEIPT_V1"
 MUTATION_AUDIT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_AUDIT_V1"
 MUTATION_EVENT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_EVENT_V1"
 PUSH_AUTHORIZATION_SCHEMA = "PERSONAL_AI_CANONICAL_PUSH_AUTHORIZATION_V1"
@@ -944,6 +945,28 @@ def git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str]:
     return run(["git", "-C", str(repo), *args], timeout=timeout)
 
 
+def git_bytes(repo: Path, *args: str, timeout: int = 120) -> tuple[int, bytes]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout
+    except Exception:
+        return -1, b""
+
+
+def sha256_path(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _default_branch(repo: Path) -> str:
     rc, out = git(repo, "symbolic-ref", "--short", "HEAD")
     return out.strip() if rc == 0 and out.strip() else "main"
@@ -1797,6 +1820,154 @@ def _local_ahead_commits(repo: Path, branch: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()] if rc == 0 else []
 
 
+def controlled_write_file(
+    lock: CanonicalMutationLock,
+    file_rel_path: str,
+    content: str | bytes,
+    *,
+    tool: str = "controlled_write",
+) -> tuple[Path, dict]:
+    """Execute authorized file write and immediately record an immutable write-time receipt.
+
+    Ensures:
+    1. Lock is currently held.
+    2. Target path is strictly within lock.scope.
+    3. Captures pre_write_sha256.
+    4. Writes content to disk.
+    5. Captures post_write_sha256.
+    6. Persists WRITE_RECEIPT_SCHEMA with full writer attribution.
+    """
+    if not lock._held:
+        raise MutationOwnershipError("MUTATION_LOCK_NOT_HELD", "cannot execute controlled write without active lease")
+
+    norm_rel = Path(file_rel_path).as_posix().lstrip("./")
+    if not _path_in_scope(norm_rel, lock.scope):
+        raise MutationOwnershipError(
+            "SCOPE_VIOLATION",
+            f"controlled write rejected: '{norm_rel}' is not in authorized scope {lock.scope}"
+        )
+
+    target = (lock.repo / norm_rel).resolve(strict=False)
+    pre_sha = sha256_path(target)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, str):
+        target.write_text(content, encoding="utf-8")
+    else:
+        target.write_bytes(content)
+
+    post_sha = sha256_path(target)
+    if post_sha is None:
+        raise MutationOwnershipError("WRITE_FAILED", f"failed to compute post-write hash for {target}")
+
+    ts = datetime.now(timezone.utc).isoformat()
+    receipt_dir = lock.receipt_root / "write-receipts"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+
+    file_digest = hashlib.sha256(norm_rel.encode("utf-8")).hexdigest()[:8]
+    receipt_path = receipt_dir / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{lock.run_id}-{file_digest}.json"
+
+    payload = {
+        "schema": WRITE_RECEIPT_SCHEMA,
+        "repo": str(lock.repo),
+        "file_path": norm_rel,
+        "pre_write_sha256": pre_sha,
+        "post_write_sha256": post_sha,
+        "writer_actor": lock.actor,
+        "task_id": lock.task_id,
+        "run_id": lock.run_id,
+        "mutation_lease_id": lock.mutation_lease_id,
+        "entrypoint": lock.entrypoint,
+        "tool": tool,
+        "write_timestamp": ts,
+        "status": "UNCOMMITTED",
+        "commit": None,
+    }
+    _write_json_atomic(receipt_path, payload)
+    return receipt_path, payload
+
+
+def verify_staged_commit_gate(
+    repo: Path,
+    lock: CanonicalMutationLock | None = None,
+    *,
+    write_receipt_root: Path | None = None,
+    enforce_scope_prefix: tuple[str, ...] | None = None,
+) -> tuple[bool, str, list[tuple[str, Path, dict]]]:
+    """Commit Gate: Enforce that staged canonical files have valid write-time receipts.
+
+    1. Reads bytes directly from Git index (stage 0).
+    2. Computes staged content sha256.
+    3. Finds matching write-time receipt.
+    4. Demands: path match, hash match, lease match, and uncommitted status.
+    5. Fail-closed if ANY staged file fails validation.
+    """
+    staged_files = _staged_paths(repo)
+    if not staged_files:
+        return False, "COMMIT_GATE_FAIL: no staged files in git index", []
+
+    receipt_root = write_receipt_root or (
+        (lock.receipt_root / "write-receipts") if lock else (MUTATION_LOCK_ROOT / "write-receipts")
+    )
+
+    active_receipts: list[tuple[Path, dict]] = []
+    if receipt_root.is_dir():
+        for f in sorted(receipt_root.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("schema") == WRITE_RECEIPT_SCHEMA:
+                    active_receipts.append((f, data))
+            except Exception:
+                continue
+
+    verified_matches: list[tuple[str, Path, dict]] = []
+
+    for rel_path in staged_files:
+        norm_path = Path(rel_path).as_posix().lstrip("./")
+
+        # If enforce_scope_prefix is provided, only files matching the prefix are enforced
+        if enforce_scope_prefix and not any(norm_path.startswith(pfx) for pfx in enforce_scope_prefix):
+            continue
+
+        # 1. Read bytes directly from Git index
+        rc, blob_bytes = git_bytes(repo, "cat-file", "-p", f":{norm_path}")
+        if rc != 0:
+            return False, f"COMMIT_GATE_FAIL: cannot read staged bytes from git index for '{norm_path}'", []
+
+        staged_sha = hashlib.sha256(blob_bytes).hexdigest()
+
+        # 2. Match against active write-time receipts
+        matching_receipt = None
+        mismatched_sha = None
+
+        for r_path, r_data in active_receipts:
+            if r_data.get("file_path") == norm_path:
+                if lock and r_data.get("mutation_lease_id") != lock.mutation_lease_id:
+                    continue
+                if r_data.get("status") != "UNCOMMITTED":
+                    continue
+                if r_data.get("post_write_sha256") == staged_sha:
+                    matching_receipt = (r_path, r_data)
+                    break
+                else:
+                    mismatched_sha = r_data.get("post_write_sha256")
+
+        if not matching_receipt:
+            if mismatched_sha:
+                return False, (
+                    f"COMMIT_GATE_FAIL: staged file '{norm_path}' content hash mismatch with write-time receipt "
+                    f"(staged={staged_sha}, receipt_post_write={mismatched_sha})"
+                ), []
+            return False, (
+                f"COMMIT_GATE_FAIL: staged file '{norm_path}' has no valid write-time receipt "
+                f"(unauthorized or unattributed mutation in git index)"
+            ), []
+
+        verified_matches.append((norm_path, matching_receipt[0], matching_receipt[1]))
+
+    return True, f"COMMIT_GATE_PASS: {len(verified_matches)} staged files verified", verified_matches
+
+
 def _commit_owned_files_locked(
     lock: CanonicalMutationLock,
     owned: list[str],
@@ -1804,6 +1975,7 @@ def _commit_owned_files_locked(
     allow_foreign_dirty: bool,
     message: str,
     validate: bool,
+    enforce_write_receipts: bool = True,
 ) -> tuple[bool, str]:
     entries = uncommitted_files(lock.repo)
     staged_before = set(_staged_paths(lock.repo))
@@ -1844,6 +2016,18 @@ def _commit_owned_files_locked(
         if re.search(pattern, diff):
             return False, f"privacy scan hit in staged diff: {pattern}"
 
+    # Commit Gate enforcement (fail-closed on any missing or mismatched receipt)
+    verified_write_receipts = []
+    sync_slice_staged = any(p.startswith("scripts/sync_v2") for p in staged_after)
+    if enforce_write_receipts or sync_slice_staged:
+        enforce_pfx = ("scripts/sync_v2",) if (sync_slice_staged and not enforce_write_receipts) else None
+        gate_ok, gate_msg, verified_write_receipts = verify_staged_commit_gate(
+            lock.repo, lock, write_receipt_root=(lock.receipt_root / "write-receipts"),
+            enforce_scope_prefix=enforce_pfx,
+        )
+        if not gate_ok:
+            return False, f"COMMIT_GATE_BLOCKED: {gate_msg}"
+
     idargs = _identity_args(lock.repo)
     rc, out = git(lock.repo, *idargs, "commit", "-m", message)
     if rc != 0:
@@ -1857,6 +2041,14 @@ def _commit_owned_files_locked(
                                staged=staged_after, changed=changed, commit=commit.strip(),
                                base_head=base.strip(), result_head=commit.strip())
         return False, f"ABORT: committed scope violation: {changed}"
+
+    # Bind and retire verified write-time receipts to this commit
+    for norm_path, r_path, r_data in verified_write_receipts:
+        r_data["status"] = "COMMITTED"
+        r_data["commit"] = commit.strip()
+        r_data["committed_at"] = datetime.now(timezone.utc).isoformat()
+        _write_json_atomic(r_path, r_data)
+
     try:
         receipt = write_mutation_receipt(lock, base=base.strip(), result="COMMITTED",
                                          staged=staged_after, changed=changed, commit=commit.strip(),
@@ -1892,6 +2084,7 @@ def commit_owned_files(
     receipt_root: Path | None = None,
     canonical_root: Path | None = None,
     stale_after: int = MUTATION_LOCK_STALE_SECONDS,
+    enforce_write_receipts: bool = False,
 ) -> tuple[bool, str]:
     """Commit only an explicit owned-file scope while preserving foreign work."""
     try:
@@ -1925,7 +2118,8 @@ def commit_owned_files(
         with lock:
             return _commit_owned_files_locked(lock, owned,
                                               allow_foreign_dirty=allow_foreign_dirty,
-                                              message=message, validate=validate)
+                                              message=message, validate=validate,
+                                              enforce_write_receipts=enforce_write_receipts)
     except MutationOwnershipError as exc:
         return False, f"{exc.code}: {exc}"
 

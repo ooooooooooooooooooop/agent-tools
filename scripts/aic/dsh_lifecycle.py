@@ -118,6 +118,31 @@ def ledger(home: Path | None, event: dict) -> Path:
     return path
 
 
+def redeploy_preflight_gate(home: Path) -> dict:
+    """Regenerate the profile's self-contained preflight gate after any
+    composition change. The gate is GENERATED (engine + frozen SSOT embedded),
+    never hand-copied — a hand-copied engine resolved its SSOT relative to the
+    deploy location and bricked every launch (incident 2026-09-05). A failed
+    regeneration aborts the lifecycle step fail-closed, because the runtime
+    would be unlaunchable without a working gate."""
+    import dsh_compatibility
+    res = dsh_compatibility.deploy_gate(home / "profiles" / "web")
+    if not res.get("artifact_functional"):
+        # Launchability requires the gate ARTIFACT to exist and execute; whether
+        # the composition passes the gates is the validate step's verdict, not a
+        # property of the fixture/staged home a lifecycle command runs against.
+        raise RuntimeError(
+            "preflight gate deployment failed: "
+            + json.dumps(
+                {k: res.get(k) for k in
+                 ("deployed", "returncode", "artifact_functional", "preflight_passed", "stderr_tail")
+                 if k in res},
+                ensure_ascii=False,
+            )[:600]
+        )
+    return res
+
+
 def _git(repo: Path, *args: str) -> tuple[int, str]:
     try:
         p = subprocess.run(["git", "-C", str(repo), *args],
@@ -640,6 +665,19 @@ def cmd_validate(args) -> int:
             if chk.returncode != 0:
                 reasons.append(f"plugin load syntax fail: {plugin['id']}")
 
+    # (d) compatibility preflight (version cohesion, service contracts, ownership uniqueness)
+    compat_ssot = contract.get("runtime_composition", {}).get("compatibility")
+    if compat_ssot:
+        try:
+            import dsh_compatibility
+            checker = dsh_compatibility.DshCompatibilityChecker(cand_home / "profiles" / "web", compat_ssot)
+            base_root = cand_home / "profiles" / "web" / f"base-dsh-{version}"
+            preflight_res = checker.run_preflight(base_root if base_root.is_dir() else None)
+            if not preflight_res.passed:
+                reasons.extend(preflight_res.errors)
+        except Exception as exc:
+            reasons.append(f"compatibility preflight error: {exc}")
+
     verdict = "CANDIDATE_VALIDATED" if not reasons else "CANDIDATE_REJECTED"
     cand["verdict"] = verdict
     cand["reasons"] = reasons
@@ -686,6 +724,11 @@ def cmd_adopt_current(args) -> int:
         print("NO_COMPOSITION_MANIFEST")
         return 1
     manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    try:
+        gate = redeploy_preflight_gate(home)
+    except Exception as exc:
+        print(f"ADOPT_BLOCKED (preflight gate redeploy failed): {exc}")
+        return 1
     st["current"] = {
         "version": manifest["base"]["version"],
         "compositionHash": manifest["profileCombinationHash"],
@@ -696,7 +739,8 @@ def cmd_adopt_current(args) -> int:
     }
     save_state(home, st)
     ledger(home, {"event": "adopt_current", "version": st["current"]["version"],
-                  "compositionHash": st["current"]["compositionHash"]})
+                  "compositionHash": st["current"]["compositionHash"],
+                  "gateSha256": gate.get("deployed_sha256")})
     print(json.dumps(st["current"], ensure_ascii=False, indent=2))
     return 0
 
@@ -713,12 +757,18 @@ def cmd_accept(args) -> int:
     new_current["nodeRelativePath"] = f"runtime/node-{cand['nodeVersion']}-win-x64"
     new_current["entryRelative"] = "profiles/web/base-dsh-" + cand["version"] + "/node_modules/@deepseek-ai/dsh/lib/bin.js"
     new_current["acceptedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        gate = redeploy_preflight_gate(home)
+    except Exception as exc:
+        print(f"ACCEPT_BLOCKED (preflight gate redeploy failed): {exc}")
+        return 1
     st["previous"] = st.get("current")
     st["current"] = new_current
     st["candidate"] = None
     save_state(home, st)
     ledger(home, {"event": "accept_switch", "from_version": (st.get("previous") or {}).get("version"),
-                  "to_version": new_current["version"], "candidate": cand.get("compositionHash")})
+                  "to_version": new_current["version"], "candidate": cand.get("compositionHash"),
+                  "gateSha256": gate.get("deployed_sha256")})
     print(json.dumps({"previous": st.get("previous"), "current": st["current"]}, ensure_ascii=False, indent=2))
     return 0
 
@@ -732,11 +782,38 @@ def cmd_rollback(args) -> int:
         return 1
     cur = st["current"]
     st["current"], st["previous"] = prev, cur
+    try:
+        gate = redeploy_preflight_gate(home)
+    except Exception as exc:
+        # Roll the in-memory swap back: the runtime must never be left on a
+        # state whose gate cannot be regenerated.
+        st["current"], st["previous"] = cur, prev
+        print(f"ROLLBACK_BLOCKED (preflight gate redeploy failed): {exc}")
+        return 1
     save_state(home, st)
     ledger(home, {"event": "rollback_switch", "from_version": cur["version"],
-                  "to_version": prev["version"], "rollback_target": prev["version"]})
+                  "to_version": prev["version"], "rollback_target": prev["version"],
+                  "gateSha256": gate.get("deployed_sha256")})
     print(json.dumps({"current": st["current"], "previous": st["previous"]}, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_recover(args) -> int:
+    home = Path(args.home) if args.home else dsh_home()
+    profile = home / "profiles" / "web"
+    try:
+        import dsh_compatibility
+        checker = dsh_compatibility.DshCompatibilityChecker(profile, dsh_compatibility.get_compatibility_ssot())
+        res = checker.recover_last_known_good()
+        gate = redeploy_preflight_gate(home)
+        res["gate_redeployed"] = True
+        res["gate_sha256"] = gate.get("deployed_sha256")
+        ledger(home, {"event": "recover_last_known_good", **res})
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    except Exception as exc:
+        print(f"RECOVER_FAILED: {exc}")
+        return 1
 
 
 def cmd_observe(args) -> int:
@@ -769,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="dsh_lifecycle",
                                  description="DSH managed runtime lifecycle (Personal AI/AIC architecture)")
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("check", "adopt_current", "smoke"):
+    for name in ("check", "adopt_current", "smoke", "recover"):
         p = sub.add_parser(name)
         p.add_argument("--home")
     for name in ("prepare", "validate", "propose", "accept", "rollback", "observe"):

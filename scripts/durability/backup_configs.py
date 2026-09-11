@@ -35,6 +35,7 @@ def _cpa_core_dir() -> Path:
 CONFIGS = [
     (HOME / ".dsh" / "settings.yaml", False, False),          # generated (aic render dsh)
     (HOME / ".dsh" / "AGENTS.md", True, False),               # user-owned prefs
+    (HOME / ".dsh" / ".credentials.yaml", True, True),        # irreplaceable credentials (secret-local-only)
     (HOME / ".codex" / "AGENTS.md", False, False),            # generated (switchboard block)
     (HOME / ".claude" / "CLAUDE.md", False, False),           # generated
     (HOME / ".gemini" / "GEMINI.md", False, False),           # generated

@@ -1,0 +1,31 @@
+{
+  "baseline_id": "CURRENT_MANAGER_EXECUTOR",
+  "name": "Current Manager-Executor Hierarchical Baseline",
+  "version": "v0",
+  "description": "Two-tier hierarchical orchestration operated via agent-switchboard MCP and supervisor ops.",
+  "mode": "hierarchical_supervisor",
+  "manager_model": "cpa/gpt-5.6-sol-xhigh",
+  "executor_model": "cpa/claude-3.7-sonnet",
+  "manager_tools": [
+    "read", "write", "edit", "glob", "grep", "pwsh",
+    "todo_write", "skill", "get_goal", "create_goal", "update_goal",
+    "mcp__agent-switchboard__*"
+  ],
+  "executor_tools": [
+    "bash", "read", "edit", "write", "glob", "grep"
+  ],
+  "skills_injected": [
+    "agent-switchboard-ops",
+    "subagent-execution-governance",
+    "decision-gates",
+    "clarify-before-change"
+  ],
+  "max_goal_rounds": 10,
+  "state_access": {
+    "personal_ai_state": true,
+    "project_state": true,
+    "dynamic_memory": true
+  },
+  "delegation_enabled": true,
+  "supervisor_backend": "managed_claude_supervisor"
+}

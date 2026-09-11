@@ -247,6 +247,15 @@ class CandidateLifecycleTests(unittest.TestCase):
             entry_path.parent.mkdir(parents=True, exist_ok=True)
             entry_path.write_text("// dummy", encoding="utf-8")
 
+        # Validate's compatibility preflight enforces artifact identity, so the
+        # staged candidate must carry the minimal UI artifacts a real
+        # distribution always has (existence-level, content is irrelevant here).
+        stage_nm = stage_prof / "node_modules" / "@deepseek-ai"
+        (stage_nm / "dsh-client-ui-conversation" / "lib").mkdir(parents=True, exist_ok=True)
+        (stage_nm / "dsh-client-ui-conversation" / "lib" / "client.js").write_text(
+            'const inject=["slots","layout"];', encoding="utf-8")
+        (stage_nm / "dsh-web-frontend" / "dist").mkdir(parents=True, exist_ok=True)
+
         st = dsh_lifecycle.load_state(self.home)
         st["candidate"] = {
             "version": "0.1.1-rc.2",
