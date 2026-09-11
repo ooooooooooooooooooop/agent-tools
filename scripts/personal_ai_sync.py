@@ -39,6 +39,8 @@ MUTATION_LOCK_STALE_SECONDS = 6 * 60 * 60
 MUTATION_LOCK_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_LOCK_V1"
 MUTATION_RECEIPT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_RECEIPT_V1"
 MUTATION_AUDIT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_AUDIT_V1"
+MUTATION_EVENT_SCHEMA = "PERSONAL_AI_CANONICAL_MUTATION_EVENT_V1"
+PUSH_AUTHORIZATION_SCHEMA = "PERSONAL_AI_CANONICAL_PUSH_AUTHORIZATION_V1"
 PROVENANCE_UNKNOWN = "UNKNOWN"
 UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION = \
     "UNAUTHORIZED_OR_UNATTRIBUTED_CANONICAL_MUTATION"
@@ -49,6 +51,8 @@ PROVENANCE_REQUIRED_FIELDS = (
     "base_head", "result_head", "remote_before", "remote_after", "owned_scope",
     "changed_files", "commit", "push_target", "mutation_lease_id",
 )
+CONTROL_SCOPES = {"git-history", "repository"}
+BROAD_SCOPE_VALUES = {".", "..", "*", "**", "repo", "repository", "scripts", "scripts/"}
 
 
 class MutationOwnershipError(RuntimeError):
@@ -79,11 +83,33 @@ def _is_canonical_mutation_repo(repo: Path, canonical_root: Path | None = None) 
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(0x00100000, 0, pid)  # SYNCHRONIZE
+            if handle:
+                try:
+                    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+                    # An exited process can retain a handle until its parent reaps it.
+                    # WAIT_OBJECT_0 is authoritative termination, not an active writer.
+                    return kernel32.WaitForSingleObject(handle, 0) != 0
+                finally:
+                    kernel32.CloseHandle(handle)
+            return ctypes.get_last_error() == 5  # access denied: fail closed as alive
+        except Exception:  # noqa: BLE001 - an unobservable PID must block recovery
+            return True
     try:
         os.kill(pid, 0)
     except PermissionError:
         return True
-    except (ProcessLookupError, OSError):
+    except (ProcessLookupError, OSError, SystemError):
         return False
     return True
 
@@ -173,6 +199,17 @@ def _default_actor_type() -> str:
     )
 
 
+def _default_harness() -> str:
+    """Return an explicitly supplied harness name; never infer it from a process name."""
+    return os.environ.get("PERSONAL_AI_HARNESS") or PROVENANCE_UNKNOWN
+
+def _current_cwd() -> str:
+    try:
+        return str(Path.cwd().resolve(strict=False))
+    except OSError:
+        return PROVENANCE_UNKNOWN
+
+
 def _write_json_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -197,12 +234,16 @@ class CanonicalMutationLock:
         trigger: str,
         task_id: str | None = None,
         actor_type: str | None = None,
+        harness: str | None = None,
         thread_id: str | None = None,
+        session_id: str | None = None,
+        cwd: str | None = None,
         entrypoint: str | None = None,
         process_start_time: str | None = None,
         mutation_lease_id: str | None = None,
         operation: str,
         scope: list[str] | None = None,
+        scope_contract: str | None = None,
         run_id: str | None = None,
         lock_root: Path | None = None,
         receipt_root: Path | None = None,
@@ -214,11 +255,15 @@ class CanonicalMutationLock:
         self.trigger = trigger
         self.task_id = task_id or "personal-ai-sync"
         self.actor_type = actor_type or _default_actor_type()
+        self.harness = harness or _default_harness()
         self.thread_id = thread_id or _default_thread_id()
+        self.session_id = session_id or self.thread_id
+        self.cwd = cwd or _current_cwd()
         self.entrypoint = entrypoint or _default_entrypoint()
         self.process_start_time = process_start_time or _process_start_time()
         self.operation = operation
-        self.scope = sorted(scope or [])
+        self.scope_contract = scope_contract or None
+        self.scope = _validate_scope(scope or [], scope_contract=self.scope_contract)
         self.run_id = run_id or uuid.uuid4().hex
         self.mutation_lease_id = mutation_lease_id or f"lease-{uuid.uuid4().hex}"
         self.lock_root = (lock_root or MUTATION_LOCK_ROOT).resolve(strict=False)
@@ -231,11 +276,14 @@ class CanonicalMutationLock:
             "schema": MUTATION_LOCK_SCHEMA,
             "actor": actor,
             "actor_type": self.actor_type,
+            "harness": self.harness,
             "pid": os.getpid(),
             "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
             "process_start_time": self.process_start_time,
             "entrypoint": self.entrypoint,
             "thread_id": self.thread_id,
+            "session_id": self.session_id,
+            "cwd": self.cwd,
             "run_id": self.run_id,
             "task_id": self.task_id,
             "mutation_lease_id": self.mutation_lease_id,
@@ -243,8 +291,54 @@ class CanonicalMutationLock:
             "operation": operation,
             "repo": str(self.repo),
             "scope": self.scope,
+            "owned_paths": self.scope,
+            "scope_contract": _provenance_value(self.scope_contract),
         }
         self._held = False
+        self._env_previous: dict[str, str | None] = {}
+
+    @classmethod
+    def from_metadata(
+        cls,
+        metadata: dict,
+        *,
+        lock_root: Path | None = None,
+        receipt_root: Path | None = None,
+        canonical_root: Path | None = None,
+    ) -> "CanonicalMutationLock":
+        """Rehydrate a live lease for hooks without creating a second lock."""
+        if not isinstance(metadata, dict):
+            raise MutationOwnershipError("UNKNOWN_LOCK", "DEFER: lease metadata is not an object")
+        required = ("repo", "actor", "operation", "run_id", "mutation_lease_id", "scope")
+        missing = [key for key in required if metadata.get(key) in (None, "")]
+        if missing:
+            raise MutationOwnershipError("UNKNOWN_LOCK", f"DEFER: lease metadata missing {missing}", metadata)
+        lock = cls(
+            Path(str(metadata["repo"])),
+            actor=str(metadata.get("actor", PROVENANCE_UNKNOWN)),
+            trigger=str(metadata.get("trigger", "canonical-writer")),
+            task_id=str(metadata.get("task_id", PROVENANCE_UNKNOWN)),
+            actor_type=str(metadata.get("actor_type", PROVENANCE_UNKNOWN)),
+            harness=str(metadata.get("harness", PROVENANCE_UNKNOWN)),
+            thread_id=str(metadata.get("thread_id", PROVENANCE_UNKNOWN)),
+            session_id=str(metadata.get("session_id", metadata.get("thread_id", PROVENANCE_UNKNOWN))),
+            cwd=str(metadata.get("cwd", PROVENANCE_UNKNOWN)),
+            entrypoint=str(metadata.get("entrypoint", PROVENANCE_UNKNOWN)),
+            process_start_time=str(metadata.get("process_start_time", PROVENANCE_UNKNOWN)),
+            mutation_lease_id=str(metadata["mutation_lease_id"]),
+            operation=str(metadata["operation"]),
+            scope=[str(item) for item in metadata["scope"]],
+            scope_contract=(None if metadata.get("scope_contract") in (None, "", PROVENANCE_UNKNOWN)
+                           else str(metadata.get("scope_contract"))),
+            run_id=str(metadata["run_id"]),
+            lock_root=lock_root,
+            receipt_root=receipt_root,
+            canonical_root=canonical_root,
+        )
+        lock.metadata = dict(metadata)
+        lock._held = True
+        lock._env_previous = {}
+        return lock
 
     def _read_existing(self) -> dict:
         try:
@@ -290,6 +384,12 @@ class CanonicalMutationLock:
                 finally:
                     os.close(fd)
                 self._held = True
+                for key, value in {
+                    "PERSONAL_AI_MUTATION_LEASE_ID": self.mutation_lease_id,
+                    "PERSONAL_AI_MUTATION_RUN_ID": self.run_id,
+                }.items():
+                    self._env_previous[key] = os.environ.get(key)
+                    os.environ[key] = value
                 return self
             except FileExistsError:
                 existing = self._read_existing()
@@ -315,6 +415,24 @@ class CanonicalMutationLock:
                         existing,
                     )
                 try:
+                    try:
+                        write_mutation_event(
+                            self.repo,
+                            "STALE_LEASE_RECOVERED",
+                            {
+                                "recovered_by": self.metadata,
+                                "recovered_lease": existing,
+                                "age_seconds": age,
+                                "action": "RECOVER_STALE_LEASE_THEN_ACQUIRE",
+                            },
+                            lock_root=self.lock_root,
+                        )
+                    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+                        raise MutationOwnershipError(
+                            "EVIDENCE_WRITE_ERROR",
+                            f"DEFER: stale lease recovery evidence could not be written: {exc}",
+                            existing,
+                        ) from exc
                     self.lock_path.unlink()
                 except FileNotFoundError:
                     continue
@@ -330,6 +448,12 @@ class CanonicalMutationLock:
         except (OSError, UnicodeError, json.JSONDecodeError):
             pass
         finally:
+            for key, value in self._env_previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            self._env_previous = {}
             self._held = False
 
     def __enter__(self) -> "CanonicalMutationLock":
@@ -337,7 +461,6 @@ class CanonicalMutationLock:
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.release()
-
 
 def write_mutation_receipt(
     lock: CanonicalMutationLock,
@@ -374,10 +497,13 @@ def write_mutation_receipt(
         "repo": str(lock.repo),
         "actor": lock.actor,
         "actor_type": lock.actor_type,
+        "harness": lock.harness,
         "trigger": lock.trigger,
         "task_id": lock.task_id,
         "run_id": lock.run_id,
         "thread_id": lock.thread_id,
+        "session_id": lock.session_id,
+        "cwd": lock.cwd,
         "pid": lock.metadata.get("pid", PROVENANCE_UNKNOWN),
         "ppid": ppid,
         "process_start_time": lock.process_start_time,
@@ -388,6 +514,8 @@ def write_mutation_receipt(
         "remote_before": remote_before,
         "remote_after": remote_after,
         "owned_scope": list(lock.scope),
+        "owned_paths": list(lock.scope),
+        "scope_contract": _provenance_value(lock.scope_contract),
         "changed_files": changed,
         "commit": commit,
         "push_target": push_target,
@@ -400,6 +528,10 @@ def write_mutation_receipt(
             "canonical": True,
             "repo": str(lock.repo),
             "scope": lock.scope,
+            "owned_paths": list(lock.scope),
+            "harness": lock.harness,
+            "session_id": lock.session_id,
+            "scope_contract": _provenance_value(lock.scope_contract),
             "lock_path": str(lock.lock_path),
             "lock_run_id": lock.run_id,
         },
@@ -410,7 +542,6 @@ def write_mutation_receipt(
     )
     _write_json_atomic(path, payload)
     return path
-
 
 def _is_canonical_governance_repo(repo: Path) -> bool:
     """Allow Task Scheduler registration only from the live canonical checkout."""
@@ -863,6 +994,409 @@ def _normalise_scope_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
     return sorted(set(normalised))
 
 
+def _validate_scope(
+    scope: list[str] | tuple[str, ...],
+    *,
+    scope_contract: str | None = None,
+) -> list[str]:
+    """Validate an explicit lease scope; broad content ownership is never implicit."""
+    values = _normalise_scope_paths(scope) if scope else []
+    if not values:
+        raise ValueError("owned scope must not be empty")
+    for value in values:
+        if value in CONTROL_SCOPES:
+            continue
+        if value in BROAD_SCOPE_VALUES:
+            raise ValueError(f"broad owned path is forbidden: {value}")
+        if value.startswith("scheduler:") or value.startswith("external:"):
+            continue
+        if value.endswith("/**"):
+            if not scope_contract:
+                raise ValueError(f"subtree scope requires explicit scope_contract: {value}")
+            continue
+        if value.endswith("/") or value.endswith("/*"):
+            raise ValueError(f"broad owned path is forbidden: {value}")
+    return values
+
+
+def mutation_lock_path(repo: Path, lock_root: Path | None = None) -> Path:
+    """Return the machine-local lease path for a repository."""
+    root = (lock_root or _mutation_lock_root_for_repo(repo)).resolve(strict=False)
+    digest = hashlib.sha256(_path_key(Path(repo)).encode("utf-8")).hexdigest()[:24]
+    return root / f"{digest}.lock.json"
+
+
+def read_active_mutation_lease(
+    repo: Path,
+    *,
+    lock_root: Path | None = None,
+) -> dict | None:
+    """Read the shared lease without acquiring, deleting, or repairing it."""
+    path = mutation_lock_path(repo, lock_root=lock_root)
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise MutationOwnershipError(
+            "UNKNOWN_LOCK", f"DEFER: mutation lock is unreadable: {path}") from exc
+    if not isinstance(value, dict) or value.get("schema") != MUTATION_LOCK_SCHEMA:
+        raise MutationOwnershipError("UNKNOWN_LOCK", f"DEFER: mutation lock schema is unknown: {path}", value)
+    recorded_repo = value.get("repo")
+    if not isinstance(recorded_repo, str) or _path_key(Path(recorded_repo)) != _path_key(Path(repo)):
+        raise MutationOwnershipError("LOCK_REPO_MISMATCH", f"DEFER: mutation lock repo mismatch: {path}", value)
+    pid = value.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        raise MutationOwnershipError("UNKNOWN_LOCK", f"DEFER: mutation lock pid is invalid: {path}", value)
+    value["lock_path"] = str(path)
+    value["active"] = _pid_is_alive(pid)
+    return value
+
+
+def write_mutation_event(
+    repo: Path,
+    event_type: str,
+    details: dict | None = None,
+    *,
+    lock_root: Path | None = None,
+) -> Path:
+    """Write immutable machine-local evidence for lease lifecycle events."""
+    root = (lock_root or MUTATION_LOCK_ROOT).resolve(strict=False) / "events"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "schema": MUTATION_EVENT_SCHEMA,
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "repo": str(Path(repo).resolve(strict=False)),
+        **(details or {}),
+    }
+    path = root / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex}.json"
+    _write_json_atomic(path, payload)
+    return path
+
+
+def write_push_authorization(
+    lock: CanonicalMutationLock,
+    *,
+    remote: str,
+    branch: str,
+    expected_remote: str,
+    commit: str,
+    base_head: str,
+    validation: dict | None = None,
+) -> Path:
+    """Issue a one-shot, explicit push authorization bound to the live lease."""
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "schema": PUSH_AUTHORIZATION_SCHEMA,
+        "created_at": timestamp,
+        "repo": str(lock.repo),
+        "remote": remote,
+        "branch": branch,
+        "expected_remote": expected_remote,
+        "commit": commit,
+        "base_head": base_head,
+        "lease_id": lock.mutation_lease_id,
+        "run_id": lock.run_id,
+        "lock_path": str(lock.lock_path),
+        "pid": lock.metadata.get("pid", PROVENANCE_UNKNOWN),
+        "harness": lock.harness,
+        "task_id": lock.task_id,
+        "validation": validation or {},
+        "status": "PENDING",
+    }
+    root = lock.lock_root / "push-authorizations"
+    path = root / (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+        f"{lock.run_id}-{uuid.uuid4().hex[:8]}.json"
+    )
+    _write_json_atomic(path, payload)
+    return path
+
+
+def validate_push_authorization(
+    authorization_path: Path | str,
+    repo: Path,
+    *,
+    remote: str,
+    branch: str,
+    commit: str | None = None,
+) -> tuple[bool, str]:
+    """Validate push authority at the pre-push boundary without changing Git state."""
+    try:
+        auth = json.loads(Path(authorization_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+        return False, f"PUSH_AUTHORIZATION_UNREADABLE: {exc}"
+    if not isinstance(auth, dict) or auth.get("schema") != PUSH_AUTHORIZATION_SCHEMA:
+        return False, "PUSH_AUTHORIZATION_INVALID_SCHEMA"
+    if _path_key(Path(auth.get("repo", ""))) != _path_key(Path(repo)):
+        return False, "PUSH_AUTHORIZATION_REPO_MISMATCH"
+    if auth.get("remote") != remote or auth.get("branch") != branch:
+        return False, "PUSH_AUTHORIZATION_TARGET_MISMATCH"
+    if auth.get("status") != "PENDING":
+        return False, "PUSH_AUTHORIZATION_ALREADY_CONSUMED"
+    target_commit = str(commit or auth.get("commit") or "")
+    if not target_commit or target_commit != str(auth.get("commit")):
+        return False, "PUSH_AUTHORIZATION_COMMIT_MISMATCH"
+    lease = read_active_mutation_lease(repo, lock_root=Path(auth.get("lock_path", "")).parent
+                                       if auth.get("lock_path") else None)
+    if not lease or not lease.get("active"):
+        return False, "DEFER_FOREIGN_CANONICAL_WRITER"
+    if lease.get("mutation_lease_id") != auth.get("lease_id") or lease.get("run_id") != auth.get("run_id"):
+        return False, "DEFER_FOREIGN_CANONICAL_WRITER"
+    rc, head = git(repo, "rev-parse", "HEAD")
+    if rc != 0 or head.strip() != target_commit:
+        return False, "PUSH_AUTHORIZATION_HEAD_MISMATCH"
+    if uncommitted_files(repo):
+        return False, "PUSH_AUTHORIZATION_DIRTY_WORKTREE"
+    receipt_root = Path(lease.get("lock_path", "")).parent / "receipts"
+    if not _owned_commit_receipt(repo, target_commit, receipt_root):
+        return False, "PUSH_AUTHORIZATION_MISSING_COMMIT_RECEIPT"
+    return True, "PUSH_AUTHORIZED"
+
+
+PUSH_REF_AUTHORIZATION_SCHEMA = "PERSONAL_AI_CANONICAL_PUSH_REF_AUTHORIZATION_V1"
+PUSH_REF_ABSENT = "ABSENT"
+_ZERO_SHA = "0" * 40
+
+
+def _normalise_branch_ref(value: str) -> str:
+    """Return the fully-qualified branch ref for a governed push-ref source/target."""
+    text = str(value or "").strip()
+    if not text or text == "(delete)":
+        raise ValueError("push-ref requires an explicit non-delete ref")
+    return text if text.startswith("refs/") else f"refs/heads/{text}"
+
+
+def write_push_ref_authorization(
+    lock: CanonicalMutationLock,
+    *,
+    remote: str,
+    source_ref: str,
+    commit: str,
+    destination_ref: str,
+    expected_remote: str,
+    base_head: str | None = None,
+    validation: dict | None = None,
+) -> Path:
+    """Issue a one-shot authorization to publish a fixed non-HEAD commit as an exact ref."""
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "schema": PUSH_REF_AUTHORIZATION_SCHEMA,
+        "created_at": timestamp,
+        "repo": str(lock.repo),
+        "operation": "push-ref",
+        "remote": remote,
+        "source_ref": source_ref,
+        "commit": commit,
+        "destination_ref": destination_ref,
+        "expected_remote": expected_remote,
+        "base_head": base_head or PROVENANCE_UNKNOWN,
+        "lease_id": lock.mutation_lease_id,
+        "run_id": lock.run_id,
+        "lock_path": str(lock.lock_path),
+        "pid": lock.metadata.get("pid", PROVENANCE_UNKNOWN),
+        "harness": lock.harness,
+        "task_id": lock.task_id,
+        "authorization_id": uuid.uuid4().hex,
+        "validation": validation or {},
+        "status": "PENDING",
+    }
+    root = lock.lock_root / "push-authorizations"
+    path = root / (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+        f"{lock.run_id}-push-ref-{uuid.uuid4().hex[:8]}.json"
+    )
+    _write_json_atomic(path, payload)
+    return path
+
+
+def consume_push_ref_authorization(authorization_path: Path | str, *, remote_after: str) -> None:
+    """Mark a push-ref authorization consumed after a verified remote update."""
+    path = Path(authorization_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("status") != "PENDING":
+        return
+    payload["status"] = "CONSUMED"
+    payload["consumed_at"] = datetime.now(timezone.utc).isoformat()
+    payload["remote_after"] = remote_after
+    _write_json_atomic(path, payload)
+
+
+def validate_push_ref_authorization(
+    authorization_path: Path | str,
+    repo: Path,
+    *,
+    remote: str,
+    local_ref: str,
+    local_sha: str,
+    remote_ref: str,
+    remote_sha: str,
+) -> tuple[bool, str]:
+    """Validate an immutable-ref publication at the pre-push boundary.
+
+    Unlike ``validate_push_authorization`` this binds an exact source ref and
+    commit SHA instead of HEAD, and does not require a clean worktree: dirty
+    state cannot alter an already-committed object being pushed by ref.
+    """
+    try:
+        auth = json.loads(Path(authorization_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+        return False, f"PUSH_AUTHORIZATION_UNREADABLE: {exc}"
+    if not isinstance(auth, dict) or auth.get("schema") != PUSH_REF_AUTHORIZATION_SCHEMA:
+        return False, "PUSH_AUTHORIZATION_INVALID_SCHEMA"
+    if _path_key(Path(auth.get("repo", ""))) != _path_key(Path(repo)):
+        return False, "PUSH_AUTHORIZATION_REPO_MISMATCH"
+    if auth.get("remote") != remote:
+        return False, "PUSH_AUTHORIZATION_TARGET_MISMATCH"
+    if auth.get("status") != "PENDING":
+        return False, "PUSH_AUTHORIZATION_ALREADY_CONSUMED"
+    if local_ref == "(delete)" or local_sha == _ZERO_SHA:
+        return False, "PRE_PUSH_DELETE_DENIED"
+    try:
+        source_ref = _normalise_branch_ref(auth.get("source_ref", ""))
+    except ValueError:
+        return False, "PUSH_REF_AUTHORIZATION_INVALID_SOURCE"
+    if local_ref != source_ref:
+        return False, "PUSH_REF_SOURCE_REF_MISMATCH"
+    target_commit = str(auth.get("commit") or "")
+    if not target_commit or local_sha != target_commit:
+        return False, "PUSH_AUTHORIZATION_COMMIT_MISMATCH"
+    if remote_ref != auth.get("destination_ref"):
+        return False, "PUSH_REF_DESTINATION_MISMATCH"
+    expected = str(auth.get("expected_remote") or "")
+    if expected == PUSH_REF_ABSENT:
+        if remote_sha != _ZERO_SHA:
+            return False, "PUSH_REF_REMOTE_NOT_ABSENT"
+    elif remote_sha != expected:
+        return False, "PUSH_REMOTE_CHANGED"
+    else:
+        anc_rc, _ = git(repo, "merge-base", "--is-ancestor", remote_sha, local_sha)
+        if anc_rc != 0:
+            return False, "PUSH_REF_NON_FAST_FORWARD"
+    rc, _ = git(repo, "cat-file", "-e", f"{local_sha}^{{commit}}")
+    if rc != 0:
+        return False, "PUSH_REF_COMMIT_MISSING"
+    rc, resolved = git(repo, "rev-parse", "--verify", f"{source_ref}^{{commit}}")
+    if rc != 0 or resolved.strip() != target_commit:
+        return False, "PUSH_REF_SOURCE_MOVED"
+    lease = read_active_mutation_lease(repo, lock_root=Path(auth.get("lock_path", "")).parent
+                                     if auth.get("lock_path") else None)
+    if not lease or not lease.get("active"):
+        return False, "DEFER_FOREIGN_CANONICAL_WRITER"
+    if lease.get("mutation_lease_id") != auth.get("lease_id") or lease.get("run_id") != auth.get("run_id"):
+        return False, "DEFER_FOREIGN_CANONICAL_WRITER"
+    receipt_root = Path(lease.get("lock_path", "")).parent / "receipts"
+    if not _owned_commit_receipt(repo, target_commit, receipt_root):
+        return False, "PUSH_AUTHORIZATION_MISSING_COMMIT_RECEIPT"
+    return True, "PUSH_REF_AUTHORIZED"
+
+
+def push_governed_ref(
+    lock: CanonicalMutationLock,
+    *,
+    remote: str,
+    source_ref: str,
+    destination_ref: str,
+    expected_remote: str | None = None,
+    timeout: int = 300,
+) -> tuple[bool, str]:
+    """Publish an exact non-HEAD ref without touching worktree, index, or HEAD.
+
+    The source commit must already exist and carry a valid canonical commit
+    receipt. Dirty worktree state is irrelevant: the pushed object is the
+    immutable commit addressed by ``source_ref``.
+    """
+    repo = lock.repo
+    source_ref = _normalise_branch_ref(source_ref)
+    destination_ref = _normalise_branch_ref(destination_ref)
+    rc, resolved = git(repo, "rev-parse", "--verify", f"{source_ref}^{{commit}}")
+    if rc != 0:
+        raise MutationOwnershipError("PUSH_REF_SOURCE_UNAVAILABLE", f"cannot resolve {source_ref}")
+    commit = resolved.strip()
+    receipt_root = lock.lock_root / "receipts"
+    if not _owned_commit_receipt(repo, commit, receipt_root):
+        raise MutationOwnershipError(
+            "PUSH_REF_MISSING_COMMIT_RECEIPT",
+            f"no canonical commit receipt for {commit}",
+        )
+    rc, out = git(repo, "ls-remote", remote, destination_ref, timeout=90)
+    if rc != 0:
+        raise MutationOwnershipError("REMOTE_LOOKUP_FAILED", out)
+    remote_before = out.split()[0].strip() if out.split() else PUSH_REF_ABSENT
+    if expected_remote:
+        expected = PUSH_REF_ABSENT if expected_remote in (PUSH_REF_ABSENT, "", _ZERO_SHA) else expected_remote
+        if expected != remote_before:
+            raise MutationOwnershipError(
+                "PUSH_REMOTE_CHANGED",
+                f"expected={expected} actual={remote_before}",
+            )
+    if remote_before == commit:
+        return True, f"PUSH_NOOP: remote already has {commit}"
+    if remote_before != PUSH_REF_ABSENT:
+        anc_rc, _ = git(repo, "merge-base", "--is-ancestor", remote_before, commit)
+        if anc_rc != 0:
+            raise MutationOwnershipError(
+                "PUSH_REF_NON_FAST_FORWARD",
+                f"{remote_before} is not an ancestor of {commit}",
+            )
+        scan_range = f"{remote_before}..{commit}"
+    else:
+        base_rc, base_out = git(repo, "rev-parse", "--verify", f"{commit}^")
+        scan_range = f"{base_out.strip()}..{commit}" if base_rc == 0 else commit
+    if privacy_scan(repo, scan_range):
+        raise MutationOwnershipError("PUSH_PRIVACY_GATE", f"privacy scan hit in {scan_range}")
+    auth = write_push_ref_authorization(
+        lock,
+        remote=remote,
+        source_ref=source_ref,
+        commit=commit,
+        destination_ref=destination_ref,
+        expected_remote=remote_before,
+        base_head=remote_before,
+        validation={"ref_gate": "PASS", "receipt_gate": "PASS"},
+    )
+    env = {
+        "PERSONAL_AI_GOVERNED_PUSH": "1",
+        "PERSONAL_AI_PUSH_AUTHORIZATION": str(auth),
+        "PERSONAL_AI_MUTATION_LEASE_ID": lock.mutation_lease_id,
+        "PERSONAL_AI_MUTATION_RUN_ID": lock.run_id,
+    }
+    rc, out = run(
+        ["git", "-C", str(repo), "push", remote, f"{source_ref}:{destination_ref}"],
+        env=env,
+        timeout=timeout,
+    )
+    if rc != 0:
+        raise MutationOwnershipError("PUSH_FAILED", out[-500:])
+    rc, after_out = git(repo, "ls-remote", remote, destination_ref, timeout=90)
+    remote_after = after_out.split()[0].strip() if rc == 0 and after_out.split() else PROVENANCE_UNKNOWN
+    if remote_after != commit:
+        raise MutationOwnershipError(
+            "PUSH_REMOTE_RESULT_MISMATCH",
+            f"expected={commit} actual={remote_after}",
+        )
+    consume_push_ref_authorization(auth, remote_after=remote_after)
+    changed = changed_paths(repo, scan_range)
+    receipt = write_mutation_receipt(
+        lock,
+        base=remote_before,
+        result="PUSHED",
+        staged=[],
+        changed=changed,
+        commit=commit,
+        base_head=remote_before,
+        result_head=commit,
+        remote_before=remote_before,
+        remote_after=remote_after,
+        push_target=f"{remote}/{destination_ref}",
+        operation="push-ref",
+    )
+    if not validate_mutation_receipt(receipt, repo, commit=commit, operation="push-ref"):
+        raise MutationOwnershipError("PUSHED_WITHOUT_VALID_RECEIPT", str(receipt))
+    return True, f"PUSH_REF_PUBLISHED: {destination_ref} -> {commit} receipt={receipt}"
+
+
 def _path_in_scope(path: str, scope: list[str] | tuple[str, ...]) -> bool:
     value = path.replace("\\", "/")
     for owned in scope:
@@ -902,6 +1436,7 @@ def _mutation_lock_for_plane(
     *,
     operation: str,
     scope: list[str],
+    scope_contract: str | None = None,
 ) -> CanonicalMutationLock:
     return CanonicalMutationLock(
         repo,
@@ -909,16 +1444,19 @@ def _mutation_lock_for_plane(
         trigger=results.get("trigger", "personal_ai_sync"),
         task_id=results.get("task_id", "personal-ai-sync"),
         actor_type=results.get("actor_type"),
+        harness=results.get("harness"),
         thread_id=results.get("thread_id"),
+        session_id=results.get("session_id"),
+        cwd=results.get("cwd"),
         entrypoint=results.get("entrypoint"),
         process_start_time=results.get("process_start_time"),
         run_id=results.get("run_id"),
         operation=operation,
         scope=scope,
+        scope_contract=scope_contract or results.get("scope_contract"),
         lock_root=_mutation_lock_root_for_repo(repo),
         canonical_root=_mutation_root_for_plane(name, repo),
     )
-
 
 def _receipt_scope_is_valid(receipt: dict) -> bool:
     changed = receipt.get("changed_files")
@@ -1329,11 +1867,15 @@ def commit_owned_files(
     trigger: str = "explicit-owned-commit",
     task_id: str = "personal-ai-sync",
     actor_type: str | None = None,
+    harness: str | None = None,
     thread_id: str | None = None,
+    session_id: str | None = None,
+    cwd: str | None = None,
     entrypoint: str | None = None,
     process_start_time: str | None = None,
     run_id: str | None = None,
     operation: str = "owned-commit",
+    scope_contract: str | None = None,
     allow_foreign_dirty: bool = False,
     validate: bool = True,
     message: str = "sync: commit owned canonical files",
@@ -1355,12 +1897,16 @@ def commit_owned_files(
         trigger=trigger,
         task_id=task_id,
         actor_type=actor_type,
+        harness=harness,
         thread_id=thread_id,
+        session_id=session_id,
+        cwd=cwd,
         entrypoint=entrypoint,
         process_start_time=process_start_time,
         run_id=run_id,
         operation=operation,
         scope=owned,
+        scope_contract=scope_contract,
         lock_root=lock_root,
         receipt_root=receipt_root,
         canonical_root=canonical_root,
@@ -1373,7 +1919,6 @@ def commit_owned_files(
                                               message=message, validate=validate)
     except MutationOwnershipError as exc:
         return False, f"{exc.code}: {exc}"
-
 
 def auto_commit_eligible(repo: Path, c: dict) -> tuple[bool, str]:
     """Compatibility guard: AUTO_COMMIT is never an implicit dirty-tree action."""
@@ -1950,7 +2495,32 @@ def execute_plan(plan: list[dict], classifications: dict,
                         continue
                     local_base_rc, local_base = git(repo, "rev-parse", "HEAD")
                     base_rc, base = git(repo, "rev-parse", f"origin/{current['branch']}")
-                    rc, out = git(repo, "push", "origin", current["branch"])
+                    if local_base_rc != 0 or base_rc != 0:
+                        review(item, "DEFER: cannot establish explicit push base/head")
+                        continue
+                    try:
+                        push_authorization = write_push_authorization(
+                            lock,
+                            remote="origin",
+                            branch=current["branch"],
+                            expected_remote=base.strip(),
+                            commit=local_base.strip(),
+                            base_head=base.strip(),
+                            validation={"privacy_scan": "PASS", "worktree": "CLEAN"},
+                        )
+                    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+                        review(item, f"DEFER: push authorization evidence failed: {exc}")
+                        continue
+                    push_env = {
+                        "PERSONAL_AI_GOVERNED_PUSH": "1",
+                        "PERSONAL_AI_PUSH_AUTHORIZATION": str(push_authorization),
+                        "PERSONAL_AI_MUTATION_LEASE_ID": lock.mutation_lease_id,
+                        "PERSONAL_AI_MUTATION_RUN_ID": lock.run_id,
+                    }
+                    rc, out = run(
+                        ["git", "-C", str(repo), "push", "origin", current["branch"]],
+                        env=push_env,
+                    )
                     if rc != 0:
                         review(item, out.splitlines()[-1] if out else "push failed")
                         continue
@@ -2000,7 +2570,8 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
     try:
         lock = _mutation_lock_for_plane(
             "personal-ai-state", repo, results,
-            operation="deterministic-memory-merge", scope=scope)
+            operation="deterministic-memory-merge", scope=scope,
+            scope_contract="personal-ai-memory-record-subtree")
         with lock:
             if uncommitted_files(repo):
                 item["action"] = "REVIEW"
@@ -2167,10 +2738,13 @@ def run_sync(mode: str, detail: bool = False) -> dict:
         "actions": [],
         "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
         "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
+        "harness": os.environ.get("PERSONAL_AI_HARNESS", "personal-ai"),
         "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_sync"),
         "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-sync"),
         "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
         "thread_id": _default_thread_id(),
+        "session_id": os.environ.get("PERSONAL_AI_SESSION_ID", _default_thread_id()),
+        "cwd": _current_cwd(),
         "pid": os.getpid(),
         "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
         "process_start_time": _process_start_time(),
@@ -2347,10 +2921,13 @@ def run_restore(detail: bool = False, repo: Path = REPO,
         "steps": [],
         "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
         "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
+        "harness": os.environ.get("PERSONAL_AI_HARNESS", "personal-ai"),
         "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_restore"),
         "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-restore"),
         "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
         "thread_id": _default_thread_id(),
+        "session_id": os.environ.get("PERSONAL_AI_SESSION_ID", _default_thread_id()),
+        "cwd": _current_cwd(),
         "pid": os.getpid(),
         "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
         "process_start_time": _process_start_time(),
@@ -2491,10 +3068,13 @@ def run_provenance_audit() -> dict:
         "mode": "audit",
         "actor": os.environ.get("PERSONAL_AI_ACTOR", "personal-ai-sync"),
         "actor_type": os.environ.get("PERSONAL_AI_ACTOR_TYPE", _default_actor_type()),
+        "harness": os.environ.get("PERSONAL_AI_HARNESS", "personal-ai"),
         "trigger": os.environ.get("PERSONAL_AI_TRIGGER", "personal_ai_provenance_audit"),
         "task_id": os.environ.get("PERSONAL_AI_TASK_ID", "personal-ai-provenance-audit"),
         "run_id": os.environ.get("PERSONAL_AI_RUN_ID") or uuid.uuid4().hex,
         "thread_id": _default_thread_id(),
+        "session_id": os.environ.get("PERSONAL_AI_SESSION_ID", _default_thread_id()),
+        "cwd": _current_cwd(),
         "pid": os.getpid(),
         "ppid": os.getppid() if hasattr(os, "getppid") else PROVENANCE_UNKNOWN,
         "process_start_time": _process_start_time(),
