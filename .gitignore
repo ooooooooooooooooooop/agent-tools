@@ -63,3 +63,5 @@ dsh-config/profiles/web/.dsh-context-lifecycle/
 
 # One-off verification scripts (repo root only) — never publish
 /.verify-surface.mjs
+
+skills/weekly-work-summary/

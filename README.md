@@ -51,7 +51,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [subagent-execution-governance](./skills/subagent-execution-governance) | 子代理契约型治理：探查/实现分离、契约快照含负空间、三级有界读取、行动门槛与结构化 BLOCKED，附会话纪律体检脚本 | 条件 |
 | [agent-switchboard-ops](./skills/agent-switchboard-ops) | 以管理者—执行者模式运维 agent-switchboard MCP，覆盖受管执行、跨模型委派与验收纪律 | 可选 |
 | [dsh-config-sync](./skills/dsh-config-sync) | 把 DSH 用户配置打包成脱敏骨架并在设备间安全同步恢复，校验哈希且不含凭据 | 可选 |
-| [weekly-work-summary](./skills/weekly-work-summary) | 按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel | 可选 |
 | [systematic-optimization](./skills/systematic-optimization) | 系统化问题解决与优化流程（领域无关）：量化→列问题→根因→结构性方案→借鉴→取舍→实施→验证→度量 | 可选 |
 | [evolution-proposal](./skills/evolution-proposal) | 把 evolution-inbox 审计异常转化为可评审的进化提案：证据驱动、分级处理、人工批准后固化 | 可选 |
 | [publish-and-reuse](./skills/publish-and-reuse) | 完整发布与跨设备复现一体化流程：一键发布门禁（`scripts/publish_all.py`）、三平面同步、新设备安装/更新 SOP | 核心 |

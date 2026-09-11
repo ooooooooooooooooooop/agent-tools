@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -388,6 +389,27 @@ class TestPrivacyScan(unittest.TestCase):
             remote, work = make_remote_with_clone(Path(td))
             commit_file(work, "readme.md", "hello docs")
             self.assertEqual(pas.privacy_scan(work, "origin/main..HEAD"), [])
+
+    def test_forbidden_path_hit(self):
+        with tempfile.TemporaryDirectory() as td:
+            remote, work = make_remote_with_clone(Path(td))
+            target = work / "skills" / "weekly-work-summary"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "f.txt").write_text("x", encoding="utf-8")
+            git(work, "add", "-A")
+            git(work, "commit", "-m", "forbidden")
+            hits = pas.privacy_scan(work, "origin/main..HEAD")
+            self.assertTrue(any(h.startswith("forbidden-path:") for h in hits))
+
+    def test_extra_patterns_file_hit(self):
+        with tempfile.TemporaryDirectory() as td:
+            remote, work = make_remote_with_clone(Path(td))
+            pat_file = Path(td) / "extra.txt"
+            pat_file.write_text("FAKE-PRIVATE-NAME\n", encoding="utf-8")
+            commit_file(work, "note.md", "mentions FAKE-PRIVATE-NAME here")
+            with mock.patch.object(pas, "PRIVACY_PATTERNS_FILE", pat_file):
+                hits = pas.privacy_scan(work, "origin/main..HEAD")
+            self.assertIn("FAKE-PRIVATE-NAME", hits)
 
 
 class StateRepoFixture:

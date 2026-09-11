@@ -57,7 +57,6 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("skill-repository-maintainer", names)
         self.assertIn("environment-bootstrap", names)
         self.assertIn("skill-quality-gate", names)
-        self.assertIn("weekly-work-summary", names)
         self.assertEqual(len(names), len(manifest["skills"]))
 
     def test_mcp_manifest_registers_real_server_package(self) -> None:

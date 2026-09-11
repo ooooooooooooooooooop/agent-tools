@@ -593,6 +593,15 @@ PRIVACY_PATTERNS = [
     r"sk-[A-Za-z0-9]{20,}",
 ]
 
+# push 禁推路径清单：changed paths 命中即拒（public 仓库）
+PUSH_FORBIDDEN_PATHS = ("skills/weekly-work-summary/",)
+
+# 本机隐私 pattern 文件（永不入库）：每行一个正则，# 开头为注释
+PRIVACY_PATTERNS_FILE = Path(os.environ.get(
+    "PERSONAL_AI_PRIVACY_PATTERNS_FILE",
+    str(Path.home() / ".dsh" / ".personal-ai-sync" / "privacy-patterns.txt"),
+))
+
 KNOWN_BLOCKERS = ["BACKUP_KEY_CUSTODY=WAITING_FOR_CUSTODY_ROOT",
                   "NOVEL_REPO_DURABILITY=BLOCKED_PRIVACY"]
 
@@ -2060,15 +2069,31 @@ def changed_paths(repo: Path, refspec: str) -> list[str]:
     return [l.strip() for l in out.splitlines() if l.strip()] if rc == 0 else []
 
 
+def _extra_privacy_patterns() -> list[str]:
+    if not PRIVACY_PATTERNS_FILE.is_file():
+        return []
+    return [line.strip() for line in
+            PRIVACY_PATTERNS_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
 def privacy_scan(repo: Path, refspec: str) -> list[str]:
-    """public 仓库 push 前的轻量隐私扫描（§13）。"""
+    """public 仓库 push 前的轻量隐私扫描（§13）。
+
+    三层：内置凭据 pattern + 本机 pattern 文件（真实人名/路径，永不入库）
+    + 禁推路径清单（按 changed paths 匹配，不看 diff 内容）。
+    """
     rc, diff = git(repo, "diff", refspec)
     if rc != 0:
         return ["<diff failed>"]
     hits = []
-    for pat in PRIVACY_PATTERNS:
+    for pat in list(PRIVACY_PATTERNS) + _extra_privacy_patterns():
         if re.search(pat, diff):
             hits.append(pat)
+    for changed in changed_paths(repo, refspec):
+        for forbidden in PUSH_FORBIDDEN_PATHS:
+            if changed == forbidden.rstrip("/") or changed.startswith(forbidden):
+                hits.append(f"forbidden-path:{changed}")
     return hits
 
 

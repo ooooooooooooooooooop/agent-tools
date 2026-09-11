@@ -25,7 +25,6 @@
       "subagent-execution-governance",
       "agent-switchboard-ops",
       "dsh-config-sync",
-      "weekly-work-summary",
       "systematic-optimization",
       "evolution-proposal",
       "publish-and-reuse",
@@ -231,19 +230,6 @@
       "depends_on": [
         "skill-repository-maintainer"
       ]
-    },
-    {
-      "name": "weekly-work-summary",
-      "path": "./skills/weekly-work-summary",
-      "version": "1.0.0",
-      "description": "按上海时间和中国实际工作日从三人日报生成固定四列中文工作总结 Excel",
-      "lang": [
-        "zh"
-      ],
-      "category": "reporting",
-      "priority": "P1",
-      "tier": "optional",
-      "depends_on": []
     },
     {
       "name": "decision-gates",
