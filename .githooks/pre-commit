@@ -22,7 +22,7 @@ unset GIT_INDEX_FILE GIT_PREFIX GIT_DIR GIT_WORK_TREE \
   GIT_COMMON_DIR GIT_NAMESPACE 2>/dev/null || true
 
 PY="${PYTHON:-python3}"
-command -v "$PY" >/dev/null 2>&1 || PY=python
+"$PY" -c '' >/dev/null 2>&1 || PY=python
 
 step() { printf '\n== %s ==\n' "$1"; }
 

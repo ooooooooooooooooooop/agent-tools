@@ -65,7 +65,7 @@ def install_pre_push_hook(work: Path) -> None:
     script = (
         "#!/usr/bin/env bash\n"
         'PY="${PYTHON:-python3}"\n'
-        'command -v "$PY" >/dev/null 2>&1 || PY=python\n'
+        '\'"$PY"\' -c \'\' >/dev/null 2>&1 || PY=python\n'
         f'"$PY" "{WRITER.as_posix()}" pre-push "$@"\n'
     )
     (hooks / "pre-push").write_text(script, encoding="utf-8")

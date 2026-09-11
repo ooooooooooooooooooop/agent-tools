@@ -65,3 +65,7 @@ dsh-config/profiles/web/.dsh-context-lifecycle/
 /.verify-surface.mjs
 
 skills/weekly-work-summary/
+
+# Model-switch runtime events + browser e2e artifacts (device-local, never canonical)
+.dsh-model-switch/
+browser-e2e-screenshot.png
