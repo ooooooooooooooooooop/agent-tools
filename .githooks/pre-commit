@@ -17,6 +17,9 @@ command -v "$PY" >/dev/null 2>&1 || PY=python
 
 step() { printf '\n== %s ==\n' "$1"; }
 
+step "canonical writer ownership"
+"$PY" scripts/governance/canonical_writer.py pre-commit
+
 step "validate_repo.py --strict"
 "$PY" scripts/validate_repo.py --strict
 

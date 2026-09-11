@@ -136,7 +136,7 @@ class TestCanonicalMutationOwnership(unittest.TestCase):
             with self.assertRaises(pas.MutationOwnershipError) as ctx:
                 second.acquire()
             self.assertEqual(ctx.exception.code, "FOREIGN_LOCK")
-            os.kill(os.getpid(), 0)
+            self.assertTrue(pas._pid_is_alive(os.getpid()))
             self.assertTrue(first._held)
         finally:
             first.release()
@@ -210,7 +210,7 @@ class TestCanonicalMutationOwnership(unittest.TestCase):
             with self.assertRaises(pas.MutationOwnershipError) as ctx:
                 blocked.acquire()
             self.assertEqual(ctx.exception.code, "FOREIGN_LOCK")
-            os.kill(os.getpid(), 0)
+            self.assertTrue(pas._pid_is_alive(os.getpid()))
         finally:
             active.release()
 
