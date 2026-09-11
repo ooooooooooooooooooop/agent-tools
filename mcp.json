@@ -15,6 +15,21 @@
       "license_file": "LICENSE",
       "platforms": ["windows"],
       "python": ">=3.10"
+    },
+    {
+      "name": "chatgpt-web-bridge",
+      "path": "./mcp/chatgpt-web-bridge",
+      "description": "ChatGPT 网页版桥：专用 Chrome profile + CDP 驱动，REST(:8080) 与 MCP SSE(:8090) 双通道；conv-affinity 单会话单 tab、后台建 tab、账号级跨进程节流、项目名解析",
+      "upstream_repository": "https://github.com/Octo-Lex/ChatGPT-Web2API",
+      "upstream_commit": "497527dceabfa3f95961e23c291e618c5570f1ac",
+      "upstream_version": "0.2.0",
+      "distribution_revision": "2026.09.11.1",
+      "entrypoint": "start.ps1",
+      "installer": "install.ps1",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "platforms": ["windows"],
+      "python": ">=3.11"
     }
   ]
 }

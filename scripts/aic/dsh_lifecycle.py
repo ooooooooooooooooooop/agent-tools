@@ -146,16 +146,15 @@ def ensure_deployment_mirror(home: Path | None = None,
     mirror_dir.parent.mkdir(parents=True, exist_ok=True)
 
     if not (mirror_dir / ".git").is_dir():
-        rc = subprocess.run(["git", "clone", "--no-checkout", str(src), str(mirror_dir)],
+        # --no-hardlinks: a local-path clone hardlinks pack files; the mirror
+        # must be a real copy (teardown can't unlink files still mmap'd by a
+        # git process holding the source repo, e.g. inside a pre-commit hook).
+        rc = subprocess.run(["git", "clone", "--no-checkout", "--no-hardlinks",
+                             str(src), str(mirror_dir)],
                             capture_output=True, text=True)
         if rc.returncode != 0:
             raise RuntimeError(f"failed to initialize deployment mirror: {rc.stderr}")
 
-    rc_before, head_before = _git(mirror_dir, "rev-parse", "HEAD")
-    commit_before = head_before.strip() if rc_before == 0 else ""
-
-    subprocess.run(["git", "-C", str(mirror_dir), "config", "core.autocrlf", "false"],
-                   capture_output=True, text=True)
     subprocess.run(["git", "-C", str(mirror_dir), "fetch", "--quiet", str(src),
                     "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"],
                    capture_output=True, text=True)
@@ -178,9 +177,7 @@ def ensure_deployment_mirror(home: Path | None = None,
 
     return {
         "path": str(mirror_dir),
-        "commit_before": commit_before,
         "commit": actual_commit,
-        "changed": bool(commit_before and actual_commit and commit_before != actual_commit),
         "dirty": is_dirty,
         "clean": not is_dirty,
     }

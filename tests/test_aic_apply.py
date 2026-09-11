@@ -328,19 +328,25 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
             subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)],
                            check=True, capture_output=True, env=env_git)
             devA = td / "A"
-            subprocess.run(["git", "clone", str(REPO), str(devA)],
+            subprocess.run(["git", "clone", "--no-hardlinks", str(REPO), str(devA)],
                            check=True, capture_output=True, env=env_git)
             subprocess.run(["git", "-C", str(devA), "remote", "set-url", "origin",
                             str(remote)], check=True, capture_output=True, env=env_git)
             subprocess.run(["git", "-C", str(devA), "push", "-u", "origin", "main"],
                            check=True, capture_output=True, env=env_git)
             devB = td / "B"
-            subprocess.run(["git", "clone", str(remote), str(devB)],
+            subprocess.run(["git", "clone", "--no-hardlinks", str(remote), str(devB)],
                            check=True, capture_output=True, env=env_git)
             shutil.copy2(REPO / "scripts" / "aic" / "aic.py",
                          devA / "scripts" / "aic" / "aic.py")
             shutil.copy2(REPO / "scripts" / "aic" / "policy_projection.py",
                          devA / "scripts" / "aic" / "policy_projection.py")
+            # The copied working-tree validator and its governance schema
+            # must come from the same revision, including uncommitted changes.
+            shutil.copy2(REPO / "registry" / "autonomous-execution-governance.yaml",
+                         devA / "registry" / "autonomous-execution-governance.yaml")
+            shutil.copy2(REPO / "scripts" / "personal_ai_sync.py",
+                         devA / "scripts" / "personal_ai_sync.py")
 
             homeB = td / "homeB"
             dshB = homeB / ".dsh"

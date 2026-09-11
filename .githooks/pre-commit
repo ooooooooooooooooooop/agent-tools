@@ -12,6 +12,15 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# Git exports GIT_INDEX_FILE (relative ".git/index") into hook env; any child
+# git process running inside ANOTHER repo/worktree (e.g. the workspace
+# isolation tests) resolves it against that repo and fails with
+# ".git/index.lock: No such file or directory". Clear repo-scoping vars so
+# test/git subprocesses are hermetic.
+unset GIT_INDEX_FILE GIT_PREFIX GIT_DIR GIT_WORK_TREE \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+  GIT_COMMON_DIR GIT_NAMESPACE 2>/dev/null || true
+
 PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || PY=python
 

@@ -3,6 +3,7 @@
 The physical drift red-team against the live DSH config is a separate manual
 procedure; these tests only pin the semantics of the pure functions.
 """
+import os
 import sys
 import tempfile
 import unittest
@@ -70,6 +71,14 @@ class TestCapabilityAdoptionProjection(unittest.TestCase):
         with self.assertRaises(ValueError):
             aic.policy_projection.update_managed_block_text(tampered, self.POLICY)
 
+    # _apply_policy_projection acquires the shared canonical mutation lock,
+    # which a governed commit (e.g. pre-commit hook inside canonical_writer)
+    # already holds — the lease id is exported to hook children via
+    # PERSONAL_AI_MUTATION_LEASE_ID, so skip rather than fail on DEFER.
+    @unittest.skipIf(
+        os.environ.get("PERSONAL_AI_MUTATION_LEASE_ID"),
+        "canonical mutation lock held by an in-progress governed mutation",
+    )
     def test_diff_and_apply_use_private_canonical_without_rewriting_user_text(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

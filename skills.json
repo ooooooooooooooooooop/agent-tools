@@ -31,7 +31,8 @@
       "publish-and-reuse",
       "research-lab",
       "find-session",
-      "personal-ai-operations-review"
+      "personal-ai-operations-review",
+      "chatgpt-web-bridge"
     ]
   },
   "skills": [
@@ -351,6 +352,19 @@
       ],
       "category": "maintenance",
       "priority": "P1",
+      "tier": "optional",
+      "depends_on": []
+    },
+    {
+      "name": "chatgpt-web-bridge",
+      "path": "./skills/chatgpt-web-bridge",
+      "version": "0.1.0",
+      "description": "通过 chatgpt-web 桥把本地 agent 接入 ChatGPT 网页版：网页端当大脑，本地只做传输与执行。四种模式：推进（含纠偏）、指挥循环、对等协作（手动触发）、只读拉取。",
+      "lang": [
+        "zh"
+      ],
+      "category": "workflow",
+      "priority": "P2",
       "tier": "optional",
       "depends_on": []
     }

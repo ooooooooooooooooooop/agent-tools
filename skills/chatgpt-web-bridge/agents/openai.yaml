@@ -1,0 +1,4 @@
+interface:
+  display_name: "ChatGPT 网页桥"
+  short_description: "让 ChatGPT 网页版当大脑：本地只做传输与执行，conversation_id 专线续接。"
+  default_prompt: "使用 $chatgpt-web-bridge：推进网页端会话只发最小提示（如「继续」）让网页端自己思考；指挥循环时忠实执行网页端指令并把结果回帖到同一 conversation_id。不替它写执行步骤；对等模式仅在用户明确要求时启用，盲答先行、分歧到顶出报告。"

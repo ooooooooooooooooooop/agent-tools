@@ -108,7 +108,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             repo = home / "Desktop" / "skills"
 
             # §2.2 克隆 canonical（本地克隆等价于 fresh clone 的已提交内容）
-            clone = subprocess.run(["git", "clone", str(ROOT), str(repo)],
+            clone = subprocess.run(["git", "clone", "--no-hardlinks", str(ROOT), str(repo)],
                                    capture_output=True, text=True, env=GIT_ENV)
             self.assertEqual(clone.returncode, 0, clone.stderr)
             self.assertTrue((repo / "BOOTSTRAP.md").is_file())
@@ -132,7 +132,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)],
                            capture_output=True, check=True, env=GIT_ENV)
             work = td / "state-src"
-            subprocess.run(["git", "clone", str(remote), str(work)],
+            subprocess.run(["git", "clone", "--no-hardlinks", str(remote), str(work)],
                            capture_output=True, check=True, env=GIT_ENV)
             FileMemoryProvider(str(work), device_id="fresh-drill").write(
                 scope="global", type="note", content="新设备恢复演练记忆",
