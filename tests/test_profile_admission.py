@@ -66,7 +66,8 @@ class TestAdmissionDurable(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ, PERSONAL_AI_STATE=self._tmp.name,
-                        PERSONAL_AI_LEDGER=str(Path(self._tmp.name) / "ledger" / "usage.jsonl"))
+                        PERSONAL_AI_LEDGER=str(Path(self._tmp.name) / "ledger" / "usage.jsonl"),
+                        PYTHONIOENCODING="utf-8")
         self.py = sys.executable
 
     def tearDown(self):
