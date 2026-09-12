@@ -121,44 +121,62 @@ function addFlag(args, name, value) {
   }
 }
 
+// Flags each CLI subcommand actually accepts. Anything outside the list must
+// not be serialized — argparse rejects unknown flags and the call dies.
+const COMMAND_ALLOWED_FLAGS = {
+  init: ["--workspace", "--workspace-id", "--device-id"],
+  create: ["--workspace", "--spec", "--parent-revision-id"],
+  inspect: ["--workspace", "--research-id"],
+  validate: ["--spec"],
+  execute: ["--workspace", "--research-id", "--run-id", "--max-items", "--revision-id"],
+  status: ["--workspace", "--run-id"],
+  evidence: ["--workspace", "--run-id"],
+  compare: ["--workspace", "--research-id", "--run-id", "--metric"],
+  continue: ["--workspace", "--research-id", "--run-id", "--max-items"],
+  verify: ["--workspace"],
+  "sync-init": ["--workspace", "--remote", "--device-id"],
+  "sync-push": ["--workspace", "--remote", "--device-id"],
+  "sync-pull": ["--workspace", "--remote", "--device-id"]
+};
+
 function commandFlags(input, command, config) {
   const data = input && typeof input === "object" ? input : {};
   const args = [command];
-  const workspace = readString(firstValue(data, "workspace", "workspacePath") ?? config.workspace, "workspace");
-  const spec = readString(firstValue(data, "spec", "specFile"), "spec");
-  const researchId = readString(firstValue(data, "researchId", "research_id"), "researchId");
-  const runId = readString(firstValue(data, "runId", "run_id"), "runId");
-  const evidenceId = readString(firstValue(data, "evidenceId", "evidence_id"), "evidenceId");
-  const remote = readString(data.remote, "remote");
+  const allowed = new Set(COMMAND_ALLOWED_FLAGS[command] || []);
+  const values = {
+    "--workspace": readString(firstValue(data, "workspace", "workspacePath") ?? config.workspace, "workspace"),
+    "--spec": readString(firstValue(data, "spec", "specFile"), "spec"),
+    "--research-id": readString(firstValue(data, "researchId", "research_id"), "researchId"),
+    "--run-id": readString(firstValue(data, "runId", "run_id"), "runId"),
+    "--evidence-id": readString(firstValue(data, "evidenceId", "evidence_id"), "evidenceId"),
+    "--workspace-id": readString(firstValue(data, "workspaceId", "workspace_id"), "workspaceId"),
+    "--device-id": readString(firstValue(data, "deviceId", "device_id"), "deviceId"),
+    "--parent-revision-id": readString(firstValue(data, "parentRevisionId", "parent_revision_id"), "parentRevisionId"),
+    "--revision-id": readString(firstValue(data, "revisionId", "revision_id"), "revisionId"),
+    "--max-items": firstValue(data, "maxItems", "max_items"),
+    "--metric": readString(data.metric, "metric"),
+    "--remote": readString(data.remote, "remote")
+  };
 
-  if (command !== "validate" && !workspace) {
+  if (command !== "validate" && !values["--workspace"]) {
     throw new BridgeError("WORKSPACE_REQUIRED", `${command} requires workspace.`);
   }
-  if (["inspect", "execute", "compare", "continue"].includes(command) && !researchId) {
+  if (["inspect", "execute", "compare", "continue"].includes(command) && !values["--research-id"]) {
     throw new BridgeError("RESEARCH_ID_REQUIRED", `${command} requires researchId.`);
   }
-  if (["status", "evidence", "continue"].includes(command) && !runId) {
+  if (["status", "evidence", "continue"].includes(command) && !values["--run-id"]) {
     throw new BridgeError("RUN_ID_REQUIRED", `${command} requires runId.`);
   }
-  if (command.startsWith("sync-") && !remote) {
+  if (command.startsWith("sync-") && !values["--remote"]) {
     throw new BridgeError("REMOTE_REQUIRED", `${command} requires remote.`);
   }
-  if (["create", "validate"].includes(command) && !spec) {
+  if (["create", "validate"].includes(command) && !values["--spec"]) {
     throw new BridgeError("SPEC_REQUIRED", `${command} requires spec.`);
   }
 
-  addFlag(args, "--workspace", workspace);
-  addFlag(args, "--spec", spec);
-  addFlag(args, "--research-id", researchId);
-  addFlag(args, "--run-id", runId);
-  addFlag(args, "--evidence-id", evidenceId);
-  addFlag(args, "--workspace-id", readString(firstValue(data, "workspaceId", "workspace_id"), "workspaceId"));
-  addFlag(args, "--device-id", readString(firstValue(data, "deviceId", "device_id"), "deviceId"));
-  addFlag(args, "--parent-revision-id", readString(firstValue(data, "parentRevisionId", "parent_revision_id"), "parentRevisionId"));
-  addFlag(args, "--revision-id", readString(firstValue(data, "revisionId", "revision_id"), "revisionId"));
-  addFlag(args, "--max-items", firstValue(data, "maxItems", "max_items"));
-  addFlag(args, "--metric", readString(data.metric, "metric"));
-  addFlag(args, "--remote", remote);
+  for (const [flag, value] of Object.entries(values)) {
+    if (allowed.has(flag)) addFlag(args, flag, value);
+  }
   args.push("--json");
   return args;
 }

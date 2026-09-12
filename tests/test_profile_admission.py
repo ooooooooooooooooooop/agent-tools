@@ -75,7 +75,8 @@ class TestAdmissionDurable(unittest.TestCase):
 
     def cli_checkpoint(self, *args):
         return subprocess.run([self.py, str(ROOT / "scripts" / "autonomy" / "checkpoint.py"),
-                               *args], capture_output=True, text=True, env=self.env)
+                               *args], capture_output=True, text=True, encoding="utf-8",
+                              env=self.env)
 
     def test_auto_admit_binds_before_usage(self):
         r = self.cli_checkpoint("new", "--task", "t-auto", "--project", "p",
@@ -108,7 +109,8 @@ class TestAdmissionDurable(unittest.TestCase):
         def esc(target, reason):
             return subprocess.run([py, str(adm), "escalate", "--task", "t-esc",
                                    "--target", target, "--reason", reason],
-                                  capture_output=True, text=True, env=self.env)
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  env=self.env)
         r_weak = esc("LONG_RUNNING_CAMPAIGN", "x")
         self.assertEqual(r_weak.returncode, 1)
         r_nongraph = esc("UNBOUNDED_MODE", "let me continue forever")
