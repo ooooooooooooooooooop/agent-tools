@@ -9,12 +9,15 @@ $cfgDir = Join-Path $env:USERPROFILE ".chatgpt_web2api"
 New-Item -ItemType Directory -Force $cfgDir | Out-Null
 $cfg = Join-Path $cfgDir "config.json"
 if (-not (Test-Path $cfg)) {
-    @'
+    $json = @'
 { "parallel_tabs": true, "tab_mode": "owned", "mcp_session_pool_enabled": true,
   "mcp_session_pool_size": 3, "mcp_session_pool_ttl_seconds": 300,
   "request_pace_send_seconds": 30, "request_pace_read_seconds": 8,
   "request_pace_cooldown_seconds": 300 }
-'@ | Set-Content -Encoding UTF8 $cfg
+'@
+    # BOM-less UTF-8: PS5.1's Set-Content -Encoding UTF8 emits a BOM that
+    # breaks Python's json.load.
+    [IO.File]::WriteAllText($cfg, $json, [Text.UTF8Encoding]::new($false))
     Write-Host "wrote $cfg"
 }
 
