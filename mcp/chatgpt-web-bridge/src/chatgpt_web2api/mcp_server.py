@@ -2216,12 +2216,17 @@ async def run_mcp(config: Config, transport: str = "stdio", port: int = 8090) ->
             pace_cooldown_seconds=config.chatgpt.request_pace_cooldown_seconds,
         )
         try:
+            # Local delta: harness-bound lifecycle — start Chrome on demand
+            # instead of requiring the REST daemon to have launched it.
+            from .chrome import ChromeProcess
+
+            await ChromeProcess(config).ensure_running()
             await _driver.connect()
             logger.info("Connected to Chrome on CDP port %d", config.chrome.cdp_port)
         except Exception as e:
             logger.error(
-                "Cannot connect to Chrome on CDP port %d. "
-                "Run 'chatgpt-web2api' first to start Chrome. Error: %s",
+                "Chrome unavailable on CDP port %d after auto-start attempt. "
+                "Error: %s",
                 config.chrome.cdp_port,
                 e,
             )

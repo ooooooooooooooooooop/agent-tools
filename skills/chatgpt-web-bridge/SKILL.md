@@ -138,12 +138,14 @@ description: |
 | 场景 | 通道 | 说明 |
 |---|---|---|
 | 串行推进会话 | REST `POST /v1/chat/completions` + `conversation_id` | daemon 复用会话 tab |
-| agent 工具态 | MCP `chatgpt-web` → `http://127.0.0.1:8090/sse` | `chat_completion` + 读工具 |
+| agent 工具态 | MCP `chatgpt-web` → stdio `chatgpt-web2api-mcp`（推荐，harness-bound） | `chat_completion` + 读工具 |
 | 读会话/列项目 | MCP `get_conversation` / `list_*` | 走共享 utility 槽，不占会话 tab |
 
 ## 运维（本机实例）
 
-- 启动：`C:\Desktop\chatgpt-web2api\start.ps1`（Chrome 独立进程 + REST :8080 + MCP :8090）
+- 注册：harness MCP 配置用 stdio `chatgpt-web2api-mcp`（随会话生灭，首调自动拉起 Chrome，不用零进程）；共享 daemon 才用 SSE `:8090`
+- 启动（仅 daemon 模式）：`<本仓库>/mcp/chatgpt-web-bridge/start.ps1`（Chrome 独立进程 + REST :8080 + MCP :8090）；venv 在仓库外时由 `W2A_VENV` 解析
+- 自愈：`chatgpt-web2api ensure`（daemon 挂了/重启后跑一次即可，幂等带锁；stdio 模式不需要）
 - Chrome 与 daemon 生命周期解耦：重启 daemon 不动浏览器，反之亦然
 - 登录态掉了：在专用 profile 的 Chrome 里登录，daemon 自动恢复
 - 排查 tab 绑定：`http://127.0.0.1:9222/json/list`

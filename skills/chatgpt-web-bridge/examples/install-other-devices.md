@@ -7,17 +7,23 @@
 ```powershell
 cd <本仓库>/mcp/chatgpt-web-bridge
 powershell -ExecutionPolicy Bypass -File install.ps1   # venv + pip install -e . + 写 ~/.chatgpt_web2api/config.json
-.\start.ps1                                          # Chrome + REST:8080 + MCP:8090
-# 在弹出的 Chrome 里登录 ChatGPT 一次（登录态设备本地）
+# venv 默认在包内 .venv，设 W2A_VENV 可放仓库外
 ```
 
-## 注册 MCP（各 harness 指向本地 SSE 端点）
+## 注册 MCP（推荐 stdio，harness-bound）
 
 ```json
-"chatgpt-web": { "type": "sse", "url": "http://127.0.0.1:8090/sse" }
+"chatgpt-web": { "command": "<venv>/Scripts/chatgpt-web2api-mcp.exe" }
 ```
 
-Devin CLI: `%APPDATA%\devin\mcp_config.json`。其它 harness 同理写各自的 MCP 配置。
+stdio 模式：MCP 进程随 harness 会话生灭，首个工具调用自动拉起 Chrome——不用时
+零后台进程，无需开机自启。Devin: `%APPDATA%\devin\mcp_config.json`；其它 harness 同理。
+
+共享 daemon 备选（多客户端共享/REST 消费方）：`.\start.ps1` 起 Chrome + REST:8080 +
+SSE:8090，注册 `{ "type": "sse", "url": "http://127.0.0.1:8090/sse" }`；
+挂掉后跑 `chatgpt-web2api ensure` 自愈（幂等带锁）。
+
+任一模式首次使用前：在桥启动的 Chrome 里登录 ChatGPT 一次（登录态设备本地）。
 
 ## 验收
 

@@ -308,6 +308,13 @@ class McpSessionDriverPool:
             pace_read_seconds=cfg.chatgpt.request_pace_read_seconds,
             pace_cooldown_seconds=cfg.chatgpt.request_pace_cooldown_seconds,
         )
+        # Local delta: harness-bound lifecycle. Bring Chrome up lazily on
+        # first driver materialization — attach when already running, else
+        # cold-start via the election lock. Lets stdio-registered servers
+        # run with zero resident daemons when the tool is never invoked.
+        from .chrome import ChromeProcess
+
+        await ChromeProcess(cfg).ensure_running()
         await driver.connect()
         return driver
 

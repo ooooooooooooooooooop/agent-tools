@@ -19,6 +19,12 @@ Local delta carried in this copy (applied on top of upstream):
   completion detection.
 - `start.ps1`: persistent-Chrome topology launcher (Chrome standalone,
   daemons attach; restarting daemons never touches the browser/login).
+- **lazy Chrome bring-up in MCP**: both MCP driver paths (session-pool
+  `_create_driver`, singleton `run_mcp`) call `ChromeProcess.ensure_running()`
+  before connecting, so a stdio-registered server cold-launches Chrome on
+  first tool call — harness-bound lifecycle, zero resident daemons when the
+  tool is never invoked. `install.ps1` resolves the venv via `W2A_VENV`
+  (repo-external) else package-local `.venv`, matching `start.ps1`.
 
 Runtime state is NOT vendored: `.venv`, `~/.chatgpt_web2api/` (config, tab
 registry, pace file), Chrome profile, and conversation ids live per-device /

@@ -12,11 +12,18 @@ ChatGPT 网页版桥：用专用 Chrome profile + CDP 驱动已登录的 ChatGPT
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1   # venv + pip install -e . + 推荐 config
-.\start.ps1                                          # Chrome + REST:8080 + MCP:8090
-# 在弹出的 Chrome 里登录 ChatGPT 一次
 ```
 
-MCP 注册：`"chatgpt-web": {"type":"sse","url":"http://127.0.0.1:8090/sse"}`。
+MCP 注册——**推荐 stdio**（harness 会话生灭绑定，不用时零后台进程；首个工具调用
+自动拉起 Chrome，冷启动选举锁防重复拉起）：
+
+```json
+"chatgpt-web": { "command": "<venv>/Scripts/chatgpt-web2api-mcp.exe" }
+```
+
+共享 daemon 备选：`.\start.ps1`（Chrome + REST:8080 + SSE:8090），注册
+`{"type":"sse","url":"http://127.0.0.1:8090/sse"}`。任一模式首次使用前在弹出的
+Chrome 里登录 ChatGPT 一次（profile 持久）。
 
 ## 本补丁层要点
 
