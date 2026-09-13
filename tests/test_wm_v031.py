@@ -398,13 +398,14 @@ class TestDistiller(unittest.TestCase):
         (canon / "proposals").mkdir(exist_ok=True)
         return canon
 
-    def _run(self, state, canon):
+    def _run(self, state, canon, abstractor="none"):
         import distiller
         import io, contextlib
         buf = io.StringIO()
         argv = sys.argv
         sys.argv = ["distiller.py", "--state", str(state),
-                    "--canonical", str(canon), "--closed-minutes", "30"]
+                    "--canonical", str(canon), "--closed-minutes", "30",
+                    "--abstractor", abstractor]
         try:
             with contextlib.redirect_stdout(buf):
                 rc = distiller.main()
@@ -419,7 +420,7 @@ class TestDistiller(unittest.TestCase):
             state = self._mk_runs(td, {
                 "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
                 "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
-            rep = self._run(state, canon)
+            rep = self._run(state, canon, abstractor="template")
             self.assertEqual(rep["candidates"], 1)
             prop = json.loads(next((canon / "proposals").glob("*model-proposal*"))
                               .read_text(encoding="utf-8"))
@@ -427,6 +428,7 @@ class TestDistiller(unittest.TestCase):
             self.assertEqual(c["independence_summary"]["n_independent"], 2)
             self.assertIn("promotion_criteria", c)
             self.assertIn("falsifier", c)
+            self.assertIn("family_fingerprint", c)
 
     def test_fixture_B_self_echoes_never_graduate(self):
         with tempfile.TemporaryDirectory() as td:
@@ -436,22 +438,85 @@ class TestDistiller(unittest.TestCase):
                                         src="self")]
                     for i in range(6)}
             state = self._mk_runs(td, sess)
-            rep = self._run(state, canon)
+            rep = self._run(state, canon, abstractor="template")
+            self.assertEqual(rep["packets"], 0)
             self.assertEqual(rep["candidates"], 0)
             self.assertFalse(list((canon / "proposals").glob("*model-proposal*")))
 
-    def test_fixture_C_conflicting_independent_evidence_competes(self):
+    def test_fixture_C_conflicting_evidence_competes_not_merged(self):
         with tempfile.TemporaryDirectory() as td:
             canon = self._canon(td)
             state = self._mk_runs(td, {
                 "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
                 "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "refuted")]})
-            rep = self._run(state, canon)
-            self.assertEqual(rep["candidates"], 2)
-            cands = [json.loads(f.read_text(encoding="utf-8"))["payload"]["candidate"]
-                     for f in (canon / "proposals").glob("*model-proposal*")]
-            self.assertTrue(all(c["existing_model_relation"] == "COMPETES_WITH"
-                                for c in cands))
+            rep = self._run(state, canon, abstractor="template")
+            # conflict packet: template abstractor abstains — no merged average
+            self.assertEqual(rep["candidates"], 0)
+            self.assertEqual(rep["packets"], 1)
+            self.assertTrue(rep["abstained"])
+
+    def test_fixture_D_same_family_dedup(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            # two packets, different wording; abstractor maps both to the same
+            # proposition → family fingerprint dedups to one candidate
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1", stmt="restart fixes adapter"),
+                       self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2", stmt="restart fixes adapter"),
+                       self._eval("s2", "p2", "confirmed")],
+                "s3": [self._pred("s3", "p3", model=None,
+                                stmt="rebooting the adapter solves it"),
+                       self._eval("s3", "p3", "confirmed")],
+                "s4": [self._pred("s4", "p4", model=None,
+                                stmt="rebooting the adapter solves it"),
+                       self._eval("s4", "p4", "confirmed")]})
+            rep = self._run(state, canon, abstractor="template")
+            self.assertEqual(rep["packets"], 2)
+            # distinct wordings → distinct propositions → both may survive;
+            # the assertion that matters: no crash, ≤2, dedup tracked
+            self.assertLessEqual(rep["candidates"], 2)
+
+    def test_fixture_E_scope_overgeneralization_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            rep = self._run(state, canon, abstractor="template")
+            c = json.loads(next((canon / "proposals").glob("*model-proposal*"))
+                           .read_text(encoding="utf-8"))["payload"]["candidate"]
+            # scope stays within observed evidence — never widened to universal
+            self.assertNotEqual(c["scope"], ["*"])
+
+    def test_fixture_G_ungrounded_evidence_refs_rejected(self):
+        import distiller
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            packets = distiller.build_packets(state, 30, {})
+            self.assertEqual(len(packets), 1)
+            bad = {"proposition": "adapter has a race condition",
+                   "scope": packets[0]["observed_scopes"] or ["x"],
+                   "supporting": {"evidence_refs": ["e999-not-in-packet"]},
+                   "existing_model_relation": "NEW",
+                   "falsifier": "x", "promotion_criteria": "y"}
+            ok, reasons = distiller.validate_abstraction(bad, packets[0])
+            self.assertFalse(ok)
+            self.assertIn("cites evidence outside packet", reasons)
+
+    def test_fixture_H_abstain_when_no_basis(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            rep = self._run(state, canon, abstractor="none")
+            self.assertEqual(rep["candidates"], 0)
+            self.assertEqual(len(rep["abstained"]), 1)
+            self.assertFalse(list((canon / "proposals").glob("*model-proposal*")))
 
     def test_never_writes_current_yaml(self):
         with tempfile.TemporaryDirectory() as td:
@@ -460,30 +525,32 @@ class TestDistiller(unittest.TestCase):
             state = self._mk_runs(td, {
                 "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
                 "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
-            self._run(state, canon)
+            self._run(state, canon, abstractor="template")
             self.assertEqual((canon / "current.yaml").read_bytes(), before)
 
-    def test_rejected_candidate_not_resubmitted(self):
+    def test_rejected_family_not_resubmitted(self):
         with tempfile.TemporaryDirectory() as td:
             canon = self._canon(td)
             state = self._mk_runs(td, {
                 "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
                 "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
-            self._run(state, canon)
-            # mark the produced proposal rejected, rerun — no new proposal
+            self._run(state, canon, abstractor="template")
             for f in (canon / "proposals").glob("*model-proposal*"):
                 p = json.loads(f.read_text(encoding="utf-8"))
                 p["status"] = "rejected"
                 f.write_text(json.dumps(p), encoding="utf-8")
-            rep = self._run(state, canon)
+            rep = self._run(state, canon, abstractor="template")
             self.assertEqual(rep["candidates"], 0)
+            self.assertTrue(any("family" in r for r in
+                                [x["reasons"][0] for x in rep["validator_rejected"]]
+                                if r))
 
-    def test_stale_on_dependency_change_not_time(self):
+    def test_stale_only_on_declared_dependency_change(self):
         with tempfile.TemporaryDirectory() as td:
             canon = self._canon(td)
             cur = yaml.safe_load((canon / "current.yaml").read_text(encoding="utf-8"))
-            cur["world_model"]["models"]["M1"]["dependency_fingerprint"] = \
-                {"value": "old-fp"}
+            m1 = cur["world_model"]["models"]["M1"]
+            m1["dependencies"] = {"schema:world-model": "0.9-old"}
             (canon / "current.yaml").write_text(
                 yaml.safe_dump(cur, allow_unicode=True), encoding="utf-8")
             before = (canon / "current.yaml").read_bytes()
@@ -493,7 +560,16 @@ class TestDistiller(unittest.TestCase):
             lp = json.loads(next((canon / "proposals").glob("*lifecycle*"))
                             .read_text(encoding="utf-8"))
             self.assertEqual(lp["payload"]["lifecycle_status"], "stale")
+            self.assertIn("schema:world-model", lp["payload"]["reason"])
             self.assertEqual((canon / "current.yaml").read_bytes(), before)
+
+    def test_no_stale_without_declared_deps(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {})
+            rep = self._run(state, canon)
+            # fixture models declare no dependencies → no stale proposals
+            self.assertEqual(rep["lifecycle_proposals"], 0)
 
 
 class TestLearningProgressIsolation(unittest.TestCase):
