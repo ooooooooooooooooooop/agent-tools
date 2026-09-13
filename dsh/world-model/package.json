@@ -1,8 +1,0 @@
-{
-  "name": "dsh-world-model",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Personal AI world-model mechanism layer: mechanical RAW_EVIDENCE capture, prediction-before-mutation guard, ledger/state persistence",
-  "main": "world-model.mjs"
-}

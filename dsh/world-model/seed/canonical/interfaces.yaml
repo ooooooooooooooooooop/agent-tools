@@ -1,4 +1,0 @@
-channels: {}
-sensors: {}
-actuators: {}
-note: Channel/Sensor/Actuator registry — every evidence/event links source_id+channel_id+sensor_id+provenance
