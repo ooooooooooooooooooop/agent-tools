@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@research-lab/dsh-adapter':
-        specifier: file:C:/Users/admin/Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz
-        version: file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz
+        specifier: file:../../dsh/research-lab-adapter
+        version: file:../../dsh/research-lab-adapter
       dsh-remote-web-gateway:
         specifier: ^0.2.1
         version: 0.2.1
@@ -20,8 +20,8 @@ importers:
 
 packages:
 
-  '@research-lab/dsh-adapter@file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz':
-    resolution: {integrity: sha512-inc0Z13/4o1TTj69AsehnzlM7mKzmRS3stHwO6lVkKle3HZ5+y8/OSvbHcoBP1YXwPi0iPzSKiY/70yvW0x6AA==, tarball: file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz}
+  '@research-lab/dsh-adapter@file:../../dsh/research-lab-adapter':
+    resolution: {directory: ../../dsh/research-lab-adapter, type: directory}
     version: 0.2.1
     peerDependencies:
       '@deepseek-ai/dsh-client-runtime': ^0.1.1-rc.2
@@ -99,7 +99,7 @@ packages:
 
 snapshots:
 
-  '@research-lab/dsh-adapter@file:../../../Desktop/research-lab/hosts/dsh/research-lab-dsh-adapter-0.2.1.tgz': {}
+  '@research-lab/dsh-adapter@file:../../dsh/research-lab-adapter': {}
 
   argparse@2.0.1: {}
 

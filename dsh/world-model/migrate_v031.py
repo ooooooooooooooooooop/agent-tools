@@ -316,7 +316,7 @@ def build_value(old: dict) -> dict:
     }
 
 
-def build_current(old: dict, lineage_head: str) -> dict:
+def build_current(old: dict, lineage_head: str, entity_id: str) -> dict:
     w = {
         "models": old.get("current_models") or {},
         "competing_models": old.get("competing_models") or {},
@@ -331,7 +331,7 @@ def build_current(old: dict, lineage_head: str) -> dict:
         "theory_version": THEORY,
         "watermark": utcnow(),
         "identity": {
-            "entity_id": "personal-ai-admin-001",
+            "entity_id": entity_id,
             "governance_ref": "governance.yaml",
             "lineage_ref": "lineage.yaml",
             "lineage_head": lineage_head,
@@ -365,14 +365,19 @@ def build_current(old: dict, lineage_head: str) -> dict:
     return cur
 
 
-def migrate(canon: Path, apply: bool) -> dict:
+def migrate(canon: Path, apply: bool, entity_id: str | None = None) -> dict:
     old = load_yaml(canon / "current.yaml")
     if not old:
         raise SystemExit(f"no current.yaml at {canon}")
     if old.get("schema_version") == SCHEMA_110:
         raise SystemExit("already at schema 1.1 — nothing to do")
 
-    entity_id = "personal-ai-admin-001"
+    entity_id = (
+        entity_id
+        or (old.get("identity") or {}).get("entity_id")
+        or (old.get("identity_model") or {}).get("entity_id")
+        or "REPLACE_ME"
+    )
     genesis = lineage_event("ENTITY_GENESIS", entity_id=entity_id,
                             note="V0.3.1 分层初始化；prior history in pre-v031 backups")
     bound = lineage_event("BODY_BOUND", entity_id=entity_id, body_id="dsh-local",
@@ -386,7 +391,7 @@ def migrate(canon: Path, apply: bool) -> dict:
         "lineage.yaml": build_lineage(entity_id, genesis, migrated),
         "sources.yaml": build_sources(old),
         "interfaces.yaml": build_interfaces(),
-        "current.yaml": build_current(old, migrated["event_id"]),
+        "current.yaml": build_current(old, migrated["event_id"], entity_id),
     }
     report = {"entity_id": entity_id, "files": sorted(out), "applied": apply}
     if not apply:
@@ -476,6 +481,8 @@ def main() -> int:
     ap.add_argument("--rollback", action="store_true")
     ap.add_argument("--backup", default=None)
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--entity-id", default=None,
+                    help="entity id (default: read from existing canonical; REPLACE_ME if absent)")
     args = ap.parse_args()
     canon = Path(args.canonical)
     if args.rollback:
@@ -485,7 +492,8 @@ def main() -> int:
     if args.verify:
         print(json.dumps(verify(canon), ensure_ascii=False, indent=2))
         return 0
-    print(json.dumps(migrate(canon, args.apply), ensure_ascii=False, indent=2))
+    print(json.dumps(migrate(canon, args.apply, entity_id=args.entity_id),
+                     ensure_ascii=False, indent=2))
     return 0
 
 

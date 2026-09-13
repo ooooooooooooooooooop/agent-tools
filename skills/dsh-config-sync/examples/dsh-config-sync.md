@@ -2,11 +2,11 @@
 
 ## 目标
 
-把 `C:\Users\yexue\.dsh` 下的用户偏好与模型路由配置打包成脱敏骨架，提交到（公开）仓库，并在新设备上恢复。
+把 `C:\Users\<USER>\.dsh` 下的用户偏好与模型路由配置打包成脱敏骨架，提交到（公开）仓库，并在新设备上恢复。
 
 ## 前置约定
 
-- 源 DSH 主页：`C:\Users\yexue\.dsh`（`$env:DSH_HOME` 确认）。
+- 源 DSH 主页：`C:\Users\<USER>\.dsh`（`$env:DSH_HOME` 确认）。
 - 归档落点：仓库 `dsh-config/` 目录（配置骨架随仓库提交）。
 - 强制排除：`.credentials.yaml`、`sessions/`、`storages/`、`skills/`。
 

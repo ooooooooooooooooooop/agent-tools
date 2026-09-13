@@ -1,4 +1,6 @@
-# Agent 工具仓库
+# Personal AI 发布仓
+
+> 定位：**Personal AI 公开发布仓**——`mechanisms`（Skill/MCP/DSH 插件 = 身体适配器与执行机制）+ `soul/`（可携带认知状态：通用 L2/L3 模型 + schema 契约 + briefing 模板 + adopter 骨架）。每次发布 = 一次认知模型更新，由 `soul/manifest.json` 锚定。私有 canonical/L0-L1/未脱敏模型永远不进本仓。
 
 > **用一句话配置这台电脑（唯一入口）** — 把下面这句原样发给本机 Agent：
 >
@@ -6,11 +8,12 @@
 >
 > 安装 / 更新 / 恢复 / 同步的全部意图都固化在 [BOOTSTRAP.md](./BOOTSTRAP.md)：没装 Skill 会自动 bootstrap 并恢复全量环境，已安装会自动判定同步方向；用户无需知道任何 Skill 名、Git 命令或同步细节。
 
-面向 Codex、Claude Code 等本地 Agent 工作流的可复现工具仓库。仓库同时发布三类项目：
+面向本地 Agent 工作流的可复现仓库。机制层发布三类项目，认知层发布 `soul/`：
 
 - **Skills**：Agent 读取的流程、规则与确定性辅助脚本。
 - **MCP servers**：提供实际工具调用能力的本地服务。
 - **DSH 插件**：本地 DSH（DeepSeek Harness）用户级插件源码与跨设备安装说明。
+- **soul/**：Personal AI 可携带认知状态（通用 L2/L3 脱敏模型 + canonical schema + briefing 契约 + adopter bootstrap 骨架），见 [soul/README.md](./soul/README.md)。
 
 本地运行状态、私有记忆、会话记录、机器路径、配置文件和生成物不属于发布内容。
 
@@ -82,7 +85,7 @@ DSH 插件不设注册表；包内 `README.md` 提供跨设备安装步骤，发
 
 ## 仓库结构
 
-根目录按五类组织。前四类随仓库发布；第五类**永远仅存在于本地，不进入发布**。
+根目录按六类组织。前五类随仓库发布；第六类**永远仅存在于本地，不进入发布**。
 
 ```text
 # ① Skill 包（统一收在 skills/ 下，受 skills.json + validate_repo.py 契约约束）
@@ -104,7 +107,15 @@ docs/                    # 架构与发布规则（architecture.md / skill-contr
 .github/workflows/       # CI：严格校验 + Skill 门禁 + markdown/py 语法 + 回归测试
 _template/               # 新建包的模板种子（validate_repo 显式排除，非 Skill）
 
-# ⑤ 设备运行层（本地，永不发布）
+# ⑤ soul/ — Personal AI 可携带认知状态
+soul/manifest.json       # 发布锚：soul_version/schema_version/模型清单/release{tag,content_commit,payload_digest}
+soul/schema/             # canonical 结构契约（对应 migrate_v031 强制字段集）
+soul/briefing/           # briefing 编译输出契约（7 段 + 容量/裁剪规则；canonical_compile.py 是唯一生成者）
+soul/models/{l2,l3}/     # 通用脱敏认知模型（declassification 链产物）
+soul/bootstrap/          # adopter 起点包：canonical 骨架 + 仅初始化用种子
+                         # 边界：内容只能来自 declassification 链或公开模板；私有 canonical/L0-L1 禁入
+
+# ⑥ 设备运行层（本地，永不发布）
 .taskflow/  .grepai/  .claude/  node_modules/  state.sqlite  会话 JSONL  日志  用户配置  生成报告
 ```
 

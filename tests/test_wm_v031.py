@@ -25,6 +25,8 @@ import lp_evaluator  # noqa: E402
 import migrate_v031  # noqa: E402
 import yaml  # noqa: E402
 
+SOUL_SCHEMA = REPO / "soul" / "schema" / "canonical.schema.json"
+
 NODE = bcc_check.find_node()
 NEED_NODE = unittest.skipUnless(NODE, "node runtime not found")
 
@@ -39,6 +41,7 @@ def fixture_canonical(tmp: Path, extra_models: int = 0) -> Path:
         models[f"MX{i}"] = {"proposition": "pad " * 200, "confidence": "low"}
     old = {
         "schema_version": "1.0", "watermark": "2026-01-01T00:00:00Z",
+        "identity": {"entity_id": "test-entity"},
         "current_models": models,
         "competing_models": {"C1": {"proposition": "c", "status": "SUPERSEDED"}},
         "channel_model": {"user": {"correction_history": ["corr-1"],
@@ -83,6 +86,31 @@ def run_body(tmp: Path, canon: Path, steps, mode="core", body_id="body-A"):
 
 
 class TestMigration(unittest.TestCase):
+    def test_migrated_current_validates_against_soul_schema(self):
+        import jsonschema
+        with tempfile.TemporaryDirectory() as td:
+            canon = Path(td) / "c"
+            canon.mkdir()
+            (canon / "current.yaml").write_text(yaml.safe_dump(
+                {"schema_version": "1.0",
+                 "current_models": {"M": {"proposition": "x"}},
+                 "identity": {"entity_id": "test-entity"}},
+                allow_unicode=True), encoding="utf-8")
+            migrate_v031.migrate(canon, apply=True)
+            schema = json.loads(SOUL_SCHEMA.read_text(encoding="utf-8"))
+            cur = yaml.safe_load((canon / "current.yaml").read_text(encoding="utf-8"))
+            jsonschema.validate(cur, schema)
+            self.assertEqual(cur["identity"]["entity_id"], "test-entity",
+                             "entity_id must come from canonical, not hardcoded")
+
+    def test_bootstrap_skeleton_validates_against_soul_schema(self):
+        import jsonschema
+        schema = json.loads(SOUL_SCHEMA.read_text(encoding="utf-8"))
+        skeleton = yaml.safe_load(
+            (REPO / "soul" / "bootstrap" / "canonical" / "current.yaml")
+            .read_text(encoding="utf-8"))
+        jsonschema.validate(skeleton, schema)
+
     def test_migrate_verify_rollback_byte_identical(self):
         with tempfile.TemporaryDirectory() as td:
             canon = Path(td) / "c"
@@ -142,7 +170,7 @@ class TestBriefing(unittest.TestCase):
                                  "--canonical", str(canon)], capture_output=True, text=True)
             self.assertEqual(rc.returncode, 0, rc.stderr)
             rs = json.loads((canon / "runtime-state.json").read_text(encoding="utf-8"))
-            self.assertEqual(rs["entity_id"], "personal-ai-admin-001")
+            self.assertEqual(rs["entity_id"], "test-entity")
             self.assertIn("normative_authorities", rs)
 
 

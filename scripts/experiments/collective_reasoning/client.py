@@ -31,10 +31,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CPA_CONFIG = Path(
-    r"C:\Users\yexue\Downloads\EasyCLIProxyAPI-v0.2.25-Windows-amd64"
-    r"\EasyCLIProxyAPI-v0.2.25-Windows-amd64\cpa-core\config.yaml"
-)
+CPA_CONFIG = Path(os.environ["CPA_CONFIG"]) if os.environ.get("CPA_CONFIG") else None
 CREDENTIALS_FILE = Path.home() / ".dsh" / ".credentials.yaml"
 
 PROVIDERS: dict[str, dict[str, str]] = {
@@ -79,6 +76,8 @@ def provider_key(provider: str) -> str:
         if provider in _key_cache:
             return _key_cache[provider]
         if provider == "cpa":
+            if CPA_CONFIG is None:
+                raise RuntimeError("CPA_CONFIG env var not set (path to cpa-core config.yaml)")
             cfg = _load_yaml(CPA_CONFIG)
             key = str(cfg["api-keys"][0])
         elif provider in ("bai", "kimi"):

@@ -9,10 +9,23 @@ identity:
 world_model:
   models: {}
   competing_models: {}
-  uncertainty: []
+  uncertainty: {}
   open_predictions: []
-  residuals: []
+  known_residuals: []
+  model_coverage: ''
+  current_state: {}
 value_model:
-  current_values: []
-  uncertainty: []
-  update_protocol_ref: governance.yaml#u1_evolvable
+  current_values: {}
+  uncertainty: {}
+  update_protocol_ref: governance.yaml#u1_evolvable.update_classes.value_model
+  source: ''
+refs:
+  sources: sources.yaml
+  interfaces: interfaces.yaml
+  operators: operators.yaml
+  open_loops: open-loops.yaml
+  gate_experiments: gate-experiments.yaml
+  proposals: proposals/
+  history: history/
+freeze: {}
+evidence_refs: []

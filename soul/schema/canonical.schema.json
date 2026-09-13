@@ -1,9 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Personal AI canonical current.yaml — schema 1.1",
-  "description": "Structural contract for a Personal AI canonical directory's current.yaml. Mirrors the skeleton in soul/bootstrap/canonical/current.yaml and the field set enforced by dsh/world-model/migrate_v031.py. Sidecar files in the same directory: governance.yaml, sources.yaml, interfaces.yaml, lineage.yaml, history/ (append-only lineage), proposals/.",
+  "description": "Structural contract for a Personal AI canonical current.yaml. Mirrors dsh/world-model/migrate_v031.py build_current() output exactly: world_model.uncertainty/current_state are objects, value_model.current_values/uncertainty are objects, known_residuals is an array. Sidecar files: governance.yaml, lineage.yaml, sources.yaml, interfaces.yaml, operators.yaml, open-loops.yaml, proposals/, history/ (append-only).",
   "type": "object",
-  "required": ["schema_version", "identity", "world_model", "value_model"],
+  "required": ["schema_version", "identity", "world_model", "value_model", "refs"],
   "properties": {
     "schema_version": { "const": "1.1" },
     "theory_version": { "type": "string" },
@@ -12,7 +12,7 @@
       "type": "object",
       "required": ["entity_id"],
       "properties": {
-        "entity_id": { "type": "string" },
+        "entity_id": { "type": "string", "minLength": 1 },
         "governance_ref": { "type": "string" },
         "lineage_ref": { "type": "string" },
         "lineage_head": { "type": ["string", "null"] }
@@ -23,19 +23,36 @@
       "properties": {
         "models": { "type": "object" },
         "competing_models": { "type": "object" },
-        "uncertainty": { "type": "array" },
+        "uncertainty": { "type": "object" },
         "open_predictions": { "type": "array" },
-        "residuals": { "type": "array" }
+        "known_residuals": { "type": "array" },
+        "model_coverage": { "type": "string" },
+        "current_state": { "type": "object" }
       }
     },
     "value_model": {
       "type": "object",
       "properties": {
-        "current_values": { "type": "array" },
-        "uncertainty": { "type": "array" },
-        "update_protocol_ref": { "type": "string" }
+        "current_values": { "type": "object" },
+        "uncertainty": { "type": "object" },
+        "update_protocol_ref": { "type": "string" },
+        "source": { "type": "string" }
       }
     },
+    "refs": {
+      "type": "object",
+      "properties": {
+        "sources": { "type": "string" },
+        "interfaces": { "type": "string" },
+        "operators": { "type": "string" },
+        "open_loops": { "type": "string" },
+        "gate_experiments": { "type": "string" },
+        "proposals": { "type": "string" },
+        "history": { "type": "string" }
+      }
+    },
+    "freeze": { "type": "object" },
+    "evidence_refs": { "type": "array" },
     "x_preserved": { "type": "object" }
   }
 }

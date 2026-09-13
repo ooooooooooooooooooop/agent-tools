@@ -24,5 +24,10 @@
     "canonical": "bootstrap/canonical/",
     "seeds": "bootstrap/seeds/"
   },
-  "release_commit": "a10f6c6"
+  "release": {
+    "tag": "soul-0.1.1",
+    "content_commit": null,
+    "payload_digest": "sha256:56fcbfd6da7e04d601172baf59bf5c9e047204273a771df96d1eeadd3601ec96",
+    "digest_rule": "sha256 over sorted relpath+content of all soul/ files except manifest.json"
+  }
 }

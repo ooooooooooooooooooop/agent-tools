@@ -46,7 +46,7 @@ function flag(name) { return args.includes(name); }
 const parentPath = opt('--parent', null);
 const bucket = opt('--bucket', null);
 const outPath = opt('--out', null);
-const zstd = opt('--zstd', 'C:\\Users\\yexue\\anaconda3\\Library\\bin\\zstd.exe');
+const zstd = opt('--zstd', 'zstd');
 const workersDir = opt('--workers-dir', null);
 const presetRouteArg = opt('--preset-route', 'cc=cpa/gpt-5.6-luna-max');
 const PRESET_ROUTES = {};

@@ -1,6 +1,6 @@
 # 仓库架构
 
-本仓库是 Agent 工具的源码与发布控制面，不是运行时工作区。
+本仓库是 Personal AI 公开发布仓（机制层 + soul/ 认知层），不是运行时工作区。
 
 ## 项目类型
 
@@ -9,6 +9,7 @@
   skills.json + skills/<name>/ Skill 包
   mcp.json + mcp/ 下 MCP 包
   dsh/ 下 DSH 插件包（不设注册表）
+  soul/ Personal AI 可携带认知状态（通用 L2/L3 + schema + briefing 契约 + bootstrap）
           |
           v
 质量与发布层

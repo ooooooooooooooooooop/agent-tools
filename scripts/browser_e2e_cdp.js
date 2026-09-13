@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const WebSocket = require('C:/Users/admin/.dsh/profiles/node_modules/ws');
+const WebSocket = require('ws');
 
 const CHROME_PATH = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const TARGET_URL = 'http://127.0.0.1:3080/';
