@@ -3,7 +3,7 @@
 本文件是这台电脑 Personal AI 生命周期的**唯一入口**。
 用户只需要对这台电脑上的 Agent 说一句：
 
-> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md，自主配置这台电脑>**
+> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
 
 安装 / 更新 / 恢复 / 同步的全部意图都已固化在本文件中。读到本文件的 Agent 必须自主执行到底，只在 §5 列出的情形下才向用户报告。
 

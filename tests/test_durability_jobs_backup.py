@@ -206,6 +206,10 @@ class RegistrationGuardTests(unittest.TestCase):
         # device-config anchor then decides (live re-registration covers the
         # full PASS path). Here we only assert the guard does NOT raise
         # REGISTRATION_REJECTED_EPHEMERAL_PATH for a durable path.
+        if any(m in str(REPO).lower() for m in
+               ("bootstrap-drill-", "\\appdata\\local\\temp\\", "\\windows\\temp\\",
+                ".claude\\worktrees")):
+            self.skipTest("repo checkout itself is ephemeral; guard premise unmet")
         p = subprocess.run(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(REGISTER_PS1), "-CheckOnly"],

@@ -293,6 +293,8 @@ class TestPhysicalLiveDrift(unittest.TestCase):
         f = Path(os.environ.get("DSH_HOME", Path.home() / ".dsh")) / "settings.yaml"
         if not f.is_file():
             self.skipTest("dsh 未安装")
+        if not aic.PRIVATE_STATE.is_dir():
+            self.skipTest("requires live personal-ai-state canonical")
         before = f.read_bytes()
         try:
             import yaml
@@ -318,6 +320,8 @@ class TestPhysicalLiveDrift(unittest.TestCase):
 class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
     """跨设备场景：DSH settings canonical 变更后通过 git pull 并由 aic 收敛。"""
 
+    @unittest.skipUnless(aic.PRIVATE_STATE.is_dir(),
+                         "requires live personal-ai-state canonical")
     def test_canonical_to_runtime_convergence(self):
         td_obj = tempfile.TemporaryDirectory()
         td = Path(td_obj.name)

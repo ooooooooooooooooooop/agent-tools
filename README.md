@@ -4,7 +4,7 @@
 
 > **用一句话配置这台电脑（唯一入口）** — 把下面这句原样发给本机 Agent：
 >
-> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md，自主配置这台电脑>**
+> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
 >
 > 安装 / 更新 / 恢复 / 同步的全部意图都固化在 [BOOTSTRAP.md](./BOOTSTRAP.md)：没装 Skill 会自动 bootstrap 并恢复全量环境，已安装会自动判定同步方向；用户无需知道任何 Skill 名、Git 命令或同步细节。
 

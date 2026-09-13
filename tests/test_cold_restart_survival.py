@@ -33,6 +33,8 @@ class ColdRestartSurvivalTests(unittest.TestCase):
 
         # Mirror essential files from live ~/.dsh/profiles/web
         live_profile = DSH_HOME / "profiles" / "web"
+        if not live_profile.is_dir():
+            self.skipTest("requires live DSH web profile")
         
         # Copy config files and manifests
         for fname in ["package.json", "base-distribution.json", "dsh-runtime-composition.json",

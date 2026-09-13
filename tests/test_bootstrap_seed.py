@@ -31,8 +31,8 @@ import personal_ai_sync as pas  # noqa: E402
 from provider import FileMemoryProvider  # noqa: E402
 
 BOOTSTRAP = ROOT / "BOOTSTRAP.md"
-TRIGGER = ("读取 https://github.com/ooooooooooooooooooop/agent-tools/"
-           "blob/main/BOOTSTRAP.md，自主配置这台电脑")
+TRIGGER = ("读取 <https://github.com/ooooooooooooooooooop/agent-tools/"
+           "blob/main/BOOTSTRAP.md>，自主配置这台电脑")
 
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
