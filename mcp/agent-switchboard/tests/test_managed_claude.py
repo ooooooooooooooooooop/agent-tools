@@ -285,13 +285,17 @@ class ManagedClaudeTests(unittest.TestCase):
         self.assertEqual(len(stored["last_result_summary"]), 5000)  # stored value untouched
 
     def test_start_requires_stall_timeout(self):
-        with self.assertRaisesRegex(ValueError, "stall_timeout_seconds is required"):
-            broker.start_managed_claude_supervisor(
-                project=str(self.project),
-                supervisor_id="gate-supervisor",
-                objective="O",
-                policy="P",
-            )
+        with mock.patch.object(broker, "BROKER_DIR", self.home), \
+             mock.patch.object(broker, "DB_PATH", self.home / "state.sqlite"), \
+             mock.patch.object(broker, "CONFIG_PATH", self.home / "config.json"):
+            with self.assertRaisesRegex(ValueError, "stall_timeout_seconds is required"):
+                broker.start_managed_claude_supervisor(
+                    project=str(self.project),
+                    supervisor_id="gate-supervisor",
+                    objective="O",
+                    policy="P",
+                )
+        gc.collect()
 
     def test_dry_run_is_windowless_and_does_not_override_model(self):
         result = managed_claude.create_supervisor(

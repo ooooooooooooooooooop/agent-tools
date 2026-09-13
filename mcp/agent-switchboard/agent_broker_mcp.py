@@ -25,9 +25,10 @@ import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import model_roles
 import managed_claude
@@ -924,16 +925,23 @@ def load_config() -> dict[str, Any]:
     return {}
 
 
-def db_connect() -> sqlite3.Connection:
-    """Open the broker DB with WAL + a busy timeout so concurrent hosts/the bridge
-    don't immediately hit 'database is locked' under BEGIN IMMEDIATE claims."""
+@contextmanager
+def db_connect() -> Iterator[sqlite3.Connection]:
+    """Open the broker DB and close it after each managed transaction."""
     conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
     try:
-        conn.execute(f"PRAGMA busy_timeout={DB_TIMEOUT_SECONDS * 1000}")
-        conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.Error:
-        pass
-    return conn
+        try:
+            conn.execute(f"PRAGMA busy_timeout={DB_TIMEOUT_SECONDS * 1000}")
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            pass
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
