@@ -332,7 +332,7 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
                            check=True, capture_output=True, env=env_git)
             subprocess.run(["git", "-C", str(devA), "remote", "set-url", "origin",
                             str(remote)], check=True, capture_output=True, env=env_git)
-            subprocess.run(["git", "-C", str(devA), "push", "-u", "origin", "main"],
+            subprocess.run(["git", "-C", str(devA), "push", "-u", "origin", "HEAD:main"],
                            check=True, capture_output=True, env=env_git)
             devB = td / "B"
             subprocess.run(["git", "clone", "--no-hardlinks", str(remote), str(devB)],
@@ -369,7 +369,7 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
                            capture_output=True, env=env_git)
             subprocess.run(["git", "-C", str(devA), "commit", "-m", "routing: main_default model update"],
                            check=True, capture_output=True, env=env_git)
-            subprocess.run(["git", "-C", str(devA), "push", "origin", "main"],
+            subprocess.run(["git", "-C", str(devA), "push", "origin", "HEAD:main"],
                            check=True, capture_output=True, env=env_git)
 
             # B：pull → diff 必须发现 drift → apply → NO DRIFT
