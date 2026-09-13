@@ -60,11 +60,9 @@ jobs:
 
       - name: Dump test log on failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Get-Content ci-test-output.txt -Tail 400 | Out-File -FilePath ci-fail.md -Encoding utf8
-          gh issue comment 1 --repo ${{ github.repository }} --body-file ci-fail.md
+          Select-String -Path ci-test-output.txt -Pattern '^(FAIL|ERROR):' | ForEach-Object { Write-Output "::error::$($_.Line)" }
+          Get-Content ci-test-output.txt -Tail 30 | ForEach-Object { Write-Output "::error::TAIL $_" }
 
       - name: Run Agent Switchboard MCP regression tests
         run: python -m unittest discover -s mcp/agent-switchboard/tests -v
