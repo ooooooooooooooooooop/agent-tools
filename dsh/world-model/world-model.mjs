@@ -163,14 +163,16 @@ export function apply(ctx, config = {}) {
     return { ok: false, holder: active.body_id };
   }
 
-  function writeProposal(kind, payload, sessionId, s) {
+  function writeProposal(kind, payload, sessionId, s, access) {
     const lease = s ? leaseCheck(s) : { ok: true };
     if (!lease.ok) return { denied: true, holder: lease.holder };
     const p = join(canonicalDir, 'proposals', `${today()}-${kind}-${randomUUID().slice(0, 8)}.json`);
     try {
       writeFileSync(p, safeJson({
         schema_version: SCHEMA_VERSION, kind, session_id: sessionId,
-        timestamp: new Date().toISOString(), body_id: bodyId, payload, status: 'proposed'
+        timestamp: new Date().toISOString(), body_id: bodyId,
+        classification: { level: access || 'PRIVATE', basis: ['taint_or_default'] },
+        payload, status: 'proposed'
       }));
     } catch { /* ignore */ }
     return { path: p };
@@ -294,6 +296,10 @@ export function apply(ctx, config = {}) {
           }
           case 'model': {
             const ids = (input.models || []).map(m => m.id || m.model_id || m.proposition || 'unnamed');
+            // access taint: model entries inherit strictest level of their evidence; default PRIVATE
+            for (const m of (input.models || [])) {
+              if (!m.access) m.access = { level: input.access_level || 'PRIVATE', basis: ['taint_or_default'] };
+            }
             emit(s.id, 'MODEL_CREATED', { ...base, happened: `${ids.length} model(s) registered`, payload: { models: input.models }, epistemic_layer: input.epistemic_layer || 'L2' });
             const cur = join(wmDir, 'current.json');
             let st = {};

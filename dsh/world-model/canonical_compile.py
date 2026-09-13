@@ -149,8 +149,9 @@ def compile_briefing(canon: Path) -> str:
 
     # priority trim: sections in drop order (keep 0-2 longest)
     sections = [s0, s1, s2, s3, s4, s5, s6]
-    text = "# PERSONAL AI BRIEF (GENERATED — do not hand-edit)\n\n" + \
-        "\n\n".join("\n".join(s) for s in sections) + "\n"
+    hdr = "# PERSONAL AI BRIEF (GENERATED — do not hand-edit)\n" \
+          "# classification: INTERNAL | basis: compiled_from_canonical\n\n"
+    text = hdr + "\n\n".join("\n".join(s) for s in sections) + "\n"
     b = text.encode("utf-8")
     if len(b) > HARD_CAP:
         # drop lowest-priority whole entries until under cap; never exceed hard cap
@@ -158,8 +159,7 @@ def compile_briefing(canon: Path) -> str:
         for idx in order:
             while len(sections[idx]) > 2 and len(text.encode("utf-8")) > TARGET_MAX:
                 sections[idx].pop(-1)
-                text = "# PERSONAL AI BRIEF (GENERATED — do not hand-edit)\n\n" + \
-                    "\n\n".join("\n".join(s) for s in sections) + "\n"
+                text = hdr + "\n\n".join("\n".join(s) for s in sections) + "\n"
         if len(text.encode("utf-8")) > HARD_CAP:
             text = text.encode("utf-8")[:HARD_CAP - 40].decode("utf-8", "ignore") + \
                 "\n…(hard-capped at 8KiB)\n"

@@ -221,6 +221,47 @@ class TestInputSemantics(unittest.TestCase):
 
 
 @NEED_NODE
+class TestClassificationCoverage(unittest.TestCase):
+    """Regression for web review: layer/access must cover model entries and
+    proposals, not only ledger events."""
+
+    def _canon(self, td, body="body-A"):
+        canon = fixture_canonical(Path(td))
+        rs = canonical_compile.compile_runtime_state(canon)
+        rs["active_body"] = {"body_id": body}
+        (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
+        return canon
+
+    def test_model_entry_carries_access(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            run_body(Path(td), canon, [
+                {"type": "tool_call", "input": {"op": "model",
+                 "access_level": "PRIVATE",
+                 "models": [{"id": "m-priv", "proposition": "x"}]}}])
+            cur = json.loads((Path(td) / "state-body-A" / "current.json")
+                             .read_text(encoding="utf-8"))
+            self.assertEqual(cur["models"]["m-priv"]["access"]["level"], "PRIVATE")
+
+    def test_proposal_carries_classification(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            run_body(Path(td), canon, [
+                {"type": "tool_call", "input": {"op": "declassify",
+                 "declassify_target": "private-ev-1", "destination": "PUBLIC"}}])
+            props = list((canon / "proposals").glob("*DECLASSIFICATION*"))
+            self.assertTrue(props)
+            prop = json.loads(props[-1].read_text(encoding="utf-8"))
+            self.assertEqual(prop["classification"]["level"], "PRIVATE")
+
+    def test_briefing_header_carries_classification(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            text = canonical_compile.compile_briefing(canon)
+            self.assertIn("classification: INTERNAL", text.splitlines()[1])
+
+
+@NEED_NODE
 class TestGovernanceLease(unittest.TestCase):
     def _canon(self, td, body="body-A"):
         canon = fixture_canonical(Path(td))
