@@ -57,12 +57,7 @@ jobs:
       - name: Dump test log on failure
         if: failure()
         run: |
-          git config user.name ci-debug
-          git config user.email ci-debug@localhost
-          git checkout -b ci-debug
-          git add ci-test-output.txt
-          git commit -m "ci test output"
-          git push -f origin ci-debug
+          Get-Content ci-test-output.txt -Tail 400 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
       - name: Run Agent Switchboard MCP regression tests
         run: python -m unittest discover -s mcp/agent-switchboard/tests -v
