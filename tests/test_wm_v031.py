@@ -572,6 +572,99 @@ class TestDistiller(unittest.TestCase):
             self.assertEqual(rep["lifecycle_proposals"], 0)
 
 
+class TestHypothesisSearch(unittest.TestCase):
+    """Phase B: hypothesis search — frozen B1-B4 fixtures + anti-pollution."""
+
+    def _run(self, td, problems):
+        import hypothesis_search
+        import io, contextlib
+        canon = Path(td) / "canon"
+        (canon / "proposals").mkdir(parents=True)
+        pf = Path(td) / "problems.json"
+        pf.write_text(json.dumps(problems), encoding="utf-8")
+        buf = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["hs.py", "--problems", str(pf), "--canonical", str(canon)]
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = hypothesis_search.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual(rc, 0)
+        rep = json.loads(buf.getvalue().strip().splitlines()[-1])
+        return rep, canon
+
+    def test_B1_omitted_variable_problem_produces_h4_with_prediction(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr1", "kind": "UNEXPLAINED_RESIDUAL",
+                "subject": "adapter restarts",
+                "feature_flags": ["partial_pattern", "residual_unexplained"]}])
+            r = rep["results"][0]
+            self.assertIn("hypotheses", r)
+            self.assertIn("omitted_variable", r["operators"])
+            prop = json.loads(next((canon / "proposals").glob("*hypothesis*"))
+                              .read_text(encoding="utf-8"))
+            h = prop["payload"]["h4_candidates"][0]
+            self.assertTrue(h["discriminative_prediction"])
+            self.assertEqual(h["evidence_type"], "MODEL_OUTPUT")
+
+    def test_B2_ambiguous_problem_yields_distinct_predictions(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr2", "kind": "CONFLICT",
+                "subject": "metric drift",
+                "feature_flags": ["source_conflict", "correlation_only"]}])
+            r = rep["results"][0]
+            self.assertGreaterEqual(len(r["operators"]), 2)
+            prop = json.loads(next((canon / "proposals").glob("*hypothesis*"))
+                              .read_text(encoding="utf-8"))
+            preds = {h["discriminative_prediction"]
+                     for h in prop["payload"]["h4_candidates"]}
+            self.assertEqual(len(preds), len(r["operators"]))
+
+    def test_B3_sufficient_evidence_abstains(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr3", "kind": "ANOMALY",
+                "subject": "x", "evidence_sufficient": True}])
+            self.assertTrue(rep["results"][0]["abstain"])
+            self.assertFalse(list((canon / "proposals").glob("*hypothesis*")))
+
+    def test_B4_exhausted_operators_allow_ontology_h4(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr4", "kind": "CHALLENGED_MODEL",
+                "subject": "all models keep failing",
+                "persistent_failure": True}])
+            r = rep["results"][0]
+            self.assertIn("ontology_error", r["operators"])
+            prop = json.loads(next((canon / "proposals").glob("*hypothesis*"))
+                              .read_text(encoding="utf-8"))
+            ops = [h["operator"] for h in prop["payload"]["h4_candidates"]]
+            self.assertIn("ontology_error", ops)
+
+    def test_never_enumerates_all_operators(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr5", "kind": "ANOMALY",
+                "subject": "x", "feature_flags": ["partial_pattern"]}])
+            r = rep["results"][0]
+            self.assertLessEqual(len(r["operators"]), 3)
+            self.assertNotEqual(len(r["operators"]), 8)
+
+    def test_hypothesis_never_gains_weight_from_generation(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep, canon = self._run(td, [{
+                "problem_id": "pr6", "kind": "ANOMALY",
+                "subject": "x", "feature_flags": ["lag_possible"]}])
+            prop = json.loads(next((canon / "proposals").glob("*hypothesis*"))
+                              .read_text(encoding="utf-8"))
+            for h in prop["payload"]["h4_candidates"]:
+                self.assertEqual(h["confidence"], "low")
+                self.assertEqual(h["evidence_type"], "MODEL_OUTPUT")
+
+
 class TestLearningProgressIsolation(unittest.TestCase):
     def test_evaluator_readonly_vector_output(self):
         with tempfile.TemporaryDirectory() as td:
