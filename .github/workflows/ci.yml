@@ -52,7 +52,17 @@ jobs:
         run: python -c "import json; json.load(open('mcp.json', encoding='utf-8'))"
 
       - name: Run repository regression tests
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -v > ci-test-output.txt 2>&1
+
+      - name: Dump test log on failure
+        if: failure()
+        run: |
+          git config user.name ci-debug
+          git config user.email ci-debug@localhost
+          git checkout -b ci-debug
+          git add ci-test-output.txt
+          git commit -m "ci test output"
+          git push -f origin ci-debug
 
       - name: Run Agent Switchboard MCP regression tests
         run: python -m unittest discover -s mcp/agent-switchboard/tests -v
