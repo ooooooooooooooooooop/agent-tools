@@ -1,0 +1,28 @@
+{
+  "soul_version": "0.1.0",
+  "schema_version": "1.1",
+  "theory_version": "0.3.1",
+  "briefing": {
+    "sections": 7,
+    "target_max_bytes": 6144,
+    "hard_cap_bytes": 8192,
+    "compiler": "dsh/world-model/canonical_compile.py",
+    "template": "briefing/template.md"
+  },
+  "models": {
+    "l2": [
+      {
+        "model_id": "M-sandbox-admission-gate",
+        "file": "models/l2/M-sandbox-admission-gate.yaml",
+        "classification": "SANITIZED",
+        "derived_from": "model:M-sandbox-admission-gate @ pilot canonical"
+      }
+    ],
+    "l3": []
+  },
+  "bootstrap": {
+    "canonical": "bootstrap/canonical/",
+    "seeds": "bootstrap/seeds/"
+  },
+  "release_commit": null
+}

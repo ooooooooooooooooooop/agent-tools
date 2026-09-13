@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Personal AI canonical current.yaml — schema 1.1",
+  "description": "Structural contract for a Personal AI canonical directory's current.yaml. Mirrors the skeleton in soul/bootstrap/canonical/current.yaml and the field set enforced by dsh/world-model/migrate_v031.py. Sidecar files in the same directory: governance.yaml, sources.yaml, interfaces.yaml, lineage.yaml, history/ (append-only lineage), proposals/.",
+  "type": "object",
+  "required": ["schema_version", "identity", "world_model", "value_model"],
+  "properties": {
+    "schema_version": { "const": "1.1" },
+    "theory_version": { "type": "string" },
+    "watermark": { "type": ["string", "null"] },
+    "identity": {
+      "type": "object",
+      "required": ["entity_id"],
+      "properties": {
+        "entity_id": { "type": "string" },
+        "governance_ref": { "type": "string" },
+        "lineage_ref": { "type": "string" },
+        "lineage_head": { "type": ["string", "null"] }
+      }
+    },
+    "world_model": {
+      "type": "object",
+      "properties": {
+        "models": { "type": "object" },
+        "competing_models": { "type": "object" },
+        "uncertainty": { "type": "array" },
+        "open_predictions": { "type": "array" },
+        "residuals": { "type": "array" }
+      }
+    },
+    "value_model": {
+      "type": "object",
+      "properties": {
+        "current_values": { "type": "array" },
+        "uncertainty": { "type": "array" },
+        "update_protocol_ref": { "type": "string" }
+      }
+    },
+    "x_preserved": { "type": "object" }
+  }
+}
