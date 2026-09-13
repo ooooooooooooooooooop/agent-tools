@@ -32,7 +32,7 @@ class HookEventServerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name) / "broker"
+        self.root = (Path(self.tmp.name) / "broker").resolve()
         self.state_dir = self.root / "supervisors" / SUPERVISOR_ID
         self.state_dir.mkdir(parents=True)
         managed_claude._write_json(
