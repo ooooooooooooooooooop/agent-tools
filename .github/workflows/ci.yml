@@ -61,7 +61,8 @@ jobs:
       - name: Dump test log on failure
         if: failure()
         run: |
-          Select-String -Path ci-test-output.txt -Pattern '(Error|Exception|assert|No such|denied|Missing|Traceback|FileNotFound)' | Select-Object -First 45 | ForEach-Object { Write-Output "::error::$($_.Line)" }
+          Select-String -Path ci-test-output.txt -Pattern '^\S*(Error|Exception|Interrupt|Exit|Denied|Missing|NotFound|Failed|Expired|Timeout|Refused)\w*\s*:' | Select-Object -First 45 | ForEach-Object { Write-Output "::error::$($_.Line)" }
+          Select-String -Path ci-test-output.txt -Pattern 'File ".*tests.*test_aic_apply.*", line' | Select-Object -First 20 | ForEach-Object { Write-Output "::error::CTX $($_.Line)" }
 
       - name: Run Agent Switchboard MCP regression tests
         run: python -m unittest discover -s mcp/agent-switchboard/tests -v
