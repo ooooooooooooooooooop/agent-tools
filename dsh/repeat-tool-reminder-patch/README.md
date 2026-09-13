@@ -21,12 +21,12 @@ Cannot read properties of undefined (reading 'some')
 文件：`<npx-cache>/node_modules/@deepseek-ai/dsh-repeat-tool-reminder/lib/index.js`（line 317-320）
 
 ```diff
- 	ctx.on("agent/pre-step", ({ agent, messages }, next) => {
--		if (messages.some((message) => message.source.kind === "user")) chains.delete(agent);
-+		// Local patch 2026-08-26: guard against messages undefined on some event paths
-+		if (Array.isArray(messages) && messages.some((message) => message.source?.kind === "user")) chains.delete(agent);
- 		return next();
- 	});
+  ctx.on("agent/pre-step", ({ agent, messages }, next) => {
+-  if (messages.some((message) => message.source.kind === "user")) chains.delete(agent);
++  // Local patch 2026-08-26: guard against messages undefined on some event paths
++  if (Array.isArray(messages) && messages.some((message) => message.source?.kind === "user")) chains.delete(agent);
+   return next();
+  });
 ```
 
 同时防御了 `message.source` undefined（`?.`）。

@@ -3,7 +3,7 @@
 本文件是这台电脑 Personal AI 生命周期的**唯一入口**。
 用户只需要对这台电脑上的 Agent 说一句：
 
-> **读取 https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md，自主配置这台电脑**
+> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md，自主配置这台电脑>**
 
 安装 / 更新 / 恢复 / 同步的全部意图都已固化在本文件中。读到本文件的 Agent 必须自主执行到底，只在 §5 列出的情形下才向用户报告。
 
@@ -92,13 +92,14 @@ Result: PASS
 
 `dsh-session-history` 状态 = `PASS`（备份与 live 会话数匹配、锚点与 schema 探针通过）/ `NOT_APPLICABLE`（从未配置备份的 fresh 设备，不阻塞）/ `PARTIAL` / `FAIL`。**不得用一个总体 PASS 混合各 plane**；历史缺失时总体 `Result` 一律降为 REVIEW。
 
-
 ## 4.1 Harness compatibility overlay 与外部 Harness 原生化
 
 DSH 的固定 Base、Node、UI bundle、五个 overlay、Profile patch、组合 manifest
 和原子回滚统一由：
 
-    DSH_HOME=<HOME>/.dsh python <REPO>/scripts/aic/aic.py apply dsh
+```powershell
+DSH_HOME=<HOME>/.dsh python <REPO>/scripts/aic/aic.py apply dsh
+```
 
 负责。不得再直接调用旧的测试安装器；旧安装器仅作为历史取证材料保留。
 

@@ -21,7 +21,7 @@ Termed `dsh-compaction-convergence` patch, applied in the fork of `lib/index.js`
 
 - FIX A — `selectCompactableRange`: after computing the retain-tail boundary, skip head nodes whose `data.source` is a compaction checkpoint; keep the tool-pairing balanced start rule; when the whole remaining candidate region is checkpoint-only → return `null` (no useless summarizer).
   - checkpoints are no longer shadowed sources; checkpoints are never deleted; `surfaceOp.replace` canonical semantics and durable log untouched.
-- FIX B — `BasicCompactionEngine.compactIfNeeded` (pressure branch): remembers the failing region `{start, end, fingerprint}` where fingerprint = `\`${surfaceTokens}:${surface.nodes.length}\``. On a later pre-step, if the same region resolves again with an unchanged fingerprint, the summarizer is not invoked (returns `null`). Any surface append/replace changes the fingerprint and re-enables evaluation. Transient/provider failures are not fused (only `isSummaryNotSmallerError` marks the region).
+- FIX B — `BasicCompactionEngine.compactIfNeeded` (pressure branch): remembers the failing region `{start, end, fingerprint}` where fingerprint = `\`${surfaceTokens}:${surface.nodes.length}\``. On a later pre-step, if the same region resolves again with an unchanged fingerprint, the summarizer is not invoked (returns`null`). Any surface append/replace changes the fingerprint and re-enables evaluation. Transient/provider failures are not fused (only`isSummaryNotSmallerError` marks the region).
 
 ## 4. Changed files (pinned fork, all new)
 

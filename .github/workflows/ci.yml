@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Validate agent tooling repository
         run: python3 scripts/validate_repo.py --strict
@@ -21,7 +24,11 @@ jobs:
       - name: Lint Markdown
         uses: DavidAnson/markdownlint-cli2-action@v19
         with:
-          globs: "**/*.md"
+          globs: |
+            **/*.md
+            !registry/inventory/apply-backups/**
+            !output/**
+            !.claude/**
 
       - name: Check Python syntax
         run: |

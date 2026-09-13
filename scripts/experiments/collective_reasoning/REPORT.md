@@ -198,7 +198,7 @@ tendency to leave the task's option space.
 
 Evidence-based rationale:
 - Do NOT promote the full open COLLECTIVE protocol (cross-reading + free rounds
-  + weakest-belief + blind-spot + re-entry + neutral renderer) as a replacement
+  - weakest-belief + blind-spot + re-entry + neutral renderer) as a replacement
   for `simulate-elite-experts`: it costs ~2.4x COUNCIL tokens, its rendered
   finals rate below COUNCIL/CURRENT on actionability, and it occasionally
   violates task option-space constraints.
@@ -252,7 +252,7 @@ python run_experiment.py --run-id exp1 --phase metrics
 
 ---
 
-# Phase 2 Addendum: Renderer-Causality Ablation (exp1r)
+## Phase 2 Addendum: Renderer-Causality Ablation (exp1r)
 
 Date: 2026-09-04 | Status: **STAGE A COMPLETE** | Evidence Level: **CAUSAL ABLATION**
 
@@ -319,7 +319,7 @@ The renderer effect is a **quality-dimension trade-off**, not an unconditional q
 upgrade. When judged against another condensed synthesis (COUNCIL), R1's structured
 decision commitment wins on actionability (4-2). However, compressing reasoning into a
 terse decision synthesis discards the analytical depth and explicit tension tracking that
-blind judges reward in uncompressed formats (R0 and CURRENT). 
+blind judges reward in uncompressed formats (R0 and CURRENT).
 
 Furthermore, a sample of 3 tasks × 2 judges (4:2 over COUNCIL) represents suggestive,
 task-dependent evidence, not universal or definitive proof. The hypothesis that
@@ -408,4 +408,3 @@ reasoning is not a viable production architecture.
    as an explicit, opt-in mode for high-stakes judgment tasks.
 3. **Retire Full Multi-Model Debate:** Do not build multi-round open debate loops or
    forced neutral-scribe formatters for production workloads.
-

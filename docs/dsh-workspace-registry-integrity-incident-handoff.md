@@ -52,19 +52,19 @@ SECOND_WRITER_INSTANCE=STRONGLY_SUPPORTED_NOT_IDENTIFIED
 
 All repo-owned Phase-1 mitigation layers have been implemented, tested, and committed on branch `workspace-registry-phase1` (commit `58d6569`):
 
-* **restart fail-closed:**
+- **restart fail-closed:**
   `scripts/aic/dsh_desktop_restart.ps1` updated: `Wait-PortFree` no longer "proceeds anyway" on timeout. Added `[switch]$FailClosed`, which explicitly throws `RESTART_BLOCKED_OLD_HOST_NOT_TERMINATED` when residual port 3080 connections remain, preventing a new host from launching alongside an existing one.
-* **production single-host guard:**
+- **production single-host guard:**
   `scripts/aic/dsh_desktop_restart.ps1` checks `Test-DshReady` before restarting; if the host is already running and healthy, it reuses the instance and exits cleanly (`exit 0`) rather than terminating and restarting.
   `dsh-config/profiles/web/dsh-launch-web.ps1` checks if port 3080 is `LISTENING` (`SINGLE_INSTANCE_GUARD`) and aborts with a clear error if another host is already active.
-* **workspace registry integrity validator:**
+- **workspace registry integrity validator:**
   `scripts/personal_ai_sync.py::workspace_registry_integrity()` added as an authoritative read-only health validator verifying:
   - `records === order` set equality
   - No duplicate normalized canonical paths (`realpathNormalize`)
   - Unique session ownership across workspaces
-* **pre-launch integrity gate:**
+- **pre-launch integrity gate:**
   The integrity validator executes during sync/restore preflight checks (`run_restore`), flagging invalid shapes as `REVIEW_REQUIRED` before operational state can be damaged.
-* **Sync workspace health:**
+- **Sync workspace health:**
   Integrated into human-readable sync status reporting and automated regressions, providing continuous visibility into storage health.
 
 ```text
@@ -77,10 +77,10 @@ PHASE1_MITIGATION=PASS
 
 The following deep root-cause protections have **not** been implemented in this repository:
 
-* **cross-process lock** (OS-level file lock on `openUnit`)
-* **revision/CAS** (monotonic document revision + compare-and-swap on `writeAtomic`)
-* **stale-write rejection** (`STALE_WRITE_REJECTED` error code and caller retry waterfall)
-* **true write-time invariant prevention** (pre-write validation before durable persistence)
+- **cross-process lock** (OS-level file lock on `openUnit`)
+- **revision/CAS** (monotonic document revision + compare-and-swap on `writeAtomic`)
+- **stale-write rejection** (`STALE_WRITE_REJECTED` error code and caller retry waterfall)
+- **true write-time invariant prevention** (pre-write validation before durable persistence)
 
 ### 原因 (Reason):
 `@deepseek-ai/dsh-storage-json`, `@deepseek-ai/dsh-workspace`, and `@deepseek-ai/dsh-storage-domain` are deep base packages embedded inside the pinned immutable base snapshot (`base-dsh-0.1.1-rc.2`).

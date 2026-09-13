@@ -110,11 +110,9 @@ class RepositoryContractTests(unittest.TestCase):
     def test_public_boundary_no_machine_paths_repo_wide(self) -> None:
         import subprocess
 
-        text_suffixes = {
-            ".py", ".md", ".mjs", ".js", ".json", ".yml", ".yaml", ".ps1",
-            ".txt", ".sh", ".toml", ".cfg", ".ini", ".html", ".css",
-        }
-        # \w+ cannot match "<...>" placeholders, so <USER>/<you> stay legal.
+        # All tracked non-binary files are scanned (binary = NUL byte in the
+        # first 8 KiB, or >4 MiB). \w+ cannot match "<...>" placeholders, so
+        # <USER>/<you> stay legal.
         win_user = re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+(\w+)", re.IGNORECASE)
         posix_home = re.compile(r"(?<![\w.:/-])/(home|Users)/[A-Za-z0-9_.-]+/")
         other_drive = re.compile(r"(?<![A-Za-z])[D-Zd-z]:[\\/]+")
@@ -125,9 +123,12 @@ class RepositoryContractTests(unittest.TestCase):
         ).stdout.splitlines()
         for rel in tracked:
             path = ROOT / rel
-            if path.suffix.lower() not in text_suffixes or not path.is_file():
+            if not path.is_file():
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
+            data = path.read_bytes()
+            if len(data) > 4 * 1024 * 1024 or b"\x00" in data[:8192]:
+                continue
+            text = data.decode("utf-8", errors="replace")
             for line_no, line in enumerate(text.splitlines(), 1):
                 if "boundary-scan-allow" in line:
                     continue

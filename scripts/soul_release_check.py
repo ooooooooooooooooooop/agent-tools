@@ -8,6 +8,11 @@ Verifies manifest.json against git reality:
   4. content_commit is an ancestor of the tagged commit
   5. recomputed payload_digest == manifest payload_digest
 
+Modes: default (pre-release) treats a not-yet-created release tag as a
+warning — used by PR/regression gates so soul-N+1 development does not
+deadlock on its own tag. `--require-tag` makes a missing tag a hard FAIL;
+run it after tagging as the release-time check.
+
 Digest rule (canonical): sha256 over sorted rel-posix-path bytes +
 newline-normalized file bytes (CRLF/CR -> LF, stable across autocrlf
 checkouts) for every file under soul/ except manifest.json.
@@ -45,6 +50,7 @@ def git(*args: str) -> subprocess.CompletedProcess:
 
 
 def main() -> int:
+    require_tag = "--require-tag" in sys.argv
     fails: list[str] = []
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     rel = manifest.get("release") or {}
@@ -59,7 +65,10 @@ def main() -> int:
 
     tag_ref = git("rev-parse", "--verify", f"refs/tags/{tag}")
     if tag_ref.returncode != 0:
-        fails.append(f"release.tag {tag!r} does not resolve to a git tag")
+        if require_tag:
+            fails.append(f"release.tag {tag!r} does not resolve to a git tag")
+        else:
+            print(f"WARN release.tag {tag!r} not yet created (pre-release state)")
         tag_commit = None
     else:
         tag_commit = git("rev-list", "-n", "1", tag).stdout.strip()

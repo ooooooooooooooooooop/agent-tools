@@ -71,7 +71,7 @@ After approval, adoption must use the existing capability inventory/registry, AI
 ## AUTONOMOUS_EXECUTION_GOVERNANCE (PERSONAL AI · generated — do not edit)
 
 本块由 Personal AI canonical SSOT 生成（registry/autonomous-execution-governance.yaml
-+ execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml），
+- execution-profiles.yaml + checkpoint-schema.yaml + usage-ledger-schema.yaml），
 由 `aic render/diff` 管理；手改即 drift，会被 `aic diff` 检出并回滚。
 
 - 项目（novel 等）不得自带 autonomous governance 实现；**用户无需声明或手写

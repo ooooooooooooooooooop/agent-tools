@@ -1,6 +1,6 @@
 # Vendored fork notice
 
-Source: https://github.com/Octo-Lex/ChatGPT-Web2API @ `497527d` (MIT, Elephant Rock Lab).
+Source: <https://github.com/Octo-Lex/ChatGPT-Web2API> @ `497527d` (MIT, Elephant Rock Lab).
 
 Local delta carried in this copy (applied on top of upstream):
 

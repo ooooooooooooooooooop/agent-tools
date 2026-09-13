@@ -7,6 +7,7 @@ PHASE5_RUNTIME_CLOSURE = PASS。configured_codex_path=...\f71e347e(失效) → a
 queue_cli_request backend=codex_cli, req 0571670a-fae9-4464-9203-64e2d42c2b41：autorun worker → codex exec → completed 11s，responder_model=codex_cli:gpt-5.6-luna，输出 "RUNTIME_OK GPT-5"，ledger/topic 已记录。SWITCHBOARD_CODEX_RUNTIME = PASS。
 
 ## 3. Durability reality matrix（2026-08-28 新测）
+
 | dataset | source | 规模/变化率 | backup | last_success | RPO | 保留 | restore | 自动化 |
 |---|---|---|---|---|---|---|---|---|
 | sessions | ~/.dsh/sessions | 556 文件 256.8MB（全 <30d，高增长） | 增量复制+hash manifest | 2026-08-28 | 26h | hot90d/cold12mo | restore_check 三方哈希 | ✅ nightly |

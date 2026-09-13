@@ -20,7 +20,7 @@ Pilot 不建设新的平行 Research Lab、状态系统、Manager 平台或认�
 
 ---
 
-# 1. Pilot 目标
+## 1. Pilot 目标
 
 真正目标不是增加世界模型术语、Agent 数量、自治率或测试数量。
 
@@ -41,7 +41,7 @@ Pilot 要验证的是：
 
 ---
 
-# 2. 当前真实状态
+## 2. 当前真实状态
 
 “当前”在本文中指**截至目前能够恢复出的最新可靠项目证据**，不是声称已于 2026-09-10 对用户本机进行了现场检查。
 
@@ -270,7 +270,7 @@ Goal supervisor、personal_status、durability、Sync、现有 Agent 路由事�
 
 ---
 
-# 3. Personal AI 项目 Adapter
+## 3. Personal AI 项目 Adapter
 
 ## State
 
@@ -409,7 +409,7 @@ Personal AI 中可以承担强 Observation 的包括：
 
 ---
 
-# 4. 当前 Open Loops
+## 4. 当前 Open Loops
 
 按现有真实材料恢复，而不是为 Pilot 创造实验：
 
@@ -468,7 +468,7 @@ Personal AI 中可以承担强 Observation 的包括：
 
 ---
 
-# 5. Pilot 竞争假设
+## 5. Pilot 竞争假设
 
 主竞争关系：
 
@@ -481,7 +481,7 @@ Personal AI 中可以承担强 Observation 的包括：
 
 ---
 
-# 6. 运行规则
+## 6. 运行规则
 
 用户继续正常用自然语言提出目标。
 
@@ -507,7 +507,7 @@ AI 内部负责：
 
 ---
 
-# 7. 更新与版本规则
+## 7. 更新与版本规则
 
 V0.1 从本轮起冻结。
 
@@ -540,7 +540,7 @@ V0.1 从本轮起冻结。
 
 ---
 
-# 8. 当前协议适配问题
+## 8. 当前协议适配问题
 
 首轮发现一个 Personal AI 特有的重要适配点：
 
