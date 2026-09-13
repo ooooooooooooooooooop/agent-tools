@@ -1,0 +1,30 @@
+# ============================================================================
+# dsh-world-model：Personal AI 世界模型机制层
+#
+# 用法：把 world-model.mjs 复制到 <profile>/plugins/，并把下面条目合并进
+#   <profile>/cordis.patch.yml（如 ~/.dsh/profiles/web|headless/cordis.patch.yml）
+#
+# 模式（config.mode 或 env DSH_WM_MODE）：
+#   off  默认：只记 ledger，不设门禁
+#   core 重要任务闭环：consequential mutation 需绑定预测
+#   full 竞争模型/复杂决策：core + 完整九环评估
+#
+# 状态层：
+#   L1 runtime   ~/.dsh/world-model/{ledger,runs,current.json,body-state.json}
+#   L2/L3 canonical <canonicalDir>/{current,governance,lineage,sources,
+#     interfaces,operators,open-loops}.yaml + briefing.md(编译产物)
+#     + runtime-state.json(编译投影) + history/ + proposals/
+#   canonical 只接受 proposals 路径写入，runtime 不自动改写。
+#   V0.3.1：canonical 编译由 canonical_compile.py 完成（briefing.md 生成物，
+#   不可手写）；迁移/回滚 migrate_v031.py；LP lp_evaluator.py（只读隔离）；
+#   BCC-1 兼容协议 bcc_check.py + simulate_body.mjs。
+# ============================================================================
+
+- insert:
+  - id: dsh-world-model
+    name: './plugins/world-model.mjs'
+    config:
+      mode: null          # null → env DSH_WM_MODE → off
+      stateDir: null      # null → ~/.dsh/world-model
+      canonicalDir: null  # null → ~/personal-ai-state/world-model（junction→world-model/pilot）
+      bodyId: null        # null → dsh-<hostname>；必须与 lineage.active_body 一致才可写 canonical proposals
