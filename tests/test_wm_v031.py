@@ -575,6 +575,46 @@ class TestDistiller(unittest.TestCase):
 class TestHypothesisSearch(unittest.TestCase):
     """Phase B: hypothesis search — frozen B1-B4 fixtures + anti-pollution."""
 
+    def _mk_runs(self, td, sessions):
+        state = Path(td) / "state"
+        runs = state / "runs"
+        runs.mkdir(parents=True)
+        old = time.time() - 7200
+        for sid, evs in sessions.items():
+            f = runs / f"{sid}.jsonl"
+            f.write_text("\n".join(json.dumps(e) for e in evs), encoding="utf-8")
+            os.utime(f, (old, old))
+        return state
+
+    def _pred(self, sid, pid, model="m-x", stmt="adapter restart fixes it"):
+        return {"event_type": "PREDICTION_CREATED", "session_id": sid,
+                "prediction_id": pid, "model_id": model,
+                "payload": {"statement": stmt}}
+
+    def _eval(self, sid, pid, verdict, src="later_reality"):
+        return {"event_type": "PREDICTION_EVALUATED", "session_id": sid,
+                "prediction_id": pid,
+                "payload": {"verdict": verdict, "evaluation_source": src}}
+
+    def _canon(self, td):
+        canon = fixture_canonical(Path(td))
+        (canon / "proposals").mkdir(exist_ok=True)
+        return canon
+
+    def _run_distiller(self, state, canon, abstractor="none"):
+        import distiller
+        import io, contextlib
+        buf = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["distiller.py", "--state", str(state),
+                    "--canonical", str(canon), "--closed-minutes", "30",
+                    "--abstractor", abstractor]
+        try:
+            with contextlib.redirect_stdout(buf):
+                distiller.main()
+        finally:
+            sys.argv = argv
+
     def _run(self, td, problems):
         import hypothesis_search
         import io, contextlib
@@ -663,6 +703,96 @@ class TestHypothesisSearch(unittest.TestCase):
             for h in prop["payload"]["h4_candidates"]:
                 self.assertEqual(h["confidence"], "low")
                 self.assertEqual(h["evidence_type"], "MODEL_OUTPUT")
+
+
+    def test_A_to_B_conflict_packet_produces_problem_object(self):
+        import distiller
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            packets = distiller.build_packets(
+                self._mk_runs(td, {
+                    "s1": [self._pred("s1", "p1"),
+                           self._eval("s1", "p1", "confirmed")],
+                    "s2": [self._pred("s2", "p2"),
+                           self._eval("s2", "p2", "refuted")]}), 30, {})
+            problems, gated = distiller.build_problems(canon, packets)
+            self.assertEqual(len(problems), 1)
+            p = problems[0]
+            self.assertEqual(p["type"], "CONFLICT")
+            for fld in distiller.PROBLEM_FIELDS:
+                self.assertIn(fld, p)
+
+    def test_problem_gating_requires_attempted_update_or_reason(self):
+        import distiller
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            cur = yaml.safe_load((canon / "current.yaml").read_text(encoding="utf-8"))
+            cur["world_model"]["models"]["M1"]["counterevidence_refs"] = ["ev9"]
+            (canon / "current.yaml").write_text(
+                yaml.safe_dump(cur, allow_unicode=True), encoding="utf-8")
+            problems, gated = distiller.build_problems(canon, [])
+            self.assertEqual(problems, [])
+            self.assertEqual(len(gated), 1)  # suppressed, not silently dropped
+
+    def test_B_consumes_distiller_problem_dir(self):
+        import distiller, hypothesis_search
+        import io, contextlib
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "refuted")]})
+            # run distiller → problems/ written
+            self._run_distiller(state, canon, abstractor="template")
+            probs = list((canon / "problems").glob("*.json"))
+            self.assertTrue(probs)
+            # run hypothesis_search on the problems dir
+            buf = io.StringIO()
+            argv = sys.argv
+            sys.argv = ["hs.py", "--problems", str(canon / "problems"),
+                        "--canonical", str(canon)]
+            try:
+                with contextlib.redirect_stdout(buf):
+                    hypothesis_search.main()
+            finally:
+                sys.argv = argv
+            rep = json.loads(buf.getvalue().strip().splitlines()[-1])
+            self.assertEqual(rep["results"][0]["problem_id"],
+                             json.loads(probs[0].read_text(encoding="utf-8"))
+                             ["problem_id"])
+
+    def test_worker_output_validated_against_problem(self):
+        import hypothesis_search
+        prob = {"problem_id": "prw", "type": "CONFLICT",
+                "scope": ["adapter"], "evidence_refs": ["e1", "e2"]}
+        out = hypothesis_search.hypothesize(prob, worker_out=[
+            {"operator": "omitted_variable", "hypothesis": "hidden var",
+             "scope": ["adapter"], "evidence_refs": ["e1"],
+             "discriminative_prediction": "stratify → separates",
+             "falsifier": "x"},
+            {"operator": "measurement_artifact", "hypothesis": "bad meter",
+             "scope": ["adapter"], "evidence_refs": ["e999"],
+             "discriminative_prediction": "independent channel clean",
+             "falsifier": "y"}])
+        self.assertEqual(len(out["hypotheses"]), 1)
+        self.assertEqual(out["worker_rejected"][0]["reasons"],
+                         ["cites evidence outside problem packet"])
+
+    def test_worker_pseudo_competition_deduped(self):
+        import hypothesis_search
+        prob = {"problem_id": "prd", "type": "ANOMALY",
+                "scope": ["x"], "evidence_refs": ["e1"],
+                "feature_flags": ["partial_pattern", "lag_possible"]}
+        out = hypothesis_search.hypothesize(prob, worker_out=[
+            {"operator": "a", "hypothesis": "h1", "scope": ["x"],
+             "evidence_refs": ["e1"], "discriminative_prediction": "SAME",
+             "falsifier": "f"},
+            {"operator": "b", "hypothesis": "h2", "scope": ["x"],
+             "evidence_refs": ["e1"], "discriminative_prediction": "SAME",
+             "falsifier": "f"}])
+        self.assertEqual(len(out["hypotheses"]), 1)
+        self.assertEqual(out["worker_rejected"][0]["reasons"],
+                         ["duplicate prediction"])
 
 
 class TestLearningProgressIsolation(unittest.TestCase):

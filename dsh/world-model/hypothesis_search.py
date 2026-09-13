@@ -95,7 +95,7 @@ OPERATORS = {
 
 def _features(problem: dict) -> set:
     f = set(problem.get("feature_flags") or [])
-    kind = problem.get("kind")
+    kind = problem.get("type") or problem.get("kind")
     if kind == "CONFLICT":
         f |= {"source_conflict"}
     if kind == "CHALLENGED_MODEL" and problem.get("persistent_failure"):
@@ -117,9 +117,30 @@ def applicable_ops(features: set, max_ops: int = 3) -> list[str]:
     return hits[:max_ops]
 
 
-def hypothesize(problem: dict) -> dict:
-    """One problem → {hypotheses, abstain}. Never fabricates support."""
-    kind = problem.get("kind")
+def validate_h4(h: dict, problem: dict) -> tuple[bool, list]:
+    """Shared semantic-worker validator (GENERATE_HYPOTHESES mode)."""
+    reasons = []
+    if not h.get("discriminative_prediction"):
+        reasons.append("no discriminative prediction")
+    prob_refs = set(problem.get("evidence_refs") or [])
+    cited = set(h.get("evidence_refs") or [])
+    if prob_refs and not cited <= prob_refs:
+        reasons.append("cites evidence outside problem packet")
+    prob_scope = set(problem.get("scope") or [])
+    if prob_scope and h.get("scope"):
+        if not set(h["scope"] if isinstance(h["scope"], list)
+                   else [h["scope"]]) <= prob_scope | {"*"}:
+            reasons.append("scope outside problem scope")
+    if not h.get("falsifier"):
+        reasons.append("missing falsifier")
+    return (not reasons), reasons
+
+
+def hypothesize(problem: dict, worker_out: dict | None = None) -> dict:
+    """One problem → {hypotheses, abstain}. Never fabricates support.
+    worker_out = semantic worker (GENERATE_HYPOTHESES) results; template
+    operators provide the deterministic fallback when no worker bound."""
+    kind = problem.get("type") or problem.get("kind")
     if kind not in PROBLEM_KINDS:
         return {"abstain": True, "reason": f"unsupported problem kind {kind}"}
     feats = _features(problem)
@@ -135,10 +156,11 @@ def hypothesize(problem: dict) -> dict:
     out = []
     for op in ops:
         spec = OPERATORS[op]
-        out.append({
+        h = {
             "hypothesis_id": f"h4-{hashlib.sha256((problem.get('problem_id','?')+op).encode()).hexdigest()[:8]}",
             "operator": op,
             "hypothesis": spec["hypothesis"].format(subject=subj),
+            "scope": problem.get("scope") or [subj],
             "discriminative_prediction": spec["discriminative_prediction"],
             "evidence_type": "MODEL_OUTPUT",
             "confidence": "low",
@@ -146,26 +168,69 @@ def hypothesize(problem: dict) -> dict:
                     "being generated here confers zero evidential weight",
             "falsifier": "the discriminative prediction fails under a "
                          "controlled observation",
-        })
-    return {"abstain": False, "hypotheses": out}
+        }
+        out.append(h)
+    # semantic worker overrides/extends templates with strict validation
+    worker_rejected = []
+    if worker_out:
+        merged = []
+        for h in worker_out:
+            ok, reasons = validate_h4(h, problem)
+            if not ok:
+                worker_rejected.append({"operator": h.get("operator"),
+                                        "reasons": reasons})
+                continue
+            h.setdefault("evidence_type", "MODEL_OUTPUT")
+            h.setdefault("confidence", "low")
+            merged.append(h)
+        # dedup pseudo-competition: identical predictions collapse
+        seen_preds, dedup = set(), []
+        for h in merged:
+            p = h["discriminative_prediction"]
+            if p in seen_preds:
+                worker_rejected.append({"operator": h.get("operator"),
+                                        "reasons": ["duplicate prediction"]})
+                continue
+            seen_preds.add(p)
+            dedup.append(h)
+        if dedup:
+            out = dedup
+    result = {"abstain": False, "hypotheses": out}
+    if worker_rejected:
+        result["worker_rejected"] = worker_rejected
+    return result
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--problems", required=True,
-                    help="JSON file: list of problem objects")
+                    help="JSON file or problems/ dir of problem objects")
     ap.add_argument("--canonical", required=True)
+    ap.add_argument("--worker", default=None,
+                    help="file:<path> — semantic worker GENERATE_HYPOTHESES "
+                         "output JSON {problem_id: [h4 objects]}")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    problems = json.loads(Path(args.problems).read_text(encoding="utf-8"))
+    src = Path(args.problems)
+    if src.is_dir():
+        problems = [json.loads(f.read_text(encoding="utf-8"))
+                    for f in sorted(src.glob("*.json"))]
+    else:
+        problems = json.loads(src.read_text(encoding="utf-8"))
+    worker = {}
+    if args.worker and args.worker.startswith("file:"):
+        worker = json.loads(Path(args.worker[5:]).read_text(encoding="utf-8"))
     canon = Path(args.canonical)
     results, written = [], []
     for prob in problems:
-        r = hypothesize(prob)
-        results.append({"problem_id": prob.get("problem_id"), **(
+        r = hypothesize(prob, worker.get(prob.get("problem_id")))
+        entry = {"problem_id": prob.get("problem_id"), **(
             {"abstain": True, "reason": r["reason"]} if r["abstain"] else
             {"hypotheses": len(r["hypotheses"]),
-             "operators": [h["operator"] for h in r["hypotheses"]]})})
+             "operators": [h["operator"] for h in r["hypotheses"]]})}
+        if r.get("worker_rejected"):
+            entry["worker_rejected"] = r["worker_rejected"]
+        results.append(entry)
         if not r["abstain"] and not args.dry_run:
             pdir = canon / "proposals"
             pdir.mkdir(exist_ok=True)

@@ -350,6 +350,87 @@ def load_abstractor(spec: str):
     raise ValueError(f"unknown abstractor: {spec}")
 
 
+# ---------------- problem-object builder (A→B bridge) ----------------
+
+PROBLEM_FIELDS = ("problem_id", "type", "trigger_event", "affected_model_ids",
+                  "residual_refs", "evidence_refs", "scope",
+                  "attempted_updates", "why_existing_models_insufficient",
+                  "access")
+
+
+def build_problems(canon: Path, packets: list[dict]) -> list[dict]:
+    """Mechanical problem-object builder. Sources are FIXED — the model never
+    decides 'is this a problem':
+      CONFLICT            ← packet with independent-evidence conflict
+      CHALLENGED_MODEL    ← active model carrying valid counterevidence
+      UNEXPLAINED_RESIDUAL← evaluated predictions no current model explains
+      DISTILLED_PATTERN   ← grounded pattern no existing model absorbs
+    Gating: if an ordinary parameter/structure update was never attempted and
+    no reason given, the problem is suppressed (not silently dropped —
+    reported as gated)."""
+    problems, gated = [], []
+    cur = _load_yaml(canon / "current.yaml")
+    models = ((cur.get("world_model") or {}).get("models") or {})
+    for pkt in packets:
+        if pkt["conflict"]:
+            problems.append({
+                "problem_id": "prob-" + pkt["packet_id"][4:],
+                "type": "CONFLICT", "trigger_event": pkt["packet_id"],
+                "affected_model_ids": [],
+                "residual_refs": pkt["verdicts"].get("refuted", []),
+                "evidence_refs": pkt["supporting"]["evidence_refs"],
+                "scope": pkt["observed_scopes"] or [pkt["signature"]],
+                "attempted_updates": [],
+                "why_existing_models_insufficient":
+                    "independent grounded evidence conflicts — no current "
+                    "model covers both verdicts",
+                "access": pkt["access"]})
+        elif not _relation_absorbed(pkt, models):
+            problems.append({
+                "problem_id": "prob-" + pkt["packet_id"][4:],
+                "type": "DISTILLED_PATTERN", "trigger_event": pkt["packet_id"],
+                "affected_model_ids": [],
+                "residual_refs": [],
+                "evidence_refs": pkt["supporting"]["evidence_refs"],
+                "scope": pkt["observed_scopes"] or [pkt["signature"]],
+                "attempted_updates": [],
+                "why_existing_models_insufficient":
+                    "grounded pattern has no absorbing existing model",
+                "access": pkt["access"]})
+    for mid, m in models.items():
+        if not isinstance(m, dict):
+            continue
+        challenged = (m.get("epistemic_status") == "challenged"
+                      or (m.get("counterevidence_refs") or []))
+        if not challenged:
+            continue
+        attempted = m.get("attempted_updates") or []
+        why = m.get("why_existing_models_insufficient")
+        prob = {
+            "problem_id": f"prob-chal-{mid}",
+            "type": "CHALLENGED_MODEL", "trigger_event": mid,
+            "affected_model_ids": [mid],
+            "residual_refs": m.get("counterevidence_refs") or [],
+            "evidence_refs": m.get("counterevidence_refs") or [],
+            "scope": [m.get("scope", "?")],
+            "attempted_updates": attempted,
+            "why_existing_models_insufficient": why,
+            "access": m.get("access") or {"level": "PRIVATE",
+                                          "basis": ["model_entry"]}}
+        if not attempted and not why:
+            gated.append({"problem_id": prob["problem_id"],
+                          "reason": "no attempted_updates and no "
+                                    "insufficiency justification — ordinary "
+                                    "update must be tried first"})
+            continue
+        problems.append(prob)
+    return problems, gated
+
+
+def _relation_absorbed(pkt: dict, models: dict) -> bool:
+    return pkt["relation_hint"]["relation"] in ("DUPLICATE_OF", "REFINES")
+
+
 # ---------------- lifecycle governance ----------------
 
 def current_env(canon: Path) -> dict:
@@ -465,11 +546,17 @@ def main() -> int:
         accepted.append(cand)
 
     life = lifecycle_scan(canon)
+    problems, gated = build_problems(canon, packets)
     written = []
     if not args.dry_run:
         pdir = canon / "proposals"
         pdir.mkdir(exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d")
+        probdir = canon / "problems"
+        probdir.mkdir(exist_ok=True)
+        for pr in problems:
+            (probdir / f"{pr['problem_id']}.json").write_text(
+                json.dumps(pr, ensure_ascii=False, indent=2), encoding="utf-8")
         for c in accepted:
             p = pdir / f"{stamp}-model-proposal-{c['candidate_id']}.json"
             p.write_text(json.dumps({
@@ -495,6 +582,7 @@ def main() -> int:
         "packets": len(packets), "candidates": len(accepted),
         "abstained": abstained, "validator_rejected": rejected,
         "rejected_families_known": len(rej),
+        "problems_emitted": len(problems), "problems_gated": gated,
         "lifecycle_proposals": len(life), "written": written,
         "canonical_write": "NONE — proposals only",
         "distiller_version": DISTILLER_VERSION}, ensure_ascii=False))
