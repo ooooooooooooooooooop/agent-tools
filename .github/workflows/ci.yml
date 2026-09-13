@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+  issues: write
+
 jobs:
   lint:
     runs-on: windows-latest
@@ -56,8 +60,11 @@ jobs:
 
       - name: Dump test log on failure
         if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Get-Content ci-test-output.txt -Tail 400 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          Get-Content ci-test-output.txt -Tail 400 | Out-File -FilePath ci-fail.md -Encoding utf8
+          gh issue comment 1 --repo ${{ github.repository }} --body-file ci-fail.md
 
       - name: Run Agent Switchboard MCP regression tests
         run: python -m unittest discover -s mcp/agent-switchboard/tests -v
