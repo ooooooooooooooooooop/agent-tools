@@ -301,7 +301,7 @@ export function apply(ctx, config = {}) {
   if (typeof reg === 'function' && envMode !== 'strict-off') {
     reg.call(ctx.tools, {
       name: 'world_model',
-      description: '世界模型状态机（theory V0.3.1 / schema 1.1）：activate/model/predict/observe/evaluate/update/probe/meta/value/input/persist/status/declassify。所有调用真实落盘 ledger——审计对象不是 prose。consequential 改动前必须先 predict（绑定 intended_action）。input 路由：用户/外部输入先经 semantic_type 分类——EPISTEMIC_CLAIM 进 W；NORMATIVE_DIRECTIVE 查 governance 权威 scope；DURABLE_VALUE_STATEMENT 走 value proposal；PREFERENCE 默认不持久化。',
+      description: '世界模型状态机（theory V0.3.1 / schema 1.1）：activate/model/predict/observe/evaluate/update/probe/meta/value/input/persist/status/declassify。所有调用真实落盘 ledger——审计对象不是 prose。consequential 改动前必须先 predict（绑定 intended_action）。input 路由：外部输入先经 semantic_type 分类（会话自身任务指令不必路由）。EPISTEMIC_CLAIM=对世界的断言→W 证据；AUTHORIZATION=一次性行动许可→仅本会话记录；NORMATIVE_DIRECTIVE=要求持久约束的规则→查 governance 权威表（source_id 与 scope 必须用 governance.yaml normative_authorities 里已注册的值，如 user/task_goal，自造词汇会被拒）；DURABLE_VALUE_STATEMENT=持久价值→value proposal；PREFERENCE=本地偏好→不持久化。',
       parameters: WM_PARAMETERS,
       output: { schema: { type: 'object', additionalProperties: true }, render: (_a, v) => [{ type: 'text', text: safeJson(v) }] },
       execute: (input = {}, exec) => {
