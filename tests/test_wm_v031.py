@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -364,6 +365,134 @@ class TestDeclassificationTaint(unittest.TestCase):
             self.assertIn("proposal", call)
             prop = json.loads(Path(call["proposal"]).read_text(encoding="utf-8"))
             self.assertEqual(prop["payload"]["update_class"], "declassification")
+            self.assertEqual((canon / "current.yaml").read_bytes(), before)
+
+
+class TestDistiller(unittest.TestCase):
+    """Phase A: Model Distillation & Lifecycle — frozen adversarial fixtures."""
+
+    def _mk_runs(self, td, sessions):
+        """sessions: {sid: [events]} written as closed run files."""
+        state = Path(td) / "state"
+        runs = state / "runs"
+        runs.mkdir(parents=True)
+        old = time.time() - 7200
+        for sid, evs in sessions.items():
+            f = runs / f"{sid}.jsonl"
+            f.write_text("\n".join(json.dumps(e) for e in evs), encoding="utf-8")
+            os.utime(f, (old, old))
+        return state
+
+    def _pred(self, sid, pid, model="m-x", stmt="adapter restart fixes it"):
+        return {"event_type": "PREDICTION_CREATED", "session_id": sid,
+                "prediction_id": pid, "model_id": model,
+                "payload": {"statement": stmt}}
+
+    def _eval(self, sid, pid, verdict, src="later_reality"):
+        return {"event_type": "PREDICTION_EVALUATED", "session_id": sid,
+                "prediction_id": pid,
+                "payload": {"verdict": verdict, "evaluation_source": src}}
+
+    def _canon(self, td):
+        canon = fixture_canonical(Path(td))
+        (canon / "proposals").mkdir(exist_ok=True)
+        return canon
+
+    def _run(self, state, canon):
+        import distiller
+        import io, contextlib
+        buf = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["distiller.py", "--state", str(state),
+                    "--canonical", str(canon), "--closed-minutes", "30"]
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = distiller.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual(rc, 0)
+        return json.loads(buf.getvalue().strip().splitlines()[-1])
+
+    def test_fixture_A_independent_confirmations_yield_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            rep = self._run(state, canon)
+            self.assertEqual(rep["candidates"], 1)
+            prop = json.loads(next((canon / "proposals").glob("*model-proposal*"))
+                              .read_text(encoding="utf-8"))
+            c = prop["payload"]["candidate"]
+            self.assertEqual(c["independence_summary"]["n_independent"], 2)
+            self.assertIn("promotion_criteria", c)
+            self.assertIn("falsifier", c)
+
+    def test_fixture_B_self_echoes_never_graduate(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            sess = {f"s{i}": [self._pred(f"s{i}", f"p{i}"),
+                             self._eval(f"s{i}", f"p{i}", "confirmed",
+                                        src="self")]
+                    for i in range(6)}
+            state = self._mk_runs(td, sess)
+            rep = self._run(state, canon)
+            self.assertEqual(rep["candidates"], 0)
+            self.assertFalse(list((canon / "proposals").glob("*model-proposal*")))
+
+    def test_fixture_C_conflicting_independent_evidence_competes(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "refuted")]})
+            rep = self._run(state, canon)
+            self.assertEqual(rep["candidates"], 2)
+            cands = [json.loads(f.read_text(encoding="utf-8"))["payload"]["candidate"]
+                     for f in (canon / "proposals").glob("*model-proposal*")]
+            self.assertTrue(all(c["existing_model_relation"] == "COMPETES_WITH"
+                                for c in cands))
+
+    def test_never_writes_current_yaml(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            before = (canon / "current.yaml").read_bytes()
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            self._run(state, canon)
+            self.assertEqual((canon / "current.yaml").read_bytes(), before)
+
+    def test_rejected_candidate_not_resubmitted(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            state = self._mk_runs(td, {
+                "s1": [self._pred("s1", "p1"), self._eval("s1", "p1", "confirmed")],
+                "s2": [self._pred("s2", "p2"), self._eval("s2", "p2", "confirmed")]})
+            self._run(state, canon)
+            # mark the produced proposal rejected, rerun — no new proposal
+            for f in (canon / "proposals").glob("*model-proposal*"):
+                p = json.loads(f.read_text(encoding="utf-8"))
+                p["status"] = "rejected"
+                f.write_text(json.dumps(p), encoding="utf-8")
+            rep = self._run(state, canon)
+            self.assertEqual(rep["candidates"], 0)
+
+    def test_stale_on_dependency_change_not_time(self):
+        with tempfile.TemporaryDirectory() as td:
+            canon = self._canon(td)
+            cur = yaml.safe_load((canon / "current.yaml").read_text(encoding="utf-8"))
+            cur["world_model"]["models"]["M1"]["dependency_fingerprint"] = \
+                {"value": "old-fp"}
+            (canon / "current.yaml").write_text(
+                yaml.safe_dump(cur, allow_unicode=True), encoding="utf-8")
+            before = (canon / "current.yaml").read_bytes()
+            state = self._mk_runs(td, {})
+            rep = self._run(state, canon)
+            self.assertEqual(rep["lifecycle_proposals"], 1)
+            lp = json.loads(next((canon / "proposals").glob("*lifecycle*"))
+                            .read_text(encoding="utf-8"))
+            self.assertEqual(lp["payload"]["lifecycle_status"], "stale")
             self.assertEqual((canon / "current.yaml").read_bytes(), before)
 
 
