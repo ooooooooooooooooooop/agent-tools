@@ -126,7 +126,8 @@ def signature_of(pred_ev: dict) -> str:
 def access_taint(events: list[dict]) -> str:
     lvl = "PRIVATE"
     for ev in events:
-        l = (ev.get("access") or {}).get("level")
+        a = ev.get("access")
+        l = a.get("level") if isinstance(a, dict) else a
         if l and ACCESS_RANK.get(l, 3) > ACCESS_RANK[lvl]:
             lvl = l
     return lvl

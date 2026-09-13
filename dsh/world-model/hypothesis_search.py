@@ -148,29 +148,9 @@ def hypothesize(problem: dict, worker_out: dict | None = None) -> dict:
         return {"abstain": True,
                 "reason": "evidence already supports current model — "
                           "no forced novelty (B3)"}
-    ops = applicable_ops(feats)
-    if not ops:
-        return {"abstain": True,
-                "reason": "no operator applicable to problem features"}
-    subj = problem.get("subject") or problem.get("description") or kind
-    out = []
-    for op in ops:
-        spec = OPERATORS[op]
-        h = {
-            "hypothesis_id": f"h4-{hashlib.sha256((problem.get('problem_id','?')+op).encode()).hexdigest()[:8]}",
-            "operator": op,
-            "hypothesis": spec["hypothesis"].format(subject=subj),
-            "scope": problem.get("scope") or [subj],
-            "discriminative_prediction": spec["discriminative_prediction"],
-            "evidence_type": "MODEL_OUTPUT",
-            "confidence": "low",
-            "note": "support can only come from future real Observation; "
-                    "being generated here confers zero evidential weight",
-            "falsifier": "the discriminative prediction fails under a "
-                         "controlled observation",
-        }
-        out.append(h)
-    # semantic worker overrides/extends templates with strict validation
+    # Semantic worker output is consulted FIRST — its operator choice is the
+    # applicability justification. The template path below is the no-worker
+    # fallback and keeps its own mechanical applicability gate.
     worker_rejected = []
     if worker_out:
         merged = []
@@ -193,12 +173,36 @@ def hypothesize(problem: dict, worker_out: dict | None = None) -> dict:
                 continue
             seen_preds.add(p)
             dedup.append(h)
-        if dedup:
-            out = dedup
-    result = {"abstain": False, "hypotheses": out}
-    if worker_rejected:
-        result["worker_rejected"] = worker_rejected
-    return result
+        result = {"abstain": not dedup, "hypotheses": dedup}
+        if worker_rejected:
+            result["worker_rejected"] = worker_rejected
+        if not dedup:
+            result["reason"] = "all worker hypotheses failed validation"
+        return result
+
+    ops = applicable_ops(feats)
+    if not ops:
+        return {"abstain": True,
+                "reason": "no operator applicable to problem features"}
+    subj = problem.get("subject") or problem.get("description") or kind
+    out = []
+    for op in ops:
+        spec = OPERATORS[op]
+        h = {
+            "hypothesis_id": f"h4-{hashlib.sha256((problem.get('problem_id','?')+op).encode()).hexdigest()[:8]}",
+            "operator": op,
+            "hypothesis": spec["hypothesis"].format(subject=subj),
+            "scope": problem.get("scope") or [subj],
+            "discriminative_prediction": spec["discriminative_prediction"],
+            "evidence_type": "MODEL_OUTPUT",
+            "confidence": "low",
+            "note": "support can only come from future real Observation; "
+                    "being generated here confers zero evidential weight",
+            "falsifier": "the discriminative prediction fails under a "
+                         "controlled observation",
+        }
+        out.append(h)
+    return {"abstain": False, "hypotheses": out}
 
 
 def main() -> int:
@@ -210,7 +214,40 @@ def main() -> int:
                     help="file:<path> — semantic worker GENERATE_HYPOTHESES "
                          "output JSON {problem_id: [h4 objects]}")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--mark", default=None,
+                    help="JSON file: {proposal_file, hypothesis_id, state, "
+                         "observation_refs, note} — writes a new "
+                         "HYPOTHESIS_STATE_UPDATE artifact (original proposal "
+                         "is never mutated)")
     args = ap.parse_args()
+    if args.mark:
+        m = json.loads(Path(args.mark).read_text(encoding="utf-8"))
+        if m.get("state") not in ("supported", "weakened", "falsified"):
+            raise SystemExit("mark.state must be supported|weakened|falsified")
+        canon = Path(args.canonical)
+        pdir = canon / "proposals"
+        pdir.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        name = f"{stamp}-hypothesis-state-{m['hypothesis_id']}.json"
+        (pdir / name).write_text(json.dumps({
+            "schema_version": "1.1", "kind": "HYPOTHESIS_STATE_UPDATE",
+            "timestamp": datetime.now(timezone.utc).isoformat(
+                timespec="seconds").replace("+00:00", "Z"),
+            "status": "proposed", "update_class": "world_model",
+            "classification": {"level": "PRIVATE",
+                               "basis": ["derived_from_private_observation"]},
+            "payload": {
+                "proposal_ref": m.get("proposal_file"),
+                "hypothesis_id": m["hypothesis_id"],
+                "state": m["state"],
+                "observation_refs": m.get("observation_refs", []),
+                "note": m.get("note", ""),
+                "rule": "supported H4 may become MODEL_PROPOSAL only via "
+                        "promotion criteria; falsified stays falsified"}},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"written": [name], "canonical_write":
+                          "NONE — proposals only"}, ensure_ascii=False))
+        return 0
     src = Path(args.problems)
     if src.is_dir():
         problems = [json.loads(f.read_text(encoding="utf-8"))
