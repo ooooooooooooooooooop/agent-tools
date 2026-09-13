@@ -1,0 +1,4 @@
+interface:
+  display_name: "世界模型运行时"
+  short_description: "在重要任务上运行持久世界模型闭环：恢复状态→竞争模型→显式预测→真实观察→修订→持久化"
+  default_prompt: "使用 $world-model-runtime，按 Gate 判定模式执行世界模型闭环并持久化状态"

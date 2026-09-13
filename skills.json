@@ -31,7 +31,8 @@
       "research-lab",
       "find-session",
       "personal-ai-operations-review",
-      "chatgpt-web-bridge"
+      "chatgpt-web-bridge",
+      "world-model-runtime"
     ]
   },
   "skills": [
@@ -353,6 +354,21 @@
       "priority": "P2",
       "tier": "optional",
       "depends_on": []
+    },
+    {
+      "name": "world-model-runtime",
+      "path": "./skills/world-model-runtime",
+      "version": "1.0.0",
+      "description": "在重要任务上运行持久世界模型闭环：恢复状态→竞争模型→显式预测→真实观察→修订→主动取证→决策→持久化；由 AGENTS World Model Gate 判 OFF/CORE/FULL 加载",
+      "lang": [
+        "zh"
+      ],
+      "category": "reasoning",
+      "priority": "P0",
+      "tier": "conditional",
+      "depends_on": [
+        "minimal-implementation"
+      ]
     }
   ]
 }
