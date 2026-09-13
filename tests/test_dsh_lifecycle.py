@@ -121,7 +121,7 @@ class DeploymentMirrorTests(unittest.TestCase):
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.home = Path(self.td.name)
+        self.home = Path(self.td.name).resolve()
 
     def tearDown(self):
         self.td.cleanup()
@@ -193,7 +193,7 @@ class CandidateLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.home = Path(self.td.name)
+        self.home = Path(self.td.name).resolve()
 
     def tearDown(self):
         self.td.cleanup()
@@ -323,7 +323,7 @@ class RuntimeStateInspectionTests(unittest.TestCase):
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.home = Path(self.td.name)
+        self.home = Path(self.td.name).resolve()
 
     def tearDown(self):
         self.td.cleanup()
@@ -445,7 +445,7 @@ class RestoreAndSyncSemanticsTests(unittest.TestCase):
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.home = Path(self.td.name)
+        self.home = Path(self.td.name).resolve()
 
     def tearDown(self):
         self.td.cleanup()

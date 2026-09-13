@@ -73,7 +73,7 @@ def preflight_args(repo: Path, lock_root: Path, **values):
 class TestCrossHarnessWriterContainment(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="cross-harness-containment-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.repo = init_repo(self.root / "repo")
         self.locks = self.root / "locks"
 

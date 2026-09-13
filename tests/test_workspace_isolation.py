@@ -52,7 +52,7 @@ def _init_git_repo(path: Path) -> None:
 class TestWorkspaceIsolation(unittest.TestCase):
     def setUp(self) -> None:
         self.td_obj = tempfile.TemporaryDirectory()
-        self.tmp_root = Path(self.td_obj.name)
+        self.tmp_root = Path(self.td_obj.name).resolve()
         self.repo_a = self.tmp_root / "repo_a"
         self.repo_b = self.tmp_root / "repo_b"
         _init_git_repo(self.repo_a)

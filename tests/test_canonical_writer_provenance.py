@@ -50,7 +50,7 @@ def init_repo(path: Path) -> Path:
 class TestCanonicalWriterProvenance(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="writer-provenance-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
