@@ -25,7 +25,7 @@ import { homedir, hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 export const name = 'dsh-world-model';
-export const inject = ['tools'];
+export const inject = ['tools', 'systemPrompt'];
 
 const SCHEMA_VERSION = '1.1';
 const THEORY_VERSION = '0.3.1';
@@ -243,6 +243,20 @@ export function apply(ctx, config = {}) {
     } catch { return null; }
   }
 
+  // 简报=system-prompt section：永远在场、不竞争 user 消息、每次 prompt
+  // assemble 重读 briefing.md（canonical 重编译后自动生效、跨 compaction 存活）。
+  let briefingMounted = false;
+  try {
+    if (ctx.systemPrompt?.section) {
+      ctx.systemPrompt.section({
+        name: 'world-model:briefing',
+        order: 10,
+        text: () => buildBriefing() || ''
+      });
+      briefingMounted = true;
+    }
+  } catch { /* systemPrompt service optional */ }
+
   try {
     const briefedSessions = new Set();
     ctx.on('session/event', (session, event) => {
@@ -258,16 +272,24 @@ export function apply(ctx, config = {}) {
             payload: readCanonicalSummary(), stale, source: 'plugin'
           });
           if (stale) emit(s.id, 'BRIEFING_STALE', { happened: stale, source: 'plugin' });
-          const briefing = buildBriefing();
-          if (briefing) {
-            try {
-              const agentsSvc = ctx.get?.('agents') || ctx.agents;
-              const agent = agentsSvc?.get?.(sid);
-              const msg = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: briefing }], source: { kind: 'plugin', plugin: name } };
-              if (agent?.inject) { agent.inject(msg); emit(s.id, 'BRIEFING_INJECTED', { happened: 'session briefing injected', payload: { bytes: bytes(briefing) }, source: 'plugin' }); }
-              else if (agent?.followup) { agent.followup(msg); emit(s.id, 'BRIEFING_INJECTED', { happened: 'session briefing injected via followup', payload: { bytes: bytes(briefing) }, source: 'plugin' }); }
-              else emit(s.id, 'BRIEFING_FAILED', { happened: 'no agent handle for briefing injection', source: 'plugin' });
-            } catch { emit(s.id, 'BRIEFING_FAILED', { happened: 'briefing injection threw', source: 'plugin' }); }
+          if (briefingMounted) {
+            emit(s.id, 'BRIEFING_INJECTED', { happened: 'briefing mounted as system-prompt section', payload: { bytes: bytes(buildBriefing() || '') }, source: 'plugin' });
+          } else {
+            // fallback：无 systemPrompt 服务时退化为 user-message inject
+            // （必须在下一 tick——同步 inject 会重入 append publisher）。
+            const briefing = buildBriefing();
+            if (briefing) {
+              setImmediate(() => {
+                try {
+                  const agentsSvc = ctx.get?.('agents') || ctx.agents;
+                  const agent = agentsSvc?.get?.(sid);
+                  const msg = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: briefing }], source: { kind: 'plugin', plugin: name } };
+                  if (agent?.inject) { agent.inject(msg); emit(s.id, 'BRIEFING_INJECTED', { happened: 'session briefing injected', payload: { bytes: bytes(briefing) }, source: 'plugin' }); }
+                  else if (agent?.followup) { agent.followup(msg); emit(s.id, 'BRIEFING_INJECTED', { happened: 'session briefing injected via followup', payload: { bytes: bytes(briefing) }, source: 'plugin' }); }
+                  else emit(s.id, 'BRIEFING_FAILED', { happened: 'no agent handle for briefing injection', source: 'plugin' });
+                } catch (e) { emit(s.id, 'BRIEFING_FAILED', { happened: `briefing injection threw: ${e?.message || e}`, source: 'plugin' }); }
+              });
+            }
           }
         }
       } catch { /* never crash */ }
