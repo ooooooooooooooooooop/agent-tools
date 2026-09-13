@@ -15,6 +15,7 @@
 | ③ DSH 插件包 | `dsh/<name>/` | ✅ | 本地 DSH 用户级插件：源码 + 可移植 `cordis.patch.yml` 片段 + README 一起发布；不设注册表，校验器不核对 manifest，靠链接/markdown 检查兜底；发布内容禁止含本机路径 |
 | ④ 质量脚手架 | `scripts/` `tests/` `docs/` `_template/` `.github/workflows/`（`skill-quality-gate` 是 ① 中的 Skill 包，位于 `skills/skill-quality-gate/`） | ✅ | 改 `validate_repo.py` 会影响全部上层契约，谨慎 |
 | ⑤ 设备运行层 | `.taskflow/` `.grepai/` `.claude/` `node_modules/` 等 | ❌ 禁改/禁提交 | 本地运行态，发布门禁拒绝 |
+| ⑥ soul/ | `soul/`（`manifest.json` `schema/` `briefing/` `models/` `bootstrap/`） | ✅ | Personal AI 可携带认知状态：通用 L2/L3 脱敏模型 + schema 契约 + briefing 模板 + adopter 骨架；内容只能来自 declassification 链产物或为公开编写的模板，私有 canonical/L0-L1/未脱敏模型禁入；`manifest.json` 是发布锚 |
 
 ## 硬约束（改目录结构的红线）
 
