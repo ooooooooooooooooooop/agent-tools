@@ -143,9 +143,10 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_soul_release_anchor_verified(self) -> None:
         import subprocess
+        import sys
 
         proc = subprocess.run(
-            ["python", str(ROOT / "scripts" / "soul_release_check.py")],
+            [sys.executable, str(ROOT / "scripts" / "soul_release_check.py")],
             capture_output=True, text=True, cwd=ROOT,
         )
         self.assertEqual(proc.returncode, 0,
