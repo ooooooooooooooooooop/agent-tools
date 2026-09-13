@@ -26,6 +26,11 @@ from .models import (
     SyncPlane,
 )
 
+try:
+    from ..skill_visibility import INDETERMINATE, classify_skill_visibility, scan_skill_visibility
+except ImportError:  # imported as top-level sync_v2 package
+    from skill_visibility import INDETERMINATE, classify_skill_visibility, scan_skill_visibility
+
 IGNORED_NAMES = {".DS_Store", "__pycache__"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 
@@ -723,7 +728,20 @@ def evaluate_skills_plane(
         )
 
     dest_root = home / "skills"
-    dest_root.mkdir(parents=True, exist_ok=True)
+    try:
+        dest_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return ResourceRecord(
+            resource_id="skills",
+            plane=SyncPlane.SKILL,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.INDETERMINATE,
+            symbol="△",
+            summary="Skills 可见性扫描 INDETERMINATE，无法访问安装目录",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            warnings=[f"skill visibility scan failed for {dest_root}: {exc}"],
+            details={"visibility": {"status": INDETERMINATE, "errors": [str(exc)]}},
+        )
 
     missing_skills = []
     stale_skills = []
@@ -780,6 +798,39 @@ def evaluate_skills_plane(
             verified_skills.append(name)
 
     total_expected = len(known)
+    visibility = scan_skill_visibility(dest_root, known)
+    visibility_details = {
+        "status": visibility["status"],
+        "registered": visibility["registered"],
+        "known_allowed_local": visibility["known_allowed_local"],
+        "unmanaged_skill": visibility["unmanaged_skill"],
+        "skills": visibility["skills"],
+        "errors": visibility["errors"],
+    }
+    details = {
+        "total": total_expected,
+        "verified_count": len(verified_skills),
+        "verified": verified_skills,
+        "repaired": repaired_skills,
+        "repaired_deltas": repaired_deltas,
+        "visibility": visibility_details,
+        "registered": visibility["registered"],
+        "known_allowed_local": visibility["known_allowed_local"],
+        "unmanaged_skill": visibility["unmanaged_skill"],
+    }
+    if visibility["status"] == INDETERMINATE:
+        return ResourceRecord(
+            resource_id="skills",
+            plane=SyncPlane.SKILL,
+            category=ResourceCategory.CONVERGENCE_PLANE,
+            status=PlaneStatus.INDETERMINATE,
+            symbol="△",
+            summary="Skills 可见性扫描 INDETERMINATE，未静默判定 PASS",
+            required_evidence_level=EvidenceLevel.L2_OBSERVED,
+            warnings=visibility["errors"],
+            details=details,
+        )
+
     if len(verified_skills) == total_expected and not missing_skills and not stale_skills:
         status = PlaneStatus.IN_SYNC if not repaired_skills else PlaneStatus.REPAIRED
         summary = f"{len(verified_skills)}/{total_expected} 全部对齐" + (f" (已修复 {len(repaired_skills)} 项)" if repaired_skills else "")
@@ -792,7 +843,7 @@ def evaluate_skills_plane(
             summary=summary,
             required_evidence_level=EvidenceLevel.L2_OBSERVED,
             evidence_refs=[{"type": "skill_tree_hashes_verified", "verified_count": len(verified_skills)}],
-            details={"total": total_expected, "verified_count": len(verified_skills), "verified": verified_skills, "repaired": repaired_skills, "repaired_deltas": repaired_deltas},
+            details=details,
         )
 
     return ResourceRecord(
@@ -805,7 +856,7 @@ def evaluate_skills_plane(
         summary=f"{len(verified_skills)}/{total_expected} 部分对齐 (缺失: {len(missing_skills)}, 滞后: {len(stale_skills)})",
         required_evidence_level=EvidenceLevel.L2_OBSERVED,
         warnings=[f"Skills 尚未完全收敛: missing={missing_skills}, stale={stale_skills}"],
-        details={"total": total_expected, "verified": len(verified_skills), "missing": missing_skills, "stale": stale_skills},
+        details={**details, "missing": missing_skills, "stale": stale_skills},
     )
 
 

@@ -40,6 +40,7 @@ from sync_v2.planes import (
     evaluate_session_continuity_health,
     evaluate_skills_plane,
 )
+from skill_visibility import INDETERMINATE
 from sync_v2.engine import SyncEngine
 from sync_v2.receipt import render_human_receipt
 from jobs import DurableJobRegistry
@@ -1083,7 +1084,44 @@ class SyncV3ConvergenceDriftReconciliationTests(unittest.TestCase):
         self.assertEqual(mocks["skills_eval"].call_args[0][1], engine.mirror_dir)
         self.assertNotEqual(mocks["skills_eval"].call_args[0][1], engine.repo_root)
 
-    def test_C_skill_stale_repairs_and_verifies(self) -> None:
+    def test_C_skill_visibility_reports_local_and_unmanaged_without_repair(self) -> None:
+        repo_skill = self.td / "repo_skill" / "skills" / "my-skill"
+        repo_skill.mkdir(parents=True, exist_ok=True)
+        (repo_skill / "SKILL.md").write_text("version: 1\n", encoding="utf-8")
+        (self.td / "repo_skill" / "skills.json").write_text(
+            json.dumps({"skills": [{"name": "my-skill", "path": "skills/my-skill"}]}),
+            encoding="utf-8",
+        )
+        registered = self.home / "skills" / "my-skill"
+        registered.mkdir(parents=True, exist_ok=True)
+        (registered / "SKILL.md").write_text("version: 1\n", encoding="utf-8")
+        for name in ("weekly-work-summary", "unmanaged"):
+            d = self.home / "skills" / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text("local\n", encoding="utf-8")
+
+        result = evaluate_skills_plane(self.home, self.td / "repo_skill", repair=False)
+        self.assertEqual(result.status, PlaneStatus.IN_SYNC)
+        self.assertEqual(result.details["known_allowed_local"], ["weekly-work-summary"])
+        self.assertEqual(result.details["unmanaged_skill"], ["unmanaged"])
+        self.assertEqual(result.details["registered"], ["my-skill"])
+        self.assertTrue((self.home / "skills" / "unmanaged" / "SKILL.md").is_file())
+
+    def test_C_skill_scan_failure_is_indeterminate(self) -> None:
+        repo_root = self.td / "repo_skill"
+        (repo_root / "skills" / "my-skill").mkdir(parents=True, exist_ok=True)
+        (repo_root / "skills" / "my-skill" / "SKILL.md").write_text("version: 1\n", encoding="utf-8")
+        (repo_root / "skills.json").write_text(
+            json.dumps({"skills": [{"name": "my-skill", "path": "skills/my-skill"}]}),
+            encoding="utf-8",
+        )
+        (self.home / "skills").rmdir()
+        (self.home / "skills").write_text("not a directory", encoding="utf-8")
+        result = evaluate_skills_plane(self.home, repo_root, repair=False)
+        self.assertEqual(result.status, PlaneStatus.INDETERMINATE)
+        self.assertEqual(result.details["visibility"]["status"], INDETERMINATE)
+
+    def test_D_skill_stale_repairs_and_verifies(self) -> None:
         # Create a skill repo source and a stale installed destination
         repo_skill = self.td / "repo_skill" / "skills" / "my-skill"
         repo_skill.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from skill_visibility import (  # noqa: E402
+    INDETERMINATE,
+    KNOWN_ALLOWED_LOCAL,
+    REGISTERED,
+    UNMANAGED_SKILL,
+    classify_skill_visibility,
+    scan_skill_visibility,
+)
 SCRIPTS = ROOT / "scripts"
 VALIDATOR = SCRIPTS / "validate_repo.py"
 SYNC = SCRIPTS / "sync_skills.py"
@@ -136,6 +146,61 @@ class RepositoryContractTests(unittest.TestCase):
             checked = self.run_script(SYNC, "--destination", str(destination), "--check")
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             self.assertTrue(extra.is_file())
+
+    def test_skill_visibility_categories_are_report_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="skill-visibility-") as raw:
+            root = Path(raw)
+            for name in ("registered-skill", "weekly-work-summary", "my-local-skill"):
+                (root / name).mkdir()
+                (root / name / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+            result = scan_skill_visibility(root, {"registered-skill"})
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["registered"], ["registered-skill"])
+            self.assertEqual(result["known_allowed_local"], ["weekly-work-summary"])
+            self.assertEqual(result["unmanaged_skill"], ["my-local-skill"])
+            self.assertTrue((root / "my-local-skill" / "SKILL.md").is_file())
+
+    def test_skill_visibility_classifier_shared_categories(self) -> None:
+        self.assertEqual(classify_skill_visibility("registered", {"registered"}), REGISTERED)
+        self.assertEqual(classify_skill_visibility("weekly-work-summary", set()), KNOWN_ALLOWED_LOCAL)
+        self.assertEqual(classify_skill_visibility("other", set()), UNMANAGED_SKILL)
+
+    def test_sync_check_reports_visibility_without_affecting_pass(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="skills-sync-visibility-") as raw:
+            destination = Path(raw) / "installed"
+            shutil.copytree(ROOT / "skills" / "clarify-before-change", destination / "clarify-before-change")
+            local_skill = destination / "weekly-work-summary"
+            local_skill.mkdir(parents=True)
+            marker = local_skill / "SKILL.md"
+            marker.write_text("local\n", encoding="utf-8")
+            unmanaged = destination / "my-local-skill"
+            unmanaged.mkdir()
+            (unmanaged / "SKILL.md").write_text("local\n", encoding="utf-8")
+            result = self.run_script(SYNC, "--destination", str(destination), "--skill", "clarify-before-change", "--check", "--json")
+            self.assertEqual(result.returncode, 0)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["skill_visibility"]["registered"], ["clarify-before-change"])
+            self.assertEqual(data["skill_visibility"]["known_allowed_local"], ["weekly-work-summary"])
+            self.assertEqual(data["skill_visibility"]["unmanaged_skill"], ["my-local-skill"])
+            self.assertTrue(marker.is_file())
+
+    def test_sync_check_scan_failure_is_indeterminate(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="skills-sync-visibility-failure-") as raw:
+            destination = Path(raw) / "installed"
+            destination.write_text("not a directory", encoding="utf-8")
+            result = self.run_script(SYNC, "--destination", str(destination), "--skill", "clarify-before-change", "--check", "--json")
+            self.assertEqual(result.returncode, 1)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["skill_visibility"]["status"], INDETERMINATE)
+            self.assertTrue(data["skill_visibility"]["errors"])
+
+    def test_skill_visibility_scan_failure_is_indeterminate(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="skill-visibility-failure-") as raw:
+            root = Path(raw) / "not-a-directory"
+            root.write_text("not a directory", encoding="utf-8")
+            result = scan_skill_visibility(root, set())
+            self.assertEqual(result["status"], INDETERMINATE)
+            self.assertTrue(result["errors"])
 
     def test_quality_gate(self) -> None:
         result = self.run_script(QUALITY, "--root", str(ROOT), "--strict")

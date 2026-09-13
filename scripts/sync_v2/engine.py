@@ -366,6 +366,8 @@ class SyncEngine:
             # Convergence Status
             if any(r.status == PlaneStatus.FAILED for r in convergence_resources):
                 convergence_status = "FAILED"
+            elif any(r.status == PlaneStatus.INDETERMINATE for r in convergence_resources):
+                convergence_status = "INDETERMINATE"
             elif any(r.status == PlaneStatus.REVIEW_REQUIRED for r in convergence_resources):
                 convergence_status = "REVIEW_REQUIRED"
             elif any(r.status == PlaneStatus.PARTIAL_RESTART_REQUIRED for r in convergence_resources):
@@ -396,6 +398,8 @@ class SyncEngine:
             # Overall Status Synthesis
             if convergence_status == "FAILED" or safety_status == "BLOCKED":
                 overall = OverallStatus.FAILED
+            elif convergence_status == "INDETERMINATE":
+                overall = OverallStatus.REVIEW_REQUIRED
             elif convergence_status == "REVIEW_REQUIRED":
                 overall = OverallStatus.REVIEW_REQUIRED
             elif convergence_status == "PARTIAL_RESTART_REQUIRED":
@@ -429,6 +433,8 @@ class SyncEngine:
 
             if overall == OverallStatus.FAILED:
                 action_required = "请查看上方失败原因，先修复阻断项后再尝试同步。"
+            elif convergence_status == "INDETERMINATE":
+                action_required = "Skills 可见性扫描未完成，无法安全判定 PASS；请先恢复扫描能力后重试。"
             elif overall == OverallStatus.REVIEW_REQUIRED:
                 action_required = "请查看上方遇到的问题进行人工核对。"
             elif restart_required:
@@ -440,7 +446,7 @@ class SyncEngine:
                 else:
                     action_required = "下次正常启动 DSH 后新配置自动生效；如需立即生效可回复“同步并重启”。"
             elif overall in (OverallStatus.PARTIAL, OverallStatus.PARTIAL_WITH_HEALTH_WARNINGS):
-                partial_items = [f"- {r.plane.value}：{r.summary}" for r in convergence_resources if r.status in (PlaneStatus.PARTIAL, PlaneStatus.REVIEW_REQUIRED)]
+                partial_items = [f"- {r.plane.value}：{r.summary}" for r in convergence_resources if r.status in (PlaneStatus.PARTIAL, PlaneStatus.REVIEW_REQUIRED, PlaneStatus.INDETERMINATE)]
                 msg = "部分资源尚未完全收敛，主功能正常：\n" + "\n".join(partial_items)
                 if warning_items:
                     msg += "\n另外有健康状态需要关注：\n" + "\n".join(warning_items)

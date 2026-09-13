@@ -28,6 +28,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 
+try:
+    from skill_visibility import PASS as VISIBILITY_PASS, scan_skill_visibility
+except ImportError:  # imported as scripts.sync_skills
+    from scripts.skill_visibility import PASS as VISIBILITY_PASS, scan_skill_visibility
+
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "skills.json"
 IGNORED_NAMES = {".DS_Store"}
@@ -279,6 +285,27 @@ def main() -> int:
             raise ValueError(f"unknown skill name(s): {', '.join(unknown)}")
 
         results: List[Dict[str, Any]] = []
+        visibility = None
+        if args.check:
+            visibility = scan_skill_visibility(
+                args.destination,
+                known,
+            )
+            visibility_result = {
+                "skill": "<installed-skill-visibility>",
+                "kind": "skill-visibility",
+                "source": str(MANIFEST_PATH),
+                "destination": str(args.destination),
+                "missing": [],
+                "different": [],
+                "same": [],
+                "extra": [],
+                "pass": visibility["status"] == VISIBILITY_PASS,
+                "visibility_status": visibility["status"],
+                **visibility,
+            }
+            results.append(visibility_result)
+
         for name in sorted(selected):
             entry = known[name]
             source = (ROOT / entry["path"]).resolve()
@@ -374,18 +401,33 @@ def main() -> int:
     skill_results = [item for item in results if item.get("kind") in ("skill", None)]
     plugin_results = [item for item in results if item.get("kind") == "plugin"]
     other_results = [item for item in results if item.get("kind") not in ("skill", "plugin", None)]
+    visibility_result = next((item for item in results if item.get("kind") == "skill-visibility"), None)
     result = {
-        "pass": all(item["pass"] for item in results),
+        "pass": all(item["pass"] for item in results if item.get("kind") != "skill-visibility")
+        and (visibility_result is None or visibility_result["pass"]),
         "profile": args.profile,
         "skills": sorted(item["skill"] for item in skill_results),
         "plugins": sorted(item["skill"] for item in plugin_results),
         "results": results,
     }
+    if visibility_result is not None:
+        result["skill_visibility"] = {
+            key: visibility_result[key]
+            for key in ("status", "registered", "known_allowed_local", "unmanaged_skill", "errors")
+        }
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         for item in results:
-            state = "PASS" if item["pass"] else "DIFF"
+            state = item.get("status") if item.get("kind") == "skill-visibility" else ("PASS" if item["pass"] else "DIFF")
+            if item.get("kind") == "skill-visibility":
+                print(
+                    f"{state}: installed skills "
+                    f"registered={item['registered']} "
+                    f"known_allowed_local={item['known_allowed_local']} "
+                    f"unmanaged_skill={item['unmanaged_skill']}"
+                )
+                continue
             if item.get("kind") == "mcp":
                 print(f"{state}: mcp issues={item.get('issues') or 'none'}")
                 continue
