@@ -69,3 +69,18 @@ skills/weekly-work-summary/
 # Model-switch runtime events + browser e2e artifacts (device-local, never canonical)
 .dsh-model-switch/
 browser-e2e-screenshot.png
+
+# One-off headless startup measurement artifacts (device-local diagnostics; never publish)
+/.headless-measure-dsh/
+/.headless-measure-current-dsh/
+/.headless-measure-real-user-dsh/
+/.dsh-context-lifecycle/
+/headless_measure_*.mjs
+/headless_measure_*.json
+/headless_measure_*.md
+/headless_measure_*.patch.yml
+/headless-measurement-plan.md
+/inspect_headless_layers.mjs
+
+# gdrive upload staging cache (runtime, never publish)
+/.tmp.driveupload/

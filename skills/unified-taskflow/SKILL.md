@@ -6,7 +6,7 @@ description: |
   不用于小修、普通优化、普通重构、单个 Skill 小改、日常 bug fix，或 task-mode-router / minimal-implementation 已足够处理的任务。
 ---
 
-# Unified Taskflow v4.3
+# Unified Taskflow v4.4
 
 > 更新：2026-08-10
 

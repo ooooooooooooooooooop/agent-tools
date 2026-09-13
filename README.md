@@ -57,6 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 | [research-lab](./skills/research-lab) | 把模型比较等可证伪问题转化为可恢复、可复现且证据可追溯的研究 | 可选 |
 | [personal-ai-operations-review](./skills/personal-ai-operations-review) | 对进入运维态的 Personal AI 基础设施做只读复查，区分 NO ACTION/REVIEW/ACTION REQUIRED/EXTERNAL BLOCKER，不为变绿静默改 canonical | 可选 |
 | [chatgpt-web-bridge](./skills/chatgpt-web-bridge) | 经 chatgpt-web 桥把本地 agent 接入 ChatGPT 网页版：网页端当大脑，本地只做传输与执行；conversation_id 专线，推进/指挥循环/对等协作/只读拉取四种模式 | 可选 |
+| [world-model-runtime](./skills/world-model-runtime) | 在重要任务上运行持久世界模型闭环，并按 Gate 判定执行模式 | 条件启用 |
 
 Skill 安装 profile 定义在 [skills.json](./skills.json)。
 
