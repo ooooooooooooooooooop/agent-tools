@@ -20,7 +20,7 @@ import agent_broker_mcp as broker  # noqa: E402
 
 SESSION_ID = "11111111-1111-4111-8111-111111111111"
 PROJECT_NAME = "sample-project"
-PROJECT_ROOT = r"D:\work\sample-project"
+PROJECT_ROOT = r"C:\Example\work\sample-project"
 WATCHER_ID = "sample-supervisor"
 
 

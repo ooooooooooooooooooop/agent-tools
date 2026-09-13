@@ -12,7 +12,7 @@
 The pilot research track has been established in strict isolation within the Personal AI workspace:
 
 ```text
-C:\Users\admin\Desktop\skills\research\cognitive-leverage-pilot-v0\
+<REPO_ROOT>research\cognitive-leverage-pilot-v0\
 ├── outcome_contract.md
 ├── trace_schema.json
 ├── trace_contract.md
@@ -163,7 +163,7 @@ Top-level metric: **`PROJECT COGNITIVE LEVERAGE`** (not "maximize autonomy").
 1. **Port & Process Collisions**: Replaying Case 1 could clash with the active DSH Web GUI on port 3080 if not isolated to a distinct test port or mock environment.
 2. **Live Database Contention**: Replaying Case 2 could lock live SQLite databases (`state.sqlite`) if test scripts fail to redirect to temporary directory fixtures.
 3. **Model Weights Drift**: Future evaluation runs using newer model snapshots or altered temperature settings may exhibit non-deterministic drift compared to August 2026 baselines.
-4. **Absolute Path Coupling**: Hardcoded Windows paths (`C:\Users\admin\...`) in historical scripts must be parameterized in test fixtures.
+4. **Absolute Path Coupling**: Hardcoded Windows paths (`C:\Users\<user>\...`) in historical scripts must be parameterized in test fixtures.
 
 ---
 

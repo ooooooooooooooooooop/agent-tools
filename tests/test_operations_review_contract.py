@@ -157,7 +157,7 @@ class TestOperationsReviewContract(unittest.TestCase):
         sys.modules.pop("common", None)
         import common
         # 模拟 PermissionError 写入
-        with patch.object(Path, "open", side_effect=PermissionError("Permission denied: 'D:\\ai-backup'")):
+        with patch.object(Path, "open", side_effect=PermissionError("Permission denied: 'D:\\ai-backup'")):  # boundary-scan-allow: fixture needle
             row = common.gov_log("capability_gov", "ok", 0)
             self.assertEqual(row.get("_logging_limitation"), "OBSERVABILITY_EVIDENCE_LIMITATION")
 

@@ -11,10 +11,27 @@ import subprocess
 import sys
 from pathlib import Path
 
+import os
+
 sys.path.insert(0, str(Path(__file__).parent))
 from common import gov_log  # noqa: E402
 
-PROJECTS = [Path(r"C:\Users\admin\Desktop\novel-main")]
+
+def _projects() -> list[Path]:
+    """Project roots: PAI_PROJECT_ROOTS (os.pathsep-separated) or auto-discover
+    ~/Desktop/*/ dirs that contain .ai/state/state.md."""
+    env = os.environ.get("PAI_PROJECT_ROOTS")
+    if env:
+        return [Path(p) for p in env.split(os.pathsep) if p]
+    desktop = Path.home() / "Desktop"
+    if not desktop.is_dir():
+        return []
+    return sorted(
+        d for d in desktop.iterdir()
+        if d.is_dir() and (d / ".ai" / "state" / "state.md").is_file())
+
+
+PROJECTS = _projects()
 REQUIRED = ["goal", "current_state", "architecture", "decisions", "constraints",
             "unresolved", "next_actions"]
 

@@ -63,7 +63,9 @@ def render_export_text(text: str) -> tuple[str, dict]:
             if variant in text:
                 text = text.replace(variant, placeholder)
         if placeholder in text:
-            usage[placeholder] = {"export_value": device}
+            usage[placeholder] = {
+                "export_value_sha256": hashlib.sha256(device.encode()).hexdigest()
+            }
     return text, usage
 
 
@@ -207,7 +209,8 @@ def main() -> int:
             for i in issues:
                 print(f"FAIL: {i}")
             return 1
-        manifest: dict = {"dsh_home_src": str(src), "digests": digests}
+        src_rendered, _ = render_export_text(str(src))
+        manifest: dict = {"dsh_home_src": src_rendered, "digests": digests}
         if templated:
             manifest["templates"] = {"files": templated}
         (display / args.name).write_text(

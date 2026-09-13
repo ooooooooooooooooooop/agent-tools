@@ -58,11 +58,31 @@ def patch_file(p: Path):
     p.write_text(text, encoding='utf-8')
     return True
 
-target_paths = [
-    Path(r"C:\Users\admin\.dsh\profiles\web\base-dsh-0.1.1-rc.2\node_modules\@deepseek-ai\dsh\node_modules\@earendil-works\pi-ai\dist\api\openai-responses-shared.js"),
-    Path(r"C:\Users\admin\AppData\Local\npm-cache\_npx\1e7f6d9597241db0\node_modules\@earendil-works\pi-ai\dist\api\openai-responses-shared.js"),
-]
+import os
+import sys
 
-for tp in target_paths:
-    res = patch_file(tp)
-    print(f"Patched {tp.name}: {res}")
+TARGET_BASENAME = Path(
+    "node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js")
+
+
+def discover_targets() -> list[Path]:
+    """Search DSH profiles + npm cache for the patch target (no hardcoded paths)."""
+    roots = [
+        Path(os.environ.get("DSH_HOME", Path.home() / ".dsh")) / "profiles",
+        Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        / "npm-cache" / "_npx",
+    ]
+    found = []
+    for root in roots:
+        if root.is_dir():
+            found.extend(root.rglob("openai-responses-shared.js"))
+    return sorted(found)
+
+
+if __name__ == "__main__":
+    targets = [Path(a) for a in sys.argv[1:]] or discover_targets()
+    if not targets:
+        print("no targets found — pass paths as argv or set DSH_HOME")
+        sys.exit(1)
+    for tp in targets:
+        print(f"Patched {tp.name}: {patch_file(tp)}")

@@ -35,7 +35,7 @@
 ### AVAILABLE_EVIDENCE_AT_CUTOFF
 1. `docs/architecture.md` 中 Phase 6 Durability 的规范定义。
 2. `registry/TECH_DEBT.md`。
-3. 本机环境真实路径（`~/.dsh`、`~/.agent-broker`、`D:\ai-backup\` 等）。
+3. 本机环境真实路径（`~/.dsh`、`~/.agent-broker`、`<BACKUP_ROOT>\` 等）。
 4. 现有仓库门禁脚本：`scripts/validate_repo.py`、`scripts/publish_check.py`、`tests/test_repository.py`。
 
 ### REPO_STATE
@@ -46,7 +46,7 @@
 ### RUNTIME_STATE
 - Windows 11 环境，PowerShell 7 (`pwsh`) 可用，Python 3.11 可用。
 - 本地计划任务服务可用（`schtasks.exe` / `Get-ScheduledTask`）。
-- 备份目标卷 `D:\ai-backup\` 存在。
+- 备份目标卷 `<BACKUP_ROOT>\` 存在。
 
 ### USER_CONSTRAINTS
 1. 单写区纪律：只能在 `scripts/durability/` 命名空间下编写脚本，不得把 backup/restore 混入 `aic.py` 核心命令。
@@ -76,7 +76,7 @@
 2. **Unit Test Pass**: `python -m unittest tests/test_durability.py` 全部用例（至少 8 个）PASS。
 3. **Database Backup Integrity**: 使用 `sqlite3.connect().backup()` 导出的备份文件能够通过 `PRAGMA integrity_check == ok`。
 4. **Scheduled Task Evidence**: Windows 计划任务列表中存在 `PersonalAI-Durability-Nightly`，执行 `Start-ScheduledTask` 后，`Get-ScheduledTaskInfo` 返回 `LastTaskResult == 0`。
-5. **Secret Redaction Audit**: 运行 secret-regex 扫描脚本对 `D:\ai-backup\ledger\runs.jsonl` 及 manifest 扫描，命中数为 0。
+5. **Secret Redaction Audit**: 运行 secret-regex 扫描脚本对 `<BACKUP_ROOT>\ledger\runs.jsonl` 及 manifest 扫描，命中数为 0。
 6. **Full Repo Regression**: 全量通过 `python scripts/validate_repo.py --strict`、`python -m unittest discover -s tests`、`git diff --check`。
 
 ### SEMANTIC_OUTCOME_ACCEPTANCE

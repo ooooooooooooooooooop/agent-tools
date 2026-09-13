@@ -32,7 +32,7 @@
 4. 本地最近进程启动脚本：`scripts/aic/dsh_desktop_restart.ps1` 和 `dsh-launch-web.ps1`。
 
 ### REPO_STATE
-- `C:\Users\admin\Desktop\skills` 在 `main` 分支，HEAD 为 Phase 8 之后的治理提交。
+- `<REPO_ROOT>` 在 `main` 分支，HEAD 为 Phase 8 之后的治理提交。
 - `workspace-registry-phase1` 分支尚未创建。
 - 未编写任何关于 lost-update 的单元测试。
 

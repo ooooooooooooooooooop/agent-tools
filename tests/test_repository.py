@@ -107,6 +107,49 @@ class RepositoryContractTests(unittest.TestCase):
             re.compile(r"/c/Users/(?!Example User/)", re.IGNORECASE),
         )
 
+    def test_public_boundary_no_machine_paths_repo_wide(self) -> None:
+        import subprocess
+
+        text_suffixes = {
+            ".py", ".md", ".mjs", ".js", ".json", ".yml", ".yaml", ".ps1",
+            ".txt", ".sh", ".toml", ".cfg", ".ini", ".html", ".css",
+        }
+        # \w+ cannot match "<...>" placeholders, so <USER>/<you> stay legal.
+        win_user = re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+(\w+)", re.IGNORECASE)
+        posix_home = re.compile(r"(?<![\w.:/-])/(home|Users)/[A-Za-z0-9_.-]+/")
+        other_drive = re.compile(r"(?<![A-Za-z])[D-Zd-z]:[\\/]+")
+        violations: list[str] = []
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=ROOT, check=True, capture_output=True,
+            text=True, encoding="utf-8",
+        ).stdout.splitlines()
+        for rel in tracked:
+            path = ROOT / rel
+            if path.suffix.lower() not in text_suffixes or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if "boundary-scan-allow" in line:
+                    continue
+                for m in win_user.finditer(line):
+                    if m.group(1).lower() != "example":
+                        violations.append(f"{rel}:{line_no} {m.group(0)!r}")
+                if posix_home.search(line):
+                    violations.append(f"{rel}:{line_no} posix home dir")
+                if other_drive.search(line):
+                    violations.append(f"{rel}:{line_no} non-C drive path")
+        self.assertEqual([], violations)
+
+    def test_soul_release_anchor_verified(self) -> None:
+        import subprocess
+
+        proc = subprocess.run(
+            ["python", str(ROOT / "scripts" / "soul_release_check.py")],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        self.assertEqual(proc.returncode, 0,
+                         f"soul release anchor check failed:\n{proc.stdout}{proc.stderr}")
+
     def test_switchboard_distribution_retains_upstream_license_notice(self) -> None:
         license_text = (ROOT / "mcp" / "agent-switchboard" / "LICENSE").read_text(
             encoding="utf-8"

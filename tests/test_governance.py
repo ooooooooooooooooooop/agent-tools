@@ -105,7 +105,7 @@ class TestUpstreamCapabilityReview(unittest.TestCase):
         self.assertIn("runner_adapter.py", text)
         self.assertIn("weekly", text)
         self.assertIn("exit $LASTEXITCODE", text)
-        self.assertNotIn("C:\\Users\\admin", text)
+        self.assertNotIn("C:\\Users\\admin", text)  # boundary-scan-allow: forbidden-path needle
 
     def test_sync_scheduler_uses_check_only_adapter(self):
         text = (REPO / "scripts" / "governance" / "register_governance_tasks.ps1").read_text(encoding="utf-8")
@@ -119,7 +119,7 @@ class TestUpstreamCapabilityReview(unittest.TestCase):
         self.assertIn("-Force", text)
         self.assertIn("$PSScriptRoot", text)
         self.assertIn("GOVERNANCE_TASKS=READY", text)
-        self.assertNotIn("C:\\Users\\admin", text)
+        self.assertNotIn("C:\\Users\\admin", text)  # boundary-scan-allow: forbidden-path needle
 
 
 class TestProviderUnreachable(unittest.TestCase):

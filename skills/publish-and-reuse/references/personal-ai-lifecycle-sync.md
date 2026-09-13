@@ -206,7 +206,7 @@ Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 - Secrets（§29）：先自动完成所有不需要 secret 的部分；只列当前 active route/Harness 真正缺失的 secret；不因 optional Harness 未登录阻塞核心恢复
 - Multi-Harness（§30）：按实际 installed 的 render→diff→apply→diff；未安装 = OPTIONAL_NOT_INSTALLED，不自动装齐
 - Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate；只有 canonical `C:\Desktop\skills` restore 可注册，临时/测试副本不得取得 canonical writer lease 或触碰 live Scheduler
-- Durability（§32）：不硬复制旧 `D:\ai-backup`，重新 discover disks/target/failure domains；无等价 target → DURABILITY=DEGRADED 但 PERSONAL_AI_CANONICAL_RESTORE 仍可 PASS；BACKUP_KEY_CUSTODY 继续 WAITING_FOR_CUSTODY_ROOT
+- Durability（§32）：不硬复制旧 `<BACKUP_ROOT>`，重新 discover disks/target/failure domains；无等价 target → DURABILITY=DEGRADED 但 PERSONAL_AI_CANONICAL_RESTORE 仍可 PASS；BACKUP_KEY_CUSTODY 继续 WAITING_FOR_CUSTODY_ROOT
 
 ## 15. 输出契约（§33-§35）
 

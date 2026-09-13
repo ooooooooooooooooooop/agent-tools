@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 def run_audit():
-    dsh_home = Path(r"C:\Users\admin\.dsh")
+    dsh_home = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
     profile_web = dsh_home / "profiles" / "web"
     base_dir = profile_web / "base-dsh-0.1.1-rc.2"
 

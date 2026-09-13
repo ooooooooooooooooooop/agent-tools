@@ -1,5 +1,5 @@
 {
-  "dsh_home_src": "C:\\Users\\admin\\.dsh",
+  "dsh_home_src": "{{DSH_HOME}}",
   "digests": {
     "AGENTS.md": "751576a5e2f4ae7d5554f3f3a2197d5319981ff54806b43511757efc02308c53",
     "profiles/web/base-distribution.json": "cf30d141fd42b99797d4ee18dcf833138be8418cfd722cc1c5de082791136611",
@@ -54,12 +54,12 @@
     "files": {
       "profiles/web/cordis.patch.yml": {
         "{{DESKTOP}}": {
-          "export_value": "C:\\Users\\admin\\Desktop"
+          "export_value_sha256": "844ec5874add510cd261fbe9484d78b04d627c3bd93fb9c6cd3b47428d217ce9"
         }
       },
       "profiles/web/.dsh-context-lifecycle/11d2e3752da1694a005f5072a5af42d2.json": {
         "{{DSH_HOME}}": {
-          "export_value": "C:\\Users\\admin\\.dsh"
+          "export_value_sha256": "6b5cd7c2bb50776079acfc2531fa802b98b16f573beb39155e55fa77bb4f89e5"
         }
       }
     }

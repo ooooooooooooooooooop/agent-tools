@@ -4,7 +4,7 @@ Scope: minimum backport for the running DSH (checkpoint re-compaction loop + no-
 
 ## 1. Current runtime/version
 
-- Running checkout: `C:\Users\admin\AppData\Local\npm-cache\_npx\1e7f6d9597241db0`
+- Running checkout: `%LOCALAPPDATA%\npm-cache\_npx\<hash>`
 - DSH: `0.1.1-rc.2` (all `@deepseek-ai/dsh-*` packages match)
 - Target package: `@deepseek-ai/dsh-compaction-basic@0.1.1-rc.2`
 - Pointer packages: `@deepseek-ai/dsh-compaction`, `dsh-session`, `dsh-llm`, `dsh-token-meter`, `cordis` — same version family.

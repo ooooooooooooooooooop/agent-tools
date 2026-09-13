@@ -31,10 +31,10 @@ DEVICE_NEEDLES = (
     "c:\\desktop\\",
     "c:\\\\users\\\\",
     "c:\\\\desktop\\\\",
-    "d:\\users\\",
-    "d:\\desktop\\",
-    "d:\\\\users\\\\",
-    "d:\\\\desktop\\\\",
+    "d:\\users\\",     # boundary-scan-allow: detection needle, not a real path
+    "d:\\desktop\\",   # boundary-scan-allow: detection needle, not a real path
+    "d:\\\\users\\\\",   # boundary-scan-allow: detection needle
+    "d:\\\\desktop\\\\",  # boundary-scan-allow: detection needle
 )
 
 

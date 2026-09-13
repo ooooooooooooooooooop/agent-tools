@@ -2,7 +2,7 @@
 
 User request:
 
-> I copied this repository to a new Windows machine. Check the installed skills first, then restore the registered packages to `C:\Users\me\.codex\skills`.
+> I copied this repository to a new Windows machine. Check the installed skills first, then restore the registered packages to `C:\Users\<you>\.codex\skills`.
 
 Expected behavior:
 

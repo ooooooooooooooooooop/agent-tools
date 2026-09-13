@@ -16,8 +16,8 @@
 ## 2. Health —— 怎么看状态
 
 ```powershell
-python C:\Users\admin\Desktop\skills\scripts\governance\personal_status.py   # 一句话版（5 域）
-python C:\Users\admin\Desktop\skills\scripts\governance\gov_status.py       # 详细版（11 域，逐条原因）
+python <REPO_ROOT>\scripts\governance\personal_status.py   # 一句话版（5 域）
+python <REPO_ROOT>\scripts\governance\gov_status.py       # 详细版（11 域，逐条原因）
 ```
 
 ## 3. When Healthy
@@ -31,7 +31,7 @@ python C:\Users\admin\Desktop\skills\scripts\governance\gov_status.py       # �
 | 现象 | 查看 |
 |---|---|
 | DRIFT | `python scripts\aic\aic.py diff <target>` 会报出 file/field/expected/actual |
-| RPO BREACHED | `python scripts\durability\rpo_check.py`；看 `D:\ai-backup\ledger\runs.jsonl` 最近行 |
+| RPO BREACHED | `python scripts\durability\rpo_check.py`；看 `<BACKUP_ROOT>\ledger\runs.jsonl` 最近行 |
 | repos 风险 | `python scripts\durability\check_repos.py`（哪仓几个未推送） |
 
 原则：治理只 **发现和提案**，不会偷偷改 canonical 把状态变绿。
@@ -61,21 +61,21 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 ## 6. Proposals —— 怎么审
 
-所有治理提案在：`C:\Users\admin\.dsh\.evolution-inbox\proposals\gov-*.json`
+所有治理提案在：`<DSH_HOME>\.evolution-inbox\proposals\gov-*.json`
 
 每个含：type / evidence / severity / affected_ssot / recommended_action / safe_to_auto_apply。
 批准 = 人工按 evidence 决策后执行对应 canonical 修改（如编辑 `registry/models.yaml`），
 然后把该 proposal 的 `status` 改为 `applied` 或 `rejected`。**没有自动 admit。**
 
-当前待审：4 份 model_admission（gpt-5.6-luna / gemini-3.7-flash / claude-fable-5-dd-anul-6.5-tpg / gpt-5.6-sol——在用未准入，证据在提案里）。
+当前待审条目以本机 inbox 实际内容为准（在用未准入的 model_admission 提案，证据在提案里）。
 
 ## 7. Recovery —— 已验证的恢复路径
 
 | 事故 | 路径（全部物理验证过） |
 |---|---|
-| Session 误删 | 从 `D:\ai-backup\sessions\daily-<date>\` 找回，三方哈希一致（T4） |
-| Broker 损坏 | 用 `D:\ai-backup\broker\broker-*.sqlite` 最新 verified 快照替换（T3，integrity_check=ok） |
-| 仓库丢失 | `git clone` 远端恢复到最近 push 点；未推送部分从 D:\ai-backup 无（→ 所以 check_repos 的 UNPUSHED_DURABILITY_RISK 要重视） |
+| Session 误删 | 从 `<BACKUP_ROOT>\sessions\daily-<date>\` 找回，三方哈希一致（T4） |
+| Broker 损坏 | 用 `<BACKUP_ROOT>\broker\broker-*.sqlite` 最新 verified 快照替换（T3，integrity_check=ok） |
+| 仓库丢失 | `git clone` 远端恢复到最近 push 点；未推送部分从 <BACKUP_ROOT> 无（→ 所以 check_repos 的 UNPUSHED_DURABILITY_RISK 要重视） |
 | DSH 丢失 | canonical（registry/）+ personal-ai-state 已推送远端；另一 Harness 仅凭 `.ai/state/` + Context Package 即可接手（Phase5 实测） |
 | 本机磁盘全毁 | **BLOCKED_BY_KEY_CUSTODY**：密文在，Gen2 key 不在 → 不可恢复（诚实状态，见 §10） |
 
@@ -83,11 +83,11 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 1. **Canonical 任务入口与执行账户**：
    - Windows 计划任务名称：`PersonalAI-Durability-Nightly`，Daily 03:30 触发。
-   - 运行账户：`admin` (InteractiveToken，禁止 ephemeral/Temp/bootstrap-drill 入口依赖)。
-   - Action Target：`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\admin\Desktop\skills\scripts\durability\run_nightly.ps1"`。
+   - 运行账户：`<USER>` (InteractiveToken，禁止 ephemeral/Temp/bootstrap-drill 入口依赖)。
+   - Action Target：`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<REPO_ROOT>\scripts\durability\run_nightly.ps1"`。
    - 调度主控：`scripts/durability/run_backup.py`（生成唯一 Run Identity 并编排各子任务）。
 2. **实际 Destination**：
-   - `D:\ai-backup`（与 `personal-ai-state/sync/this-device.yaml#backup_root` 严格一致）。
+   - `<BACKUP_ROOT>`（与 `personal-ai-state/sync/this-device.yaml#backup_root` 严格一致）。
 3. **真实一致性模型（Consistency Model & Boundaries）**：
    - 采用 `composite-per-dataset-transactional-and-stable-copy` 模型，不虚构跨全部文件系统和数据库的全局瞬时原子锁：
      * **事务级快照 (ACID Transaction Snapshot)**：`durable_jobs.db`、`broker/state.sqlite`、`broker/cc-switch.db` 通过 SQLite Online Backup API（`sqlite3.backup`）在并发写安全状态下生成点时间事务快照，并通过 `PRAGMA integrity_check`。
@@ -96,7 +96,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
      * **满足恢复契约的判定依据**：Personal AI 各子系统松耦合（Job 状态机由持久数据库维护，Session 为独立追加日志，凭据为静态配置），单组件事务一致性与稳定副本足以保证隔离恢复后各真实 reader/loader 正常工作。
 4. **Run-level Evidence**：
    - 每次运行绑定唯一 `run_id`（`nightly-YYYYMMDD-HHMMSS-<nonce>`），关联 `actor`、`scheduled_task`、`task_version` (git sha)、`config_version` (device cfg sha256)、`run_started_at`、`component_capture_intervals`、`destination`。
-   - 产物 Manifest：`D:\ai-backup\runs\<run_id>\manifest.json`，并将结构化 run 记录写入 `D:\ai-backup\ledger\runs.jsonl`。
+   - 产物 Manifest：`<BACKUP_ROOT>\runs\<run_id>\manifest.json`，并将结构化 run 记录写入 `<BACKUP_ROOT>\ledger\runs.jsonl`。
 5. **隔离恢复验收（Isolated Restore Verification）**：
    - 脚本：`scripts/durability/restore_check.py`，必须且仅从备份产物恢复到临时隔离沙箱，禁止生产原始文件补齐。
    - **全量覆盖要求（Zero Sampling）**：本次 run manifest 中声明的**全部 session 文件**（例如 838 个）全部逐一完成：
@@ -121,10 +121,10 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 - **BACKUP_KEY_CUSTODY = WAITING_FOR_CUSTODY_ROOT**：Gen3 架构 READY，实现 DEFERRED。等 Cloud KMS / 密码管理器 / 硬件根 / 可信第二设备出现再启动 `GEN3_KEY_CUSTODY_MIGRATION`。**在那之前 FULL_DR_READINESS 永远 = PARTIAL，这是设计而非故障。**
 - **NOVEL_REPO_DURABILITY = BLOCKED_PRIVACY**：见 §9。
 
-## 9. novel-main privacy resolution plan（计划，未执行）
+## 9. private-repo privacy resolution plan（计划，未执行）
 
 ```text
-1. 以 origin/master 为基拉新分支 clean-state-20260828
+1. 以 origin/master 为基拉新分支 clean-state-<date>
 2. 从本地 master 三个 commit 提取【最终净状态】（当前工作树即已脱敏版本）
 3. 在干净分支上生成单个新 commit：仅含脱敏后 .ai/state/state.md（diff 61 行已审计为净）
 4. 对该 commit 做 privacy audit（CPA/Antigravity/agent-broker/路径/token 全模式扫描 = 0 命中）
@@ -139,7 +139,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 ## 11. Future Change Management
 
-`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `C:\Desktop\skills` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
+`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `<REPO_ROOT>` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
 
 ### 11.0 Canonical Mutation Ownership
 

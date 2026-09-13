@@ -14,13 +14,13 @@ queue_cli_request backend=codex_cli, req 0571670a-fae9-4464-9203-64e2d42c2b41：
 | cc-switch db | ~/.cc-switch/cc-switch.db | 15MB | 同上 | 2026-08-28 | 26h(随 broker) | 同上 | 同上 | ✅ |
 | configs（不可重建） | broker config/claude/codex/gemini settings、cpa config.yaml+auths、cc-switch settings、AGENTS.md | KB 级，低变化 | 每日拷贝+manifest 分类 generated/irreplaceable | 2026-08-28 | 168h | 每日代际 | 解析检查 | ✅ nightly |
 | repos | skills/personal-ai-state/novel-main | unpushed=检测 | remote=恢复面 | 持续 | 26h | git 历史 | clone/remote | ✅ 风险扫描 |
-| backup vault | D:\ai-backup\remote-package* | 797MB | gen2 加密（人工管线） | 2026-08-28 | 人工 | gen 保留 | gen1/gen2 decrypt 已验 | 人工（DEK 单副本=外部阻塞） |
+| backup vault | <BACKUP_ROOT>\remote-package* | 797MB | gen2 加密（人工管线） | 2026-08-28 | 人工 | gen 保留 | gen1/gen2 decrypt 已验 | 人工（DEK 单副本=外部阻塞） |
 
 ## 4-8. Jobs/Archive/Scheduled/Ledger
 jobs: backup_sessions（增量 index size+mtime+sha，dated 代际不覆盖）/ backup_broker（在线 backup API，integrity 验证后才记 verified）/ backup_configs（generated vs irreplaceable 分类，secret 文件 local-only 不打印内容）/ check_repos（rev-list 修正，检测不提交）/ archive（dry-run 默认，--execute 才动）/ restore_check（temp 隔离）/ rpo_check（ledger 驱动）。
 Archive 策略验证：真实数据全 <30d、256.8MB 无容量压力 → 90d 阈值保留，不强行搬近期数据。
 Scheduled：PersonalAI-Durability-Nightly（powershell.exe，每日 03:30，StartWhenAvailable；物理 Start-ScheduledTask LastTaskResult=0）。
-Ledger：D:\ai-backup\ledger\runs.jsonl append-only，字段 job/dataset/started/finished/status/files/bytes/manifest/integrity/error；写入前 secret-regex 拒绝。
+Ledger：<BACKUP_ROOT>\ledger\runs.jsonl append-only，字段 job/dataset/started/finished/status/files/bytes/manifest/integrity/error；写入前 secret-regex 拒绝。
 
 ## 9. RPO evidence
 sessions/broker/configs HEALTHY（age≈0h）；repos BREACHED=novel-main 3 个未推送提交+脏树（真实风险，如实报告，不代提交）。

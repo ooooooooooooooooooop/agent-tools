@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def latest_run_manifest(root: Path) -> tuple[str, dict] | tuple[None, None]:
-    """Find the latest run manifest under D:\ai-backup\runs\."""
+    """Find the latest run manifest under <BACKUP_ROOT>/runs/."""
     runs_dir = root / "runs"
     if not runs_dir.is_dir():
         return None, None
@@ -153,9 +153,14 @@ def check_credentials(isolated_cred_file: Path) -> dict:
         return {"name": "credentials_restore", "status": "error", "error": "refs/records layout invalid"}
 
     # 2. Real DSH loader verification via Node if available
-    dsh_loader_js = Path(r"C:\Users\admin\.dsh\profiles\web\base-dsh-0.1.1-rc.2\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh-credentials-local\lib\index.js")
+    dsh_home = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
+    loader_candidates = sorted(
+        dsh_home.glob("profiles/*/node_modules/@deepseek-ai/dsh-credentials-local/lib/index.js"))
+    loader_candidates += sorted(dsh_home.glob(
+        "profiles/*/*/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-credentials-local/lib/index.js"))
+    dsh_loader_js = loader_candidates[0] if loader_candidates else None
     node_verified = False
-    if dsh_loader_js.is_file():
+    if dsh_loader_js and dsh_loader_js.is_file():
         node_script = f"""
 import {{ readFile }} from 'node:fs/promises';
 import {{ pathToFileURL }} from 'node:url';
