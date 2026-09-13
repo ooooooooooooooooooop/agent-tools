@@ -58,7 +58,34 @@ def iter_events(state_dir: Path, closed_minutes: int):
                     yield ev
 
 
-def evaluate(state_dir: Path, closed_minutes: int) -> dict:
+def decision_relevance(canon_dir: Path | None, evals: dict) -> dict:
+    """Did an evaluation matter downstream? Read-only scan of proposals/ +
+    problems/ for references to evaluated prediction ids."""
+    if canon_dir is None:
+        return {"value": None, "note": "no canonical dir provided"}
+    linked, artifacts = set(), 0
+    for d in ("proposals", "problems"):
+        pdir = canon_dir / d
+        if not pdir.is_dir():
+            continue
+        for f in pdir.glob("*.json"):
+            try:
+                artifacts += 1
+                txt = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for pid in evals:
+                if pid and pid in txt:
+                    linked.add(pid)
+    n = len(evals)
+    return {"value": (len(linked) / n) if n else None,
+            "linked_evaluations": len(linked), "artifacts_scanned": artifacts,
+            "note": "fraction of evaluated predictions cited by a "
+                    "problem/proposal artifact (evidence/residual refs)"}
+
+
+def evaluate(state_dir: Path, closed_minutes: int,
+             canon_dir: Path | None = None) -> dict:
     preds = {}
     evals = {}
     counts = {"PREDICTION_CREATED": 0, "PREDICTION_EVALUATED": 0,
@@ -82,11 +109,18 @@ def evaluate(state_dir: Path, closed_minutes: int) -> dict:
     verdicts = {"confirmed": 0, "refuted": 0, "partial": 0, "unknown": 0}
     eval_sources = {"mechanical": 0, "later_reality": 0,
                     "independent_model": 0, "human": 0, "self": 0}
+    # calibration matrix: verdict distribution per evaluation source —
+    # verdict-level calibration data (numeric confidence buckets still
+    # absent from prediction records; reported honestly, not synthesized)
+    by_source_verdict: dict[str, dict] = {}
     for pid, ev in evals.items():
         v = (ev.get("payload") or {}).get("verdict", "unknown")
         verdicts[v] = verdicts.get(v, 0) + 1
         src = (ev.get("payload") or {}).get("evaluation_source", "self")
         eval_sources[src] = eval_sources.get(src, 0) + 1
+        b = by_source_verdict.setdefault(src, {"confirmed": 0, "refuted": 0,
+                                               "partial": 0, "unknown": 0})
+        b[v] = b.get(v, 0) + 1
 
     n_eval = len(evals)
     n_pred = len(preds)
@@ -99,7 +133,10 @@ def evaluate(state_dir: Path, closed_minutes: int) -> dict:
         "accuracy": {"value": (g_conf / len(grounded)) if grounded else None,
                      "n_grounded": len(grounded),
                      "note": "self-evaluations excluded — not ground truth"},
-        "calibration": {"value": None, "note": "requires numeric confidence buckets over time — not yet emitted"},
+        "calibration": {"by_source_verdict": by_source_verdict,
+                        "note": "verdict×source matrix; numeric confidence "
+                                "buckets unavailable — predictions carry no "
+                                "probability field (honest gap, not synthesized)"},
         "coverage": {"value": (n_eval / n_pred) if n_pred else None,
                      "note": "fraction of created predictions that reached evaluation"},
         "specificity": {"with_falsifier": sum(1 for p in preds.values()
@@ -108,8 +145,7 @@ def evaluate(state_dir: Path, closed_minutes: int) -> dict:
         "resolution_rate": {"value": ((verdicts["confirmed"] + verdicts["refuted"]) / n_eval)
                             if n_eval else None},
         "abstention": {"unknown_verdicts": verdicts["unknown"]},
-        "decision_relevance": {"value": None,
-                               "note": "requires downstream decision outcome linkage — future"},
+        "decision_relevance": decision_relevance(canon_dir, evals),
         "natural_vs_test": {"value": None, "note": "requires task provenance tags — future"},
         "prediction_cost": {"total_predictions": n_pred},
         "sessions": {"closed_episodes": len(per_session),
@@ -131,8 +167,12 @@ def main() -> int:
     ap.add_argument("--state", required=True, help="runtime state dir (ledger/runs)")
     ap.add_argument("--out", required=True, help="output dir for learning-metrics")
     ap.add_argument("--closed-minutes", type=int, default=30)
+    ap.add_argument("--canonical", default=None,
+                    help="optional canonical dir — enables decision_relevance "
+                         "scan of proposals/problems (read-only)")
     args = ap.parse_args()
-    rep = evaluate(Path(args.state), args.closed_minutes)
+    rep = evaluate(Path(args.state), args.closed_minutes,
+                   Path(args.canonical) if args.canonical else None)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     dest = out / f"learning-metrics-{datetime.now():%Y-%m-%d}.json"

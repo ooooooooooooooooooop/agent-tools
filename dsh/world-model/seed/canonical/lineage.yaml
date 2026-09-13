@@ -1,0 +1,9 @@
+entity_id: REPLACE_ME
+genesis_event: ENTITY_GENESIS pending
+lineage_head: null
+canonical_revision: null
+continuity_epoch: 0
+active_body: null
+bcc_version: BCC-1
+parent_entity: null
+history_ref: history/lineage.jsonl
