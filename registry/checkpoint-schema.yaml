@@ -10,7 +10,7 @@
 
 schema_version: 1
 format: json
-location: "personal-ai-state/checkpoints/<task_id>.json"
+location: "<instance-root>/checkpoints/<task_id>.json"
 
 fields:
   schema_version:            # int，固定 1

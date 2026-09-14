@@ -39,8 +39,21 @@ def load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8-sig"))
 
 
+def _is_instance_root(p: Path) -> bool:
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
 def state_root() -> Path:
-    return Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
 
 
 def checkpoints_dir() -> Path:

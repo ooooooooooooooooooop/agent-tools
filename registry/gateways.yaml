@@ -1,6 +1,6 @@
 # gateways.yaml — 本地网关 TEMPLATE/EXAMPLE（公开 schema 面 · 非 SSOT）
 # SSOT 说明：真实私人 gateway alias/mapping 的唯一 canonical 在 personal-ai-state
-# 私有仓库 registry/gateways.yaml（本机路径由运行时按 ~/personal-ai-state 解析）。
+# 私有仓库 registry/gateways.yaml（本机路径由运行时按实例根 PERSONAL_AI_HOME 解析）。
 # 本文件仅提供 schema + 示例值；任何 generated copy 不得被误认为 canonical。
 gateways:
   example-gateway:

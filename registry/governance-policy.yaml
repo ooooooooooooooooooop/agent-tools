@@ -17,7 +17,7 @@ auto_allowed:
   - upstream_capability_review_proposal
   # AUTONOMOUS_EXECUTION_GOVERNANCE（Migration #8）—— deterministic 强制执行与派生记录
   - budget_enforcement      # 预算上限判定/拒绝 = 确定性强制（不改 canonical）
-  - checkpoint_write        # 写 personal-ai-state/checkpoints/（durable state，非 canonical 变更）
+  - checkpoint_write        # 写 <instance-root>/checkpoints/（durable state，非 canonical 变更）
   - usage_ledger_append     # 追加 usage.jsonl（derived runtime record）
   - compact_context         # 触发 Harness 原生 compaction
 auto_forbidden:

@@ -100,7 +100,11 @@ const WM_PARAMETERS = {
 
 export function apply(ctx, config = {}) {
   const wmDir = config.stateDir || join(homedir(), '.dsh', 'world-model');
-  const canonicalDir = config.canonicalDir || join(homedir(), 'personal-ai-state', 'world-model');
+  // instance-contract-v1: config > WORLD_MODEL_HOME > ~/world-model/pilot > legacy discovery
+  const wmDefault = join(homedir(), 'world-model', 'pilot');
+  const wmLegacy = join(homedir(), 'personal-ai-state', 'world-model');
+  const canonicalDir = config.canonicalDir || process.env.WORLD_MODEL_HOME
+    || (existsSync(wmDefault) || !existsSync(wmLegacy) ? wmDefault : wmLegacy);
   const bodyId = config.bodyId || `dsh-${hostname()}`;
   const envMode = String(config.mode || process.env.DSH_WM_MODE || 'off').toLowerCase();
   for (const d of [join(wmDir, 'ledger'), join(wmDir, 'runs'), join(canonicalDir, 'proposals'), join(canonicalDir, 'history')]) {

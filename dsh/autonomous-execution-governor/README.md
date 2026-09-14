@@ -22,7 +22,7 @@
 - **启用硬门禁**：patch 配置 `taskId` + `profile`（或环境变量 `AE_GOV_TASK_ID` / `AE_GOV_PROFILE`）后，guard 层在 dispatch 前强制执行：
   - agent_turns（以 tool action 数为 turn 代理，偏保守）、provider_calls、runtime_min → `FAIL CLOSED`（返回拒绝原因给模型）+ 写 durable checkpoint + audit。
   - loop breaker：repeated identical tool call（同 tool+args hash 窗口内重复）、no-progress（无 write-like 动作的连续轮）→ 先 soft（窗口阈值内继续观察），达 hard 阈值 → `circuit_broken`，停止一切工具派发，checkpoint `stop_reason=loop_breaker`。
-  - checkpoint cadence：每 `checkpoint_cadence_turns` 轮落盘一次（`checkpoint.py save`，写入 `personal-ai-state/checkpoints/`）。
+  - checkpoint cadence：每 `checkpoint_cadence_turns` 轮落盘一次（`checkpoint.py save`，写入 `<instance-root>/checkpoints/`）。
 - 内部错误永远 fail-open（记录 audit，不阻断）。
 
 ## 验证

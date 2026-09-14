@@ -26,5 +26,5 @@
     config:
       mode: null          # null → env DSH_WM_MODE → off
       stateDir: null      # null → ~/.dsh/world-model
-      canonicalDir: null  # null → ~/personal-ai-state/world-model（junction→Desktop/world-model/pilot）
+      canonicalDir: null  # null => WORLD_MODEL_HOME || ~/world-model/pilot (legacy ~/personal-ai-state/world-model discovery-only)  # null => WORLD_MODEL_HOME || ~/world-model/pilot (legacy ~/personal-ai-state/world-model discovery-only)  # null => WORLD_MODEL_HOME || ~/world-model/pilot (legacy ~/personal-ai-state/world-model discovery-only)  # null → ~/personal-ai-state/world-model（junction→Desktop/world-model/pilot）
       bodyId: null        # null → dsh-<hostname>；必须与 lineage.active_body 一致才可写 canonical proposals

@@ -50,7 +50,7 @@ profile_admission:
   safe_default: AUTONOMOUS_STANDARD        # 任何明确 autonomous task 无法分类时进入 bounded default
   unknown_not_unbounded: true              # 绝不因 UNKNOWN 进入无约束观察模式
   classifier: scripts/autonomy/profile_admission.py   # Personal AI 资产（harness 中立）
-  durable_record: "personal-ai-state/checkpoints/<task_id>.admission.json"
+  durable_record: "<instance-root>/checkpoints/<task_id>.admission.json"
   ledger_kinds: [admission, escalation]
   classification_signals:
     - id: bulk_repetition
@@ -227,7 +227,7 @@ context_governor:
   principles:
     - "任务连续 ≠ conversation history 连续：resume 读 checkpoint（next_executable_action），不重放巨大 conversation"
     - "cache-read 计入预算：cached_input_token_budget 超限即触发 COMPACT（对症 session-0d07ae22 数百次重复 cache-read）"
-    - "长时间任务按 checkpoint_cadence 落盘 durable checkpoint（personal-ai-state/checkpoints/）"
+    - "长时间任务按 checkpoint_cadence 落盘 durable checkpoint（<instance-root>/checkpoints/）"
   compaction:
     harness_native: "DSH compaction（含 compaction-convergence guard）/ Claude /compact / AGENTS 块外部压缩由各 harness adapter 映射"
     rule: "compaction 摘要模型档由 routing-policy compaction_summary SSOT 决定（已存在，复用）"
@@ -235,7 +235,7 @@ context_governor:
 # ---------------------------------------------------------------- Checkpoint Contract
 checkpoint_contract:
   schema: registry/checkpoint-schema.yaml   # 唯一 schema（v1）
-  durable_state: personal-ai-state/checkpoints/<task_id>.json   # Personal AI durable state
+  durable_state: <instance-root>/checkpoints/<task_id>.json   # Personal AI durable state
   rule: "checkpoint 不得只存在于某 Harness session history；任何支持本协议的 Harness 可从中恢复"
   protocol_hash: "sha256(checkpoint-schema.yaml + autonomous-execution-governance.yaml schema_version)"
   adapters:
@@ -345,7 +345,7 @@ generated_instructions: |
        由 Personal AI Model/Routing SSOT（registry/models.yaml + routing-policy.yaml）
        决定。
     5. 长时间任务必须 CHECKPOINT → COMPACT → RESUME；Checkpoint 写入 Personal AI
-       durable state（personal-ai-state/checkpoints/），resume 读 checkpoint 而非原
+       durable state（<instance-root>/checkpoints/），resume 读 checkpoint 而非原
        conversation；cache-read token 计入预算，超限即触发 COMPACT。
     6. 无进展循环（PROGRESS_DELTA = 0 持续 N 轮；重复相同工具调用 / 错误 / 修复 /
        judge / provider probe）自动 circuit break，stop_reason=LOOP_BREAKER 落
