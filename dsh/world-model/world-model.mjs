@@ -100,8 +100,11 @@ const WM_PARAMETERS = {
 
 export function apply(ctx, config = {}) {
   const wmDir = config.stateDir || join(homedir(), '.dsh', 'world-model');
-  // instance-contract-v1: config > WORLD_MODEL_HOME > ~/world-model/pilot/canonical > legacy discovery
-  const wmDefault = join(homedir(), 'world-model', 'pilot', 'canonical');
+  // instance-contract-v1: config > WORLD_MODEL_HOME > <instance-root>/world-model/canonical > legacy discovery
+  // 产品不预设研究仓路径；研究机用 WORLD_MODEL_HOME 显式指向 pilot。
+  const iroot = process.env.PERSONAL_AI_HOME || process.env.PERSONAL_AI_STATE
+    || join(homedir(), '.personal-ai');
+  const wmDefault = join(iroot, 'world-model', 'canonical');
   const wmLegacy = join(homedir(), 'personal-ai-state', 'world-model');
   const canonicalDir = config.canonicalDir || process.env.WORLD_MODEL_HOME
     || (existsSync(wmDefault) || !existsSync(wmLegacy) ? wmDefault : wmLegacy);
