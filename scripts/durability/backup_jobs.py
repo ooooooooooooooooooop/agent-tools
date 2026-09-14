@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """backup_jobs.py — consistent sqlite snapshots of the Durable Job DB.
 
-The durable job registry (~/.personal-ai/jobs/durable_jobs.db) is the
+The durable job registry (<instance-root>/jobs/durable_jobs.db) is the
 coordination authority for Personal AI durable execution. It was never covered
 by any backup (forensics 2026-09-03). Uses the SQLite online backup API (NOT a
 raw file copy) so snapshots are consistent even while the registry is writing.
@@ -17,14 +17,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import backup_root, ledger_append, now_iso, sha256_file  # noqa: E402
+from common import _instance_root, backup_root, ledger_append, now_iso, sha256_file  # noqa: E402
 
 
 def jobs_db_path() -> Path:
     custom = os.environ.get("PERSONAL_AI_JOBS_DB")
     if custom:
         return Path(custom)
-    return Path.home() / ".personal-ai" / "jobs" / "durable_jobs.db"
+    return _instance_root() / "jobs" / "durable_jobs.db"
 
 
 def snapshot(src: Path, root: Path) -> dict:

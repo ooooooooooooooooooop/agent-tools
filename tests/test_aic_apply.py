@@ -293,7 +293,7 @@ class TestPhysicalLiveDrift(unittest.TestCase):
         f = Path(os.environ.get("DSH_HOME", Path.home() / ".dsh")) / "settings.yaml"
         if not f.is_file():
             self.skipTest("dsh 未安装")
-        if not aic.PRIVATE_STATE.is_dir():
+        if not aic._is_instance_root(aic.PRIVATE_STATE):
             self.skipTest("requires live personal-ai-state canonical")
         before = f.read_bytes()
         try:
@@ -320,7 +320,7 @@ class TestPhysicalLiveDrift(unittest.TestCase):
 class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
     """跨设备场景：DSH settings canonical 变更后通过 git pull 并由 aic 收敛。"""
 
-    @unittest.skipUnless(aic.PRIVATE_STATE.is_dir(),
+    @unittest.skipUnless(aic._is_instance_root(aic.PRIVATE_STATE),
                          "requires live personal-ai-state canonical")
     def test_canonical_to_runtime_convergence(self):
         td_obj = tempfile.TemporaryDirectory()
@@ -378,7 +378,7 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
 
             # B：pull → diff 必须发现 drift → apply → NO DRIFT
             envB = {**os.environ, "HOME": str(homeB), "USERPROFILE": str(homeB), "DSH_HOME": str(dshB),
-                    "PERSONAL_AI_STATE": os.environ.get("PERSONAL_AI_HOME", str(Path.home() / "personal-ai-state"))}
+                    "PERSONAL_AI_STATE": str(aic.PRIVATE_STATE)}
             aicB = devB / "scripts" / "aic" / "aic.py"
             subprocess.run(["git", "-C", str(devB), "pull", "--ff-only", "origin", "main"],
                            check=True, capture_output=True, env=env_git)

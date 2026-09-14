@@ -183,7 +183,7 @@ def main() -> int:
 
     artifacts = {
         "jobs": {
-            "source": str(Path.home() / ".personal-ai" / "jobs" / "durable_jobs.db"),
+            "source": str(_instance_root() / "jobs" / "durable_jobs.db"),
             "file": str(latest_job_snap.relative_to(root)).replace("\\", "/") if latest_job_snap else None,
             "sha256": sha256_file(latest_job_snap) if latest_job_snap else None,
             "bytes": latest_job_snap.stat().st_size if latest_job_snap else 0,

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .checkpoint_ext import MachineCheckpoint
 from .db import get_connection, init_db
+from ._paths import instance_root
 from .final_adjudicator import FinalAdjudicator
 from .lease import LeaseDeniedError, LeaseManager
 from .models import (
@@ -28,7 +29,7 @@ def get_default_db_path() -> Path:
     custom = os.environ.get("PERSONAL_AI_JOBS_DB")
     if custom:
         return Path(custom)
-    p = Path.home() / ".personal-ai" / "jobs" / "durable_jobs.db"
+    p = instance_root() / "jobs" / "durable_jobs.db"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
