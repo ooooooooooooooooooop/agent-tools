@@ -263,7 +263,7 @@ class ChatGPTDom:
             },
         )
         await asyncio.sleep(0.1)
-        await d._cdp("Input.insertText", {"text": text})
+        await self._insert_text(text, focused_target)
         await asyncio.sleep(0.5)
 
         # Verify the composer holds EXACTLY the intended input (canonicalized),
@@ -298,7 +298,7 @@ class ChatGPTDom:
                 "})()"
             )
             await asyncio.sleep(0.1)
-            await d._cdp("Input.insertText", {"text": text})
+            await self._insert_text(text, focused_target)
             await asyncio.sleep(0.5)
             if not await d._verify_composer_text(verify_selector, text):
                 if d._breakers:
@@ -309,6 +309,28 @@ class ChatGPTDom:
                     f"Composer text verification failed after retry; expected {text[:60]!r}"
                 )
         logger.info("Typed: %s", text[:80])
+
+    async def _insert_text(self, text: str, focused_target: str) -> None:
+        """Insert ``text`` into the composer via execCommand.
+
+        ``Input.insertText`` truncates at the first ``\\n`` on the current
+        conversation-page composer (observed 2026-09-14: only the first
+        paragraph lands). ``document.execCommand('insertText')`` routes
+        through the editor's own text-insertion path and produces
+        block children the verifier can read back.
+        """
+        d = self._driver
+        ins_sel = (
+            COMPOSER_SELECTOR if focused_target == "composer" else COMPOSER_FALLBACK_SELECTOR
+        )
+        await d._js_strict(
+            "(function(){"
+            f"  var el = document.querySelector('{ins_sel}');"
+            "  if (!el) return false;"
+            "  el.focus();"
+            f"  return document.execCommand('insertText', false, {json.dumps(text)});"
+            "})()"
+        )
 
     async def _detect_select_all_modifier(self) -> int:
         """Return the CDP modifiers value for select-all on the live platform.

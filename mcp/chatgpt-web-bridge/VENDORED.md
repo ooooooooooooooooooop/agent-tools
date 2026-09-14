@@ -17,6 +17,14 @@ Local delta carried in this copy (applied on top of upstream):
   wrong project.
 - **upstream fixes**: temp-route misrouting, zh placeholder premature
   completion detection.
+- **composer multiline insert** (`chatgpt_dom._insert_text`): CDP
+  `Input.insertText` truncates at the first `\n` on the current
+  conversation-page composer (only the first paragraph lands — observed
+  live 2026-09-14 after a ChatGPT frontend update; the new-chat page
+  composer still splits paragraphs correctly). Insert now goes through
+  `document.execCommand('insertText')`, which routes through the editor's
+  own text-insertion path and produces the block structure the canonical
+  verifier reads back.
 - `start.ps1`: persistent-Chrome topology launcher (Chrome standalone,
   daemons attach; restarting daemons never touches the browser/login).
 - **lazy Chrome bring-up in MCP**: both MCP driver paths (session-pool

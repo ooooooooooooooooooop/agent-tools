@@ -138,15 +138,19 @@ async def test_type_message_focuses_new_composer_when_present(monkeypatch):
     focus_expr = calls["js"][0]
     assert COMPOSER_SELECTOR in focus_expr
 
-    # Verify step read textContent from the COMPOSER_SELECTOR (not the
-    # fallback), proving we verified the element we actually focused.
-    verify_expr = calls["strict"][0]
+    # Verify step reads the COMPOSER_SELECTOR (not the fallback), proving we
+    # verified the element we actually focused. The insert also goes through
+    # _js_strict (execCommand('insertText')), so the verify is the LAST strict
+    # call, not the first.
+    verify_expr = calls["strict"][-1]
     assert COMPOSER_SELECTOR in verify_expr
     assert COMPOSER_FALLBACK_SELECTOR not in verify_expr
 
-    # Insert text dispatched via CDP Input.insertText.
-    assert any(m == "Input.insertText" and p["text"] == "hello"
-               for m, p in calls["cdp"])
+    # Insert dispatched via execCommand('insertText') JS — CDP
+    # Input.insertText truncates at the first \n on the current
+    # conversation-page composer (live regression 2026-09-14).
+    assert any("execCommand('insertText'" in e and '"hello"' in e
+               for e in calls["strict"])
 
 
 @pytest.mark.asyncio
@@ -176,7 +180,8 @@ async def test_type_message_falls_back_to_legacy_textarea(monkeypatch):
     assert COMPOSER_FALLBACK_SELECTOR in focus_expr
 
     # Verify read from the FALLBACK selector since that's what focused.
-    verify_expr = calls["strict"][0]
+    # (insert also runs through _js_strict — verify is the last strict call)
+    verify_expr = calls["strict"][-1]
     assert COMPOSER_FALLBACK_SELECTOR in verify_expr
 
 
@@ -293,12 +298,15 @@ async def test_type_message_retries_on_stale_text_then_succeeds(monkeypatch):
     d._js = AsyncMock(return_value="composer")
     d._cdp = AsyncMock(return_value={})
     d._detect_select_all_modifier = AsyncMock(return_value=2)
-    # First verify returns STALE text, the execCommand-clear call returns
-    # "true", then the post-retry verify returns the correct input.
-    verify_returns = ["old stale content", "true", "correct input"]
+    # Insert calls go through _js_strict too (execCommand('insertText')),
+    # so discriminate by expression: insert → True, execCommand-clear →
+    # "true", verify → queued stale-then-correct reads.
+    verify_returns = ["old stale content", "correct input"]
     async def _fake_strict(expr, timeout=15):
-        # execCommand-clear + re-verify both call _js_strict; return the
-        # sequence. The platform probe is bypassed via _detect_select_all_modifier.
+        if "execCommand('insertText'" in expr:
+            return True
+        if "selectNodeContents" in expr:
+            return "true"  # execCommand clear
         return verify_returns.pop(0) if verify_returns else ""
     d._js_strict = _fake_strict
     monkeypatch.setattr("chatgpt_web2api.cdp_driver.asyncio.sleep", AsyncMock())

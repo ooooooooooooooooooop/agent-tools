@@ -32,5 +32,16 @@ Chrome 里登录 ChatGPT 一次（profile 持久）。
 - `request_pace.py`：账号级跨进程节流（send≥30s / read≥8s / 429→冷却300s）
 - `resolve_project_id`：project_id 可传项目名，未知/歧义直接报错
 - 上游修复：临时路由误采、zh 占位文本过早完成判定
+- composer 多行插入：会话页 `Input.insertText` 遇 `\n` 只落首段（2026-09-14
+  ChatGPT 前端更新后实证），改用 `execCommand('insertText')` 走编辑器自身的
+  插入路径
+
+排障速查：
+- `Composer text verification failed`：插入文本与读回不一致——多为换行截断
+  或会话残留的未发送草稿；失败发送会把已插入部分留成草稿，下一次发送可能
+  连带失败，先 `get_conversation` 核实尾部再重发
+- `no driver slot available` / health `degraded` + `driver_connected:false`：
+  daemon 丢了 CDP 连接且不自愈，重跑 `start.ps1`（幂等，不动 Chrome/登录态）；
+  若存在多个同名 daemon 进程，先清掉再起
 
 License: MIT（见 `LICENSE`）。
