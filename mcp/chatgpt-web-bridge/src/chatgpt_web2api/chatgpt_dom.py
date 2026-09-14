@@ -279,24 +279,7 @@ class ChatGPTDom:
             logger.warning(
                 "Composer text mismatch on first insert; retrying with execCommand clear"
             )
-            await d._js_strict(
-                "(function(){"
-                f"  var el = document.querySelector('{verify_selector}');"
-                "  if (el) {"
-                "    if (el.tagName === 'TEXTAREA') {"
-                "      el.focus(); el.select();"
-                "      try { document.execCommand('delete'); } catch(e) {}"
-                "    } else {"
-                "      el.focus();"
-                "      var sel = window.getSelection(); sel.removeAllRanges();"
-                "      var range = document.createRange(); range.selectNodeContents(el);"
-                "      sel.addRange(range);"
-                "      try { document.execCommand('delete'); } catch(e) {}"
-                "    }"
-                "  }"
-                "  return true;"
-                "})()"
-            )
+            await self._clear_composer(verify_selector)
             await asyncio.sleep(0.1)
             await self._insert_text(text, focused_target)
             await asyncio.sleep(0.5)
@@ -331,6 +314,57 @@ class ChatGPTDom:
             f"  return document.execCommand('insertText', false, {json.dumps(text)});"
             "})()"
         )
+
+    async def _clear_composer(self, selector: str | None = None) -> bool:
+        """Best-effort composer clear — select-all + execCommand('delete').
+
+        A send that fails AFTER ``type_message`` inserted text leaves that
+        text in the composer as a draft; the next send's canonical verify
+        then fails on the leftover (field-observed 2026-09-15: a nudge that
+        never went out left a draft that needed manual evaluate_script
+        surgery). Clearing goes through the editor's own input path so
+        ProseMirror registers the deletion — the same mechanism the
+        type_message retry uses.
+
+        ``selector`` pins the element when the caller already knows which
+        composer variant was focused; None probes primary then fallback.
+        Never raises; returns True only when a composer was found and reads
+        empty afterwards.
+        """
+        d = self._driver
+        find_el = (
+            f"document.querySelector('{selector}')"
+            if selector
+            else (
+                f"document.querySelector('{COMPOSER_SELECTOR}')"
+                f" || document.querySelector('{COMPOSER_FALLBACK_SELECTOR}')"
+            )
+        )
+        try:
+            raw = await d._js_strict(
+                "(function(){"
+                f"  var el = {find_el};"
+                "  if (!el) return false;"
+                "  el.focus();"
+                "  if (el.tagName === 'TEXTAREA') {"
+                "    el.select();"
+                "  } else {"
+                "    var sel = window.getSelection(); sel.removeAllRanges();"
+                "    var range = document.createRange(); range.selectNodeContents(el);"
+                "    sel.addRange(range);"
+                "  }"
+                "  try { document.execCommand('delete'); } catch(e) {}"
+                "  return (el.tagName === 'TEXTAREA')"
+                "    ? !el.value"
+                "    : !(el.innerText || '').replace(/\\u00a0/g, ' ').trim();"
+                "})()",
+                timeout=10,
+            )
+        except BaseException:
+            # Cleanup must never mask the original send error — including
+            # CancelledError when the client aborted mid-send.
+            return False
+        return raw is True or str(raw).strip().lower() == "true"
 
     async def _detect_select_all_modifier(self) -> int:
         """Return the CDP modifiers value for select-all on the live platform.

@@ -51,6 +51,17 @@ Local delta carried in this copy (applied on top of upstream):
   errors no longer masquerade as empty conversations — and `out_file`
   (absolute path) writes the page to disk so long replies never have to
   cross the MCP tool-result budget.
+- **`wait_reply` terminal-status gate**: a persisted assistant node whose
+  backend status is still `in_progress` no longer counts as "replied" —
+  the early-intro false positive (observed 2026-09-15) that made callers
+  consume partial replies and misdiagnose a live generation as dead. The
+  result gains `tail_status`; on `timeout`, `in_progress` means the web
+  side is still generating (wait again, don't nudge).
+- **composer draft auto-clear**: any failure inside the send window
+  (type → click → send-ack), including client-side cancel, best-effort
+  clears the composer — a failed send can no longer leave a draft that
+  poisons the next send's canonical verification (observed 2026-09-15:
+  recovery previously required manual `evaluate_script` surgery).
 
 Runtime state is NOT vendored: `.venv`, `~/.chatgpt_web2api/` (config, tab
 registry, pace file), Chrome profile, and conversation ids live per-device /

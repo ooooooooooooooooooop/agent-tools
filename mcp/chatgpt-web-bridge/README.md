@@ -38,8 +38,10 @@ Chrome 里登录 ChatGPT 一次（profile 持久）。
 
 排障速查：
 - `Composer text verification failed`：插入文本与读回不一致——多为换行截断
-  或会话残留的未发送草稿；失败发送会把已插入部分留成草稿，下一次发送可能
-  连带失败，先 `get_conversation` 核实尾部再重发
+  或会话残留的未发送草稿；发送失败后桥会自动清 composer 草稿（2026-09-15
+  起），仍见此错先 `get_conversation` 核实尾部再重发
+- `wait_reply` 只在 tail assistant 终态（非 `in_progress`）报 `replied`；
+  timeout 看 `tail_status`——`in_progress` = 网页端还在生成，再 wait 别催促
 - `no driver slot available` / health `degraded` + `driver_connected:false`：
   daemon 丢了 CDP 连接且不自愈，重跑 `start.ps1`（幂等，不动 Chrome/登录态）；
   若存在多个同名 daemon 进程，先清掉再起

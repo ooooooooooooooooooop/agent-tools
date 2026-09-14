@@ -498,8 +498,9 @@ WAIT_REPLY_OUTPUT = {
         "status": {
             "type": "string",
             "description": (
-                "'replied' = an assistant message landed; 'timeout' = deadline hit "
-                "first; 'dead' = the tail stayed your own user message past "
+                "'replied' = an assistant reply FINISHED generating (terminal "
+                "backend status); 'timeout' = deadline hit first; 'dead' = "
+                "the tail stayed your own user message past "
                 "dead_after_seconds — generation died, nudge in the same "
                 "conversation instead of waiting."
             ),
@@ -508,6 +509,16 @@ WAIT_REPLY_OUTPUT = {
         "last_role": {
             "type": ["string", "null"],
             "description": "Role of the last stored message on the final poll.",
+        },
+        "tail_status": {
+            "type": ["string", "null"],
+            "description": (
+                "Backend status of the tail assistant message on the final "
+                "poll ('in_progress', 'finished_successfully', …; null when "
+                "the tail is not an assistant message or the payload carries "
+                "no status). On 'timeout', 'in_progress' means the web side "
+                "is STILL generating — call wait_reply again, do NOT nudge."
+            ),
         },
         "waited_s": {"type": "number", "description": "Seconds actually waited."},
     },
@@ -950,13 +961,18 @@ async def do_list_projects(driver: CDPDriver) -> dict:
     }
 
 
-def _conversation_chain(data: dict) -> list[dict]:
+def _conversation_chain(data: dict, *, with_meta: bool = False) -> list[dict]:
     """Walk the backend mapping tree from current_node backwards →
     oldest-first [{role, content}] of user/assistant messages.
 
     Returns [] when the payload carries no mapping (failed/404/empty fetches
     all collapse here — callers distinguish them via the _fetch_* annotations
     backend_client stamps on the result).
+
+    With ``with_meta=True`` each entry also carries the node's raw ``status``
+    and ``end_turn`` fields — internal use only (wait_reply's terminal-
+    generation gate); get_conversation output keeps the {role, content}
+    shape.
     """
     mapping = data.get("mapping") or {}
     node_id = data.get("current_node")
@@ -971,10 +987,33 @@ def _conversation_chain(data: dict) -> list[dict]:
             parts = msg.get("content", {}).get("parts", [])
             text = " ".join(p for p in parts if isinstance(p, str))
             if text and role in ("user", "assistant"):
-                chain.append({"role": role, "content": text})
+                entry = {"role": role, "content": text}
+                if with_meta:
+                    entry["status"] = msg.get("status")
+                    entry["end_turn"] = msg.get("end_turn")
+                chain.append(entry)
         node_id = node_data.get("parent")
     chain.reverse()
     return chain
+
+
+def _tail_reply_finished(entry: dict) -> bool:
+    """Did the tail assistant message FINISH generating?
+
+    The backend marks a live-streaming node ``status='in_progress'`` (with
+    ``end_turn`` unset/false) and flips to a ``finished_*`` status once the
+    turn completes. Node existence alone is NOT completion — field-observed
+    2026-09-15: wait_reply reported 'replied' on a still-streaming intro
+    node and the caller consumed a partial reply, then misdiagnosed a live
+    generation as dead. Payloads carrying no signal at all (mocks, stripped
+    fixtures) keep the legacy exists-is-done behavior.
+    """
+    status = entry.get("status")
+    if status is not None:
+        return status != "in_progress"
+    if entry.get("end_turn") is not None:
+        return bool(entry["end_turn"])
+    return True
 
 
 # Post-send persistence-check timings — module-level so tests can
@@ -1088,6 +1127,7 @@ async def do_wait_reply(
     start = time.monotonic()
     total = 0
     last_role = None
+    tail_status = None
     user_tail_since: float | None = None
 
     while True:
@@ -1095,12 +1135,19 @@ async def do_wait_reply(
             data = await driver.get_conversation(validated.conversation_id)
         except Exception:
             data = {}
-        chain = _conversation_chain(data) if isinstance(data, dict) else []
+        chain = _conversation_chain(data, with_meta=True) if isinstance(data, dict) else []
         total = len(chain)
-        last_role = chain[-1]["role"] if chain else None
+        tail = chain[-1] if chain else {}
+        last_role = tail.get("role")
+        tail_status = tail.get("status") if last_role == "assistant" else None
 
-        replied = last_role == "assistant" and (
-            validated.since_total is None or total > validated.since_total
+        # 'replied' requires a TERMINAL tail: a persisted assistant node can
+        # still be streaming (status='in_progress') — counting it was the
+        # 2026-09-15 false-replied incident.
+        replied = (
+            last_role == "assistant"
+            and _tail_reply_finished(tail)
+            and (validated.since_total is None or total > validated.since_total)
         )
         if replied:
             status = "replied"
@@ -1124,7 +1171,8 @@ async def do_wait_reply(
             break
         await _notify(
             on_progress,
-            f"Waiting for reply… total={total} last={last_role or 'none'}",
+            f"Waiting for reply… total={total} last={last_role or 'none'}"
+            + (f" ({tail_status})" if tail_status else ""),
         )
         await asyncio.sleep(min(validated.poll_seconds, remaining))
 
@@ -1133,6 +1181,7 @@ async def do_wait_reply(
         "status": status,
         "total": total,
         "last_role": last_role,
+        "tail_status": tail_status,
         "waited_s": round(time.monotonic() - start, 1),
     }
 
@@ -1454,10 +1503,17 @@ def _build_tools() -> list[mcp_types.Tool]:
             name=ToolName.WAIT_REPLY.value,
             title="Wait for Reply",
             description=(
-                "Block until an assistant reply persists in the conversation "
-                "(or the timeout hits). Use after chat_completion when the "
-                "stream looked corrupt/truncated, or `reply_persisted` came "
-                "back false — instead of hand-polling get_conversation.\n\n"
+                "Block until an assistant reply FINISHES generating and "
+                "persists in the conversation (or the timeout hits). Use "
+                "after chat_completion when the stream looked "
+                "corrupt/truncated, or `reply_persisted` came back false — "
+                "instead of hand-polling get_conversation.\n\n"
+                "A reply counts only once its backend status is terminal — a "
+                "still-streaming tail (status='in_progress') keeps waiting. "
+                "On 'timeout' read `tail_status`: 'in_progress' means the web "
+                "side is STILL generating (a bridge-side read timeout is not "
+                "a dead generation), so call wait_reply again rather than "
+                "nudging.\n\n"
                 "Pass `since_total` (a prior call's `total`) to wait for a NEW "
                 "reply past an existing tail. Status 'dead' fires early when "
                 "the tail stays your own user message past dead_after_seconds "

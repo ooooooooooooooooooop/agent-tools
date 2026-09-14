@@ -625,17 +625,24 @@ def test_js_with_data_escapes_properly():
 
 def _chain_driver(messages):
     """Mock driver whose get_conversation returns a linear chain built from
-    [(role, text), ...]; current_node = last node."""
+    [(role, text), ...] or [(role, text, {extra message fields}), ...];
+    current_node = last node."""
     from chatgpt_web2api.cdp_driver import CDPDriver
 
     driver = MagicMock(spec=CDPDriver)
     mapping = {}
     prev = None
-    for i, (role, text) in enumerate(messages):
+    for i, item in enumerate(messages):
+        role, text = item[0], item[1]
+        meta = dict(item[2]) if len(item) > 2 else {}
         nid = f"n{i}"
         mapping[nid] = {
             "parent": prev,
-            "message": {"author": {"role": role}, "content": {"parts": [text]}},
+            "message": {
+                "author": {"role": role},
+                "content": {"parts": [text]},
+                **meta,
+            },
         }
         prev = nid
     driver.get_conversation = AsyncMock(
@@ -819,3 +826,65 @@ async def test_wait_reply_dead_when_user_tail_persists():
     assert result["status"] == "dead"
     assert result["last_role"] == "user"
     assert result["waited_s"] < 30  # early exit — nowhere near the 600s timeout
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_waits_for_terminal_status_not_mere_node():
+    """2026-09-15 incident: a new assistant node persists early with
+    status='in_progress' and keeps streaming (the intro lands first).
+    wait_reply must NOT report 'replied' on it — only a terminal tail
+    counts, otherwise the caller consumes a partial reply and misdiagnoses
+    a live generation as dead."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    live = _chain_driver(
+        [("user", "q"), ("assistant", "intro…", {"status": "in_progress"})]
+    ).get_conversation
+    done = _chain_driver(
+        [
+            ("user", "q"),
+            ("assistant", "intro… full reply",
+             {"status": "finished_successfully", "end_turn": True}),
+        ]
+    ).get_conversation
+    d = MagicMock()
+    d.get_conversation = AsyncMock(side_effect=[await live("c"), await done("c")])
+
+    result = await do_wait_reply(
+        d, {"conversation_id": "c", "timeout_seconds": 30, "poll_seconds": 8}
+    )
+    assert result["status"] == "replied"
+    assert result["tail_status"] == "finished_successfully"
+    assert d.get_conversation.await_count == 2  # polled past the live tail
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_timeout_while_streaming_reports_tail_status():
+    """On timeout with a still-'in_progress' tail, tail_status tells the
+    caller the web side is STILL generating — not a dead generation, so
+    the right move is another wait_reply, not a nudge."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    d = _chain_driver(
+        [("user", "q"), ("assistant", "partial…", {"status": "in_progress"})]
+    )
+    result = await do_wait_reply(
+        d, {"conversation_id": "c", "timeout_seconds": 1, "poll_seconds": 8}
+    )
+    assert result["status"] == "timeout"
+    assert result["last_role"] == "assistant"
+    assert result["tail_status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_legacy_payload_without_status_still_replies():
+    """Payloads/mocks carrying no status/end_turn keep exists-is-done
+    behavior — no terminal signal available means 'assume finished'."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    d = _chain_driver([("user", "q"), ("assistant", "a")])  # no meta at all
+    result = await do_wait_reply(
+        d, {"conversation_id": "c", "timeout_seconds": 30}
+    )
+    assert result["status"] == "replied"
+    assert result["tail_status"] is None

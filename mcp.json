@@ -23,7 +23,7 @@
       "upstream_repository": "https://github.com/Octo-Lex/ChatGPT-Web2API",
       "upstream_commit": "497527dceabfa3f95961e23c291e618c5570f1ac",
       "upstream_version": "0.2.0",
-      "distribution_revision": "2026.09.11.1",
+      "distribution_revision": "2026.09.15.1",
       "entrypoint": "start.ps1",
       "installer": "install.ps1",
       "license": "MIT",

@@ -202,3 +202,118 @@ async def test_missing_composer_returns_none_not_false():
     assert result is None, (
         f"Missing composer should return None (inconclusive), got {result!r}"
     )
+
+
+# ── 4. Composer draft cleanup on send failure (2026-09-15 incident) ─────
+
+
+def _stub_send_prelude(driver):
+    """Stub everything send_and_stream does BEFORE the type/click window."""
+    driver._pace = MagicMock()
+    driver._pace.pace = AsyncMock(return_value=0.0)
+    driver._read_assistant_count_baseline = AsyncMock(return_value=0)
+    driver._identity_listener = None
+    driver._capture_pre_send_fallback_anchor = AsyncMock(return_value=MagicMock())
+    driver._assert_owned_tab_required = MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_failed_type_clears_composer_draft():
+    """A send that fails after text was inserted leaves it in the composer
+    as a draft; the NEXT send's canonical verify then fails on the leftover
+    (observed live 2026-09-15 — clearing needed manual evaluate_script
+    surgery). Any failure inside the type→ack window must best-effort
+    clear the composer before the error propagates."""
+    driver = _make_driver()
+    _stub_send_prelude(driver)
+    driver._clear_composer = AsyncMock(return_value=True)
+    driver.type_message = AsyncMock(
+        side_effect=SendReadinessError(
+            "Composer text verification failed after retry"
+        )
+    )
+    driver.click_send = AsyncMock()
+
+    with pytest.raises(SendReadinessError):
+        async for _ in driver.send_and_stream("test message", timeout=10):
+            pass
+
+    driver._clear_composer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unacknowledged_send_clears_composer_draft():
+    """The exact incident case: send NOT acknowledged means the composer
+    still holds the typed text — it must be cleared before the
+    SendReadinessError propagates."""
+    driver = _make_driver()
+    _stub_send_prelude(driver)
+    driver._clear_composer = AsyncMock(return_value=True)
+    driver.type_message = AsyncMock()
+    driver.click_send = AsyncMock()
+    driver._pre_send_user_count = 2
+
+    async def fake_js_strict(expr, timeout=15):
+        # Ack probe: user count unchanged, composer present and NOT empty
+        if "userCount" in expr and "composerEmpty" in expr:
+            return json.dumps(
+                {"userCount": 2, "composerPresent": True, "composerEmpty": False}
+            )
+        return "0"
+
+    driver._js_strict = fake_js_strict
+
+    with pytest.raises(Exception, match="(?i)acknowledge"):
+        async for _ in driver.send_and_stream("test message", timeout=10):
+            pass
+
+    driver._clear_composer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_send_does_not_clear_composer():
+    """A send that reaches completion detection must NOT run the clear —
+    clearing is a failure-path cleanup, not a post-send step."""
+    driver = _make_driver()
+    _stub_send_prelude(driver)
+    driver._clear_composer = AsyncMock(return_value=True)
+    driver.type_message = AsyncMock()
+    driver.click_send = AsyncMock()
+    driver._pre_send_user_count = 0
+
+    from chatgpt_web2api.turn_anchor import TurnAnchor
+
+    driver._capture_pre_send_fallback_anchor = AsyncMock(
+        return_value=TurnAnchor(sent_text="test", mode="fresh_chat")
+    )
+
+    async def fake_js_strict(expr, timeout=15):
+        if "userCount" in expr and "composerEmpty" in expr:
+            return json.dumps(
+                {"userCount": 1, "composerPresent": True, "composerEmpty": True}
+            )
+        if "window.location.href" in expr:
+            return "https://chatgpt.com/c/abc-123"
+        return "1"
+
+    driver._js_strict = fake_js_strict
+
+    from chatgpt_web2api.cdp_driver import StreamChunk
+    from chatgpt_web2api.turn_anchor import TurnTextResult
+
+    async def fake_stream(**kwargs):
+        yield StreamChunk(delta="ok")
+
+    driver._completion = MagicMock()
+    driver._completion.stream_until_complete = fake_stream
+    driver._completion.last_dom_text = "ok"
+    driver._completion.had_non_text_content = False
+    driver._fetch_text_for_turn = AsyncMock(
+        return_value=TurnTextResult("matched", text="ok", diagnostic={})
+    )
+
+    chunks = []
+    async for chunk in driver.send_and_stream("test message", timeout=10):
+        chunks.append(chunk)
+    assert chunks
+    driver._clear_composer.assert_not_awaited()

@@ -1726,6 +1726,14 @@ class CDPDriver:
         stays on driver)."""
         await self._dom.click_send()
 
+    async def _clear_composer(self, selector: str | None = None) -> bool:
+        """Best-effort composer clear — never raises.
+
+        Delegated to ChatGPTDom (Phase 5 PR3 extraction). Used on send-failure
+        paths so a half-inserted draft cannot poison the next send's verify.
+        """
+        return await self._dom._clear_composer(selector)
+
     # ── Response Retrieval ────────────────────────────────────
 
     async def _read_assistant_count_baseline(self) -> int:
@@ -2016,46 +2024,55 @@ class CDPDriver:
             # Account-level pace gate: sleep until the shared minimum send
             # interval / cooldown lets this POST through (cross-process).
             await self._pace.pace("send")
-            # Type and send.
-            await self.type_message(text)
-            await self.click_send()
+            # Type and send. If anything between the composer insert and the
+            # send-acknowledgment fails (verify mismatch, click miss, cancel),
+            # the typed text would linger as a composer draft and corrupt the
+            # NEXT send's verification — field-observed 2026-09-15: a failed
+            # nudge left a draft that needed manual evaluate_script surgery.
+            # Best-effort clear, then let the real error propagate.
+            try:
+                await self.type_message(text)
+                await self.click_send()
 
-            # A2 Step 6: wait for the IdentityListener to capture the UUID.
-            captured_uuid = None
-            if capture_scope is not None:
-                captured_uuid = await self._identity_listener.wait_for_captured_uuid(timeout=5.0)
+                # A2 Step 6: wait for the IdentityListener to capture the UUID.
+                captured_uuid = None
+                if capture_scope is not None:
+                    captured_uuid = await self._identity_listener.wait_for_captured_uuid(timeout=5.0)
 
-            # P0 send acknowledgment (ChatGPT review, conv 6a52f0f3):
-            # click_send dispatches synthetic mouse events — that proves the
-            # JS ran, not that React accepted the submission. Under load, the
-            # click can fire without producing a user message. Before entering
-            # completion detection, verify at least one acknowledgment signal:
-            #   1. UUID was captured, OR
-            #   2. user-message count increased AND composer cleared
-            # If none → raise before entering completion detection (which would
-            # waste time polling for a response that will never come).
-            #
-            # Graceful: if the acknowledgment probe fails (JS error, mock
-            # environment, unusual DOM), DON'T block the send. The check is a
-            # safety net for the overloaded-page case, not a hard gate that
-            # could prevent sends in edge cases we haven't seen.
-            if not captured_uuid:
-                try:
-                    acknowledged = await self._verify_send_acknowledged()
-                    if acknowledged is False:  # explicitly False, not None
-                        raise SendReadinessError(
-                            "Send not acknowledged — click dispatched but no user "
-                            "message appeared (no UUID captured, user count unchanged, "
-                            "composer not cleared). The page may be overloaded or the "
-                            "send was rejected. Do NOT retry automatically."
-                        )
-                except SendReadinessError:
-                    raise
-                except Exception as ack_err:
-                    # Probe failed (JS error, mock, unusual DOM). Don't block
-                    # the send — let completion detection proceed. Log so the
-                    # failure is traceable.
-                    logger.debug("Send acknowledgment probe failed (non-blocking): %s", ack_err)
+                # P0 send acknowledgment (ChatGPT review, conv 6a52f0f3):
+                # click_send dispatches synthetic mouse events — that proves the
+                # JS ran, not that React accepted the submission. Under load, the
+                # click can fire without producing a user message. Before entering
+                # completion detection, verify at least one acknowledgment signal:
+                #   1. UUID was captured, OR
+                #   2. user-message count increased AND composer cleared
+                # If none → raise before entering completion detection (which would
+                # waste time polling for a response that will never come).
+                #
+                # Graceful: if the acknowledgment probe fails (JS error, mock
+                # environment, unusual DOM), DON'T block the send. The check is a
+                # safety net for the overloaded-page case, not a hard gate that
+                # could prevent sends in edge cases we haven't seen.
+                if not captured_uuid:
+                    try:
+                        acknowledged = await self._verify_send_acknowledged()
+                        if acknowledged is False:  # explicitly False, not None
+                            raise SendReadinessError(
+                                "Send not acknowledged — click dispatched but no user "
+                                "message appeared (no UUID captured, user count unchanged, "
+                                "composer not cleared). The page may be overloaded or the "
+                                "send was rejected. Do NOT retry automatically."
+                            )
+                    except SendReadinessError:
+                        raise
+                    except Exception as ack_err:
+                        # Probe failed (JS error, mock, unusual DOM). Don't block
+                        # the send — let completion detection proceed. Log so the
+                        # failure is traceable.
+                        logger.debug("Send acknowledgment probe failed (non-blocking): %s", ack_err)
+            except (Exception, asyncio.CancelledError):
+                await self._clear_composer()
+                raise
 
             # A2 Step 7: build the final anchor (fallback + captured UUID).
             turn_anchor = fallback_anchor.with_captured_id(captured_uuid)
