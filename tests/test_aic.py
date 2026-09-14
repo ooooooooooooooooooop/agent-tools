@@ -105,7 +105,7 @@ class TestCapabilityAdoptionProjection(unittest.TestCase):
 class TestCanonicalIntegrity(unittest.TestCase):
     """The shipped canonical must pass its own validator at all times."""
 
-    @unittest.skipUnless(aic.PRIVATE_STATE.is_dir(),
+    @unittest.skipUnless(aic._is_instance_root(aic.PRIVATE_STATE),
                          "requires live personal-ai-state canonical")
     def test_validate_clean(self):
         self.assertEqual(aic.cmd_validate(None), 0)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """usage_ledger.py — Personal AI Usage Ledger（canonical schema v1，JSONL append-only）。
 
-- 位置：~/.personal-ai/ledger/usage.jsonl（PERSONAL_AI_LEDGER 可覆盖；设备 durable runtime，
+- 位置：<instance-root>/ledger/usage.jsonl（PERSONAL_AI_LEDGER 可覆盖；设备 durable runtime，
   随既有 durability 备份；不进入 git canonical）。
 - 记录：task/project/campaign/harness/session/model/provider/calls/input/cached/output/
   cost/artifacts/progress/event_context（schema: registry/usage-ledger-schema.yaml）。
@@ -26,9 +26,27 @@ RECORD_KINDS = {"usage", "progress", "checkpoint", "admission", "escalation",
 REQUIRED = ("kind", "task_id", "project_id")
 
 
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
 def ledger_path() -> Path:
     p = Path(os.environ.get("PERSONAL_AI_LEDGER",
-                            Path.home() / ".personal-ai" / "ledger" / "usage.jsonl"))
+                            _instance_root() / "ledger" / "usage.jsonl"))
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

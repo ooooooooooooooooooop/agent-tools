@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+from ._paths import instance_root
 from .models import MachineCheckpoint
 
 
@@ -24,7 +25,7 @@ class MachineCheckpointManager:
     """Handles serialization, disk persistence, and deterministic validation of machine checkpoints."""
 
     def __init__(self, checkpoints_root: Optional[Path] = None) -> None:
-        self.root = checkpoints_root or Path.home() / ".personal-ai" / "checkpoints"
+        self.root = checkpoints_root or instance_root() / "checkpoints"
         self.root.mkdir(parents=True, exist_ok=True)
 
     def checkpoint_path(self, job_id: str, attempt_id: str) -> Path:

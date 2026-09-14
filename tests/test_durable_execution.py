@@ -554,5 +554,46 @@ class DurableExecutionMatrixTests(unittest.TestCase):
             self.assertEqual(job.current_attempt_id, att.attempt_id)
 
 
+class InstanceRootResolutionTests(unittest.TestCase):
+    """instance-contract-v1: jobs runtime paths resolve through the instance-root
+    chain (env > ~/.personal-ai > legacy ~/personal-ai-state), never hardcoded."""
+
+    def _resolve(self, home: Path, env: dict) -> tuple[Path, Path]:
+        from jobs._paths import instance_root
+
+        clean_env = {k: v for k, v in os.environ.items()
+                     if k not in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE")}
+        clean_env.update(env)
+        with mock.patch.object(Path, "home", return_value=home), \
+                mock.patch.dict(os.environ, clean_env, clear=True):
+            root = instance_root()
+            from jobs.registry import get_default_db_path
+            db = get_default_db_path()
+        return root, db
+
+    def test_env_override_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root, db = self._resolve(Path(td) / "home",
+                                     {"PERSONAL_AI_HOME": str(Path(td) / "inst")})
+            self.assertEqual(root, Path(td) / "inst")
+            self.assertEqual(db, Path(td) / "inst" / "jobs" / "durable_jobs.db")
+
+    def test_legacy_root_discovered_over_empty_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            legacy = home / "personal-ai-state"
+            (legacy / "state").mkdir(parents=True)
+            root, db = self._resolve(home, {})
+            self.assertEqual(root, legacy)
+            self.assertEqual(db, legacy / "jobs" / "durable_jobs.db")
+
+    def test_default_wins_when_no_legacy_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "personal-ai-state").mkdir()  # legacy dir exists but has no marker
+            root, _ = self._resolve(home, {})
+            self.assertEqual(root, home / ".personal-ai")
+
+
 if __name__ == "__main__":
     unittest.main()
