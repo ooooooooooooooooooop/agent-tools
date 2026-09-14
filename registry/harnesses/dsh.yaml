@@ -75,6 +75,11 @@ runtime_composition:
     version: 0.1.1-rc.2
     install_mode: managed-profile-fixed-directory
     entry_relative_to_distribution: node_modules/@deepseek-ai/dsh/lib/bin.js
+    patches:
+      - id: directory-picker-win32-ipc
+        target_relative: node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs
+        patch_file: dsh/runtime/directory-picker-win32-ipc.patch
+        patch_sha256: 235284a75b815f522448c3a9ecc55e93cfec43ec2f763ca78ce32860a5c29170
   ui:
     repository: https://github.com/deepseek-ai/deepseek-harness.git
     # sourceState in the runtime manifest is immutable effective-build

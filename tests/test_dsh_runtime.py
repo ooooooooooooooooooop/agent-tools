@@ -106,6 +106,30 @@ class DshRuntimeCompositionTests(unittest.TestCase):
             with self.assertRaisesRegex(dsh_runtime.DshCompositionError, "UI/base package mismatch"):
                 dsh_runtime._validate_ui_version_alignment(source, self.cfg)
 
+    def test_runtime_patch_is_idempotent(self) -> None:
+        runtime_patch = self.cfg["base"]["patches"][0]
+        with tempfile.TemporaryDirectory() as td:
+            base_root = Path(td)
+            target = base_root / Path(runtime_patch["target_relative"])
+            target.parent.mkdir(parents=True)
+            target.write_text("\n" * 205 + (
+                'const send = process.send.bind(process);\n'
+                'const post = (message) => {\n'
+                '\t/* v8 ignore next 3 -- disconnect needs a live IPC channel the unit lane must not sever (built-worker.e2e.ts owns the real close path). */\n'
+                '\tsend(message, () => {\n'
+                '\t\tif (process.connected) process.disconnect();\n'
+                '\t});\n'
+                '};\n'
+            ), encoding="utf-8")
+
+            first = dsh_runtime._apply_runtime_patches(base_root, self.cfg)
+            second = dsh_runtime._apply_runtime_patches(base_root, self.cfg)
+
+            self.assertEqual(first, second)
+            self.assertEqual(first[0]["id"], "directory-picker-win32-ipc")
+            self.assertIn('message.kind === "done"', target.read_text(encoding="utf-8"))
+            self.assertIn('message.kind === "error"', target.read_text(encoding="utf-8"))
+
     def test_desired_state_convergence_scenarios(self) -> None:
         """Phase A: Tests A-F for Desired State Convergence."""
         # A. Modify registry plugin set -> diff detects drift

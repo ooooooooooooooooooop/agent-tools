@@ -1,0 +1,15 @@
+diff --git a/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs b/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs
+--- a/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs
++++ b/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-directory-picker-native/lib/worker.cjs
+@@ -206,7 +206,10 @@ const title = process.env.DSH_DIALOG_TITLE ?? "";
+ const send = process.send.bind(process);
+ const post = (message) => {
+ 	/* v8 ignore next 3 -- disconnect needs a live IPC channel the unit lane must not sever (built-worker.e2e.ts owns the real close path). */
+ 	send(message, () => {
+-		if (process.connected) process.disconnect();
++		if ((message.kind === "done" || message.kind === "error") &&
++			process.connected) {
++			process.disconnect();
++		}
+ 	});
+ };

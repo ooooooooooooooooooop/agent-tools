@@ -138,6 +138,33 @@ def validate_contract(contract: dict[str, Any], *, check_lock: bool = True) -> l
                 errors.append(f"UI build patch SHA-256 mismatch: {build_patch}")
         if not profile.get("patch_file") or not profile.get("manifest_file"):
             errors.append("runtime_composition.profile must declare patch_file and manifest_file")
+        runtime_patches = base.get("patches", [])
+        if not isinstance(runtime_patches, list):
+            errors.append("runtime_composition.base.patches must be a list")
+            runtime_patches = []
+        patch_ids: set[str] = set()
+        for runtime_patch in runtime_patches:
+            if not isinstance(runtime_patch, dict):
+                errors.append("runtime_composition.base.patches entries must be mappings")
+                continue
+            patch_id = str(runtime_patch.get("id", ""))
+            if not patch_id or patch_id in patch_ids:
+                errors.append(f"runtime patch id must be unique and non-empty: {patch_id or '<missing>'}")
+            patch_ids.add(patch_id)
+            for key in ("target_relative", "patch_file", "patch_sha256"):
+                if not runtime_patch.get(key):
+                    errors.append(f"runtime patch {patch_id or '<missing>'} missing {key}")
+            target_text = str(runtime_patch.get("target_relative", ""))
+            target = Path(target_text)
+            if target.is_absolute() or ".." in target.parts:
+                errors.append(f"runtime patch {patch_id or '<missing>'} target must stay inside base distribution")
+            patch_path = ROOT / str(runtime_patch.get("patch_file", ""))
+            if not patch_path.is_file():
+                errors.append(f"missing runtime patch asset: {patch_path}")
+            elif not re.fullmatch(r"[0-9a-f]{64}", str(runtime_patch.get("patch_sha256", ""))):
+                errors.append(f"runtime patch {patch_id or '<missing>'} patch_sha256 must be a lowercase SHA-256")
+            elif sha256_portable_file(patch_path) != runtime_patch["patch_sha256"]:
+                errors.append(f"runtime patch SHA-256 mismatch: {patch_path}")
         plugins = cfg["managed_rows"]["plugins"]
         if not plugins or len(plugins) < 5:
             errors.append("runtime_composition must declare at least five managed plugins")
@@ -532,6 +559,40 @@ def _install_base(stage_profile: Path, node_root: Path, cfg: dict[str, Any], hom
     except DshCompositionError as exc:
         raise DshCompositionError(f"installed DSH base failed startup dependency check: {exc}") from exc
     return base_root
+
+
+def _apply_runtime_patches(base_root: Path, cfg: dict[str, Any]) -> list[dict[str, str]]:
+    """Apply canonical patches to the staged pinned base, idempotently."""
+    records: list[dict[str, str]] = []
+    for runtime_patch in cfg["base"].get("patches", []):
+        patch_id = runtime_patch["id"]
+        patch_file = ROOT / runtime_patch["patch_file"]
+        target = base_root / Path(runtime_patch["target_relative"])
+        if not target.is_file():
+            raise DshCompositionError(
+                f"runtime patch target missing: {patch_id}: {target}"
+            )
+        check = ["git", "apply", "--check", "--whitespace=error", str(patch_file)]
+        try:
+            _run(check, cwd=base_root, timeout=30)
+            _run(["git", "apply", "--whitespace=error", str(patch_file)],
+                 cwd=base_root, timeout=30)
+        except DshCompositionError as forward_error:
+            try:
+                _run(["git", "apply", "--reverse", "--check", "--whitespace=error",
+                      str(patch_file)], cwd=base_root, timeout=30)
+            except DshCompositionError as reverse_error:
+                raise DshCompositionError(
+                    f"runtime patch failed: {patch_id}\n"
+                    f"forward: {forward_error}\nreverse: {reverse_error}"
+                ) from forward_error
+        records.append({
+            "id": patch_id,
+            "targetRelative": str(Path(runtime_patch["target_relative"])).replace("\\", "/"),
+            "patchSha256": runtime_patch["patch_sha256"],
+            "targetSha256": sha256_file(target),
+        })
+    return records
 
 
 def _resolvable_package_json(start: Path, package_name: str) -> bool:
@@ -1007,6 +1068,37 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
         except DshCompositionError as exc:
             finding("RUNTIME_DRIFT", "base.startup-dependencies", "DSH CLI help exits 0", str(exc))
 
+    deployed_runtime_patches = manifest.get("base", {}).get("runtimePatches", [])
+    if not isinstance(deployed_runtime_patches, list):
+        deployed_runtime_patches = []
+    deployed_runtime_patches_by_id = {
+        item.get("id"): item for item in deployed_runtime_patches
+        if isinstance(item, dict) and item.get("id")
+    }
+    expected_runtime_patch_ids: set[str] = set()
+    for runtime_patch in base.get("patches", []):
+        patch_id = runtime_patch["id"]
+        expected_runtime_patch_ids.add(patch_id)
+        target_relative = str(Path(runtime_patch["target_relative"])).replace("\\", "/")
+        target = base_root / Path(runtime_patch["target_relative"])
+        deployed_patch = deployed_runtime_patches_by_id.get(patch_id)
+        if deployed_patch is None:
+            finding("CONFIG_DRIFT", f"base.runtimePatch:{patch_id}", "recorded", "missing")
+        else:
+            for key, expected in (("targetRelative", target_relative),
+                                  ("patchSha256", runtime_patch["patch_sha256"])):
+                if deployed_patch.get(key) != expected:
+                    finding("CONFIG_DRIFT", f"base.runtimePatch:{patch_id}.{key}",
+                            expected, deployed_patch.get(key, "missing"))
+        if not target.is_file():
+            finding("DEPLOYMENT_DRIFT", f"base.runtimePatch:{patch_id}.target", "present", "missing")
+        elif deployed_patch is None or deployed_patch.get("targetSha256") != sha256_file(target):
+            finding("DEPLOYMENT_DRIFT", f"base.runtimePatch:{patch_id}.targetSha256",
+                    deployed_patch.get("targetSha256", "missing") if deployed_patch else "recorded",
+                    sha256_file(target))
+    for extra_id in sorted(set(deployed_runtime_patches_by_id) - expected_runtime_patch_ids):
+        finding("CONFIG_DRIFT", f"extra-runtime-patch:{extra_id}", "absent", "deployed")
+
     client = _dsh_resolved_dependency_root(base_root, "@deepseek-ai/dsh-client-ui-conversation") / "lib" / "client.js"
     if not client.is_file():
         finding("DEPLOYMENT_DRIFT", "ui.client.bundle", "present", "missing")
@@ -1023,7 +1115,7 @@ def inspect(home: Path, contract: dict[str, Any]) -> dict[str, Any]:
             finding("DEPLOYMENT_DRIFT", "ui.web.dist", manifest["ui"]["webDistSha256"], actual_hash)
 
     patch_path = profile / cfg["profile"]["patch_file"]
-    _, managed_hash = render_patch(None, cfg)
+    _, managed_hash = render_patch(patch_path if patch_path.is_file() else None, cfg)
     if not patch_path.is_file():
         finding("CONFIG_DRIFT", "cordis.patch.yml", "present", "missing")
     else:
@@ -1176,6 +1268,7 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
         stage_profile.mkdir(parents=True, exist_ok=True)
         node_root, node_version, node_hash = _node_runtime(stage_root, home, cfg)
         base_root = _install_base(stage_profile, node_root, cfg, home=home)
+        runtime_patch_records = _apply_runtime_patches(base_root, cfg)
 
         ui_cfg = cfg["ui"]
         live_profile = home / cfg["profile"]["relative_to_dsh_home"]
@@ -1228,10 +1321,11 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
             "compositionId": cfg["id"],
             "node": {"version": node_version, "relativePath": cfg["node"]["relative_to_dsh_home"],
                      "sha256": node_hash},
-            "base": {"package": cfg["base"]["package"], "version": cfg["base"]["version"],
-                     "entryRelative": str((Path(cfg["profile"]["relative_to_dsh_home"]) /
-                                             base_root.name / cfg["base"]["entry_relative_to_distribution"])).replace("\\", "/"),
-                     "entrySha256": sha256_file(base_root / cfg["base"]["entry_relative_to_distribution"])},
+             "base": {"package": cfg["base"]["package"], "version": cfg["base"]["version"],
+                      "entryRelative": str((Path(cfg["profile"]["relative_to_dsh_home"]) /
+                                              base_root.name / cfg["base"]["entry_relative_to_distribution"])).replace("\\", "/"),
+                      "entrySha256": sha256_file(base_root / cfg["base"]["entry_relative_to_distribution"]),
+                      "runtimePatches": runtime_patch_records},
             "ui": {"repository": cfg["ui"]["repository"], "baselineCommit": cfg["ui"]["baseline_commit"],
                    "sourceState": source_state, "fixCommit": cfg["ui"]["fix_commit"],
                    "patchFile": cfg["ui"]["patch_file"], "patchSha256": cfg["ui"]["patch_sha256"],
@@ -1259,8 +1353,9 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
             "entryRelativeToProfile": str((Path(cfg["profile"]["relative_to_dsh_home"]) /
                                              base_root.name / cfg["base"]["entry_relative_to_distribution"])).replace("\\", "/"),
             "installPolicy": cfg["base"]["install_mode"],
-            "baseEntrySha256": payload["base"]["entrySha256"],
-            "uiBundleSha256": payload["ui"]["clientBundleSha256"],
+             "baseEntrySha256": payload["base"]["entrySha256"],
+             "runtimePatches": payload["base"]["runtimePatches"],
+             "uiBundleSha256": payload["ui"]["clientBundleSha256"],
             "webDistSha256": payload["ui"]["webDistSha256"],
             "compositionHash": composition_hash,
             "forbiddenLaunchers": ["npx --yes @deepseek-ai/dsh", "npx @deepseek-ai/dsh"],
@@ -1286,7 +1381,7 @@ def apply(home: Path, contract: dict[str, Any], *, check_lock: bool = True) -> d
             entries.append((cfg["node"]["relative_to_dsh_home"], node_root))
         live_base = home / profile_rel / base_root.name
         live_base_pkg = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
-        if not live_base_pkg.is_file():
+        if cfg["base"].get("patches") or not live_base_pkg.is_file():
             entries.append((str(profile_rel / base_root.name), base_root))
         for plugin in cfg["managed_rows"]["plugins"]:
             entries.append((str(profile_rel / "plugins" / plugin["plugin_directory"]),

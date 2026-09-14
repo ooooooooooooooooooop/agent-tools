@@ -155,6 +155,20 @@ class DshSourceStateMatrixTests(unittest.TestCase):
         web_dist.mkdir()
         (web_dist / "index.html").write_text("web", encoding="utf-8")
 
+        runtime_patch = cfg["base"]["patches"][0]
+        runtime_target = base_root / Path(runtime_patch["target_relative"])
+        runtime_target.parent.mkdir(parents=True, exist_ok=True)
+        runtime_target.write_text("\n" * 205 + (
+            'const send = process.send.bind(process);\n'
+            'const post = (message) => {\n'
+            '\t/* v8 ignore next 3 -- disconnect needs a live IPC channel the unit lane must not sever (built-worker.e2e.ts owns the real close path). */\n'
+            '\tsend(message, () => {\n'
+            '\t\tif (process.connected) process.disconnect();\n'
+            '\t});\n'
+            '};\n'
+        ), encoding="utf-8")
+        runtime_patch_records = dsh_runtime._apply_runtime_patches(base_root, cfg)
+
         patch_path = profile / cfg["profile"]["patch_file"]
         patch_path.parent.mkdir(parents=True, exist_ok=True)
         patch_text, managed_hash = dsh_runtime.render_patch(None, cfg)
@@ -201,7 +215,8 @@ class DshSourceStateMatrixTests(unittest.TestCase):
             "base": {"package": cfg["base"]["package"], "version": cfg["base"]["version"],
                      "entryRelative": str((Path("profiles/web") / base_root.name /
                                             cfg["base"]["entry_relative_to_distribution"])).replace("\\", "/"),
-                     "entrySha256": dsh_runtime.sha256_file(dsh_root / "lib" / "bin.js")},
+                     "entrySha256": dsh_runtime.sha256_file(dsh_root / "lib" / "bin.js"),
+                     "runtimePatches": runtime_patch_records},
             "ui": {"repository": cfg["ui"]["repository"],
                    "baselineCommit": old_baseline, "sourceState": source_state,
                    "fixCommit": cfg["ui"]["fix_commit"],
