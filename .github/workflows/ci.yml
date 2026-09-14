@@ -86,4 +86,12 @@ jobs:
           bash -n .githooks/pre-commit
           git config core.hooksPath .githooks
           chmod +x .githooks/pre-commit
-          ./.githooks/pre-commit
+          set -o pipefail
+          ./.githooks/pre-commit 2>&1 | tee ci-hook-output.txt
+
+      - name: Dump hook log on failure
+        if: failure()
+        run: |
+          Select-String -Path ci-hook-output.txt -Pattern '^== .* ==$' | ForEach-Object { Write-Output "::notice::PHASE $($_.Line)" }
+          Select-String -Path ci-hook-output.txt -Pattern '^\S*(Error|Exception|Interrupt|Exit|Denied|Missing|NotFound|Failed|Expired|Timeout|Refused)\w*\s*:|FAIL:|ERROR:' | Select-Object -First 40 | ForEach-Object { Write-Output "::error::$($_.Line)" }
+          Get-Content ci-hook-output.txt -Tail 25 | ForEach-Object { Write-Output "::error::TAIL $($_.Line)" }
