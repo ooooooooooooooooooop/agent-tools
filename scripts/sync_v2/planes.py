@@ -250,7 +250,7 @@ def evaluate_canonical_state_plane(state_repo: Path, snapshot: Optional[Snapshot
 
 
 # ---------------------------------------------------------------- Plane 2: Agent Tools Source
-def evaluate_agent_tools_source_plane(
+def evaluate_product_source_plane(
     repo_root: Path,
     snapshot: Optional[SnapshotContext] = None,
     updated_commit: bool = False,
@@ -274,8 +274,8 @@ def evaluate_agent_tools_source_plane(
         summary = f"当前版本 `{commit[:7]}`，与远端一致"
 
     return ResourceRecord(
-        resource_id="agent_tools_source",
-        plane=SyncPlane.AGENT_TOOLS_SOURCE,
+        resource_id="product_source",
+        plane=SyncPlane.PRODUCT_SOURCE,
         category=ResourceCategory.CONVERGENCE_PLANE,
         desired_identity=remote_commit,
         source_identity=commit,

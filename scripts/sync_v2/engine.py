@@ -29,7 +29,7 @@ from .models import (
 )
 from .planes import (
     _run_git,
-    evaluate_agent_tools_source_plane,
+    evaluate_product_source_plane,
     evaluate_backup_recovery_health,
     evaluate_canonical_state_plane,
     evaluate_deployment_mirror_plane,
@@ -118,7 +118,7 @@ class SyncEngine:
         self.home = home or Path.home() / ".dsh"
         self.repo_root = repo_root or ROOT
         self.state_repo = state_repo or _instance_root()
-        self.mirror_dir = self.home / ".deployment-mirror" / "agent-tools"
+        self.mirror_dir = self.home / ".deployment-mirror" / "personal-ai"
         self.db_path = db_path
         self.registry = DurableJobRegistry(self.db_path)
 
@@ -223,7 +223,7 @@ class SyncEngine:
                 })
 
             # Plane 2: Agent Tools Source
-            p2_res = evaluate_agent_tools_source_plane(self.repo_root, snapshot)
+            p2_res = evaluate_product_source_plane(self.repo_root, snapshot)
             is_dev_dirty = p2_res.details.get("dirty", False)
             if is_dev_dirty:
                 tradeoffs.append({

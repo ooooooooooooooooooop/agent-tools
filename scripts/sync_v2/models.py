@@ -24,7 +24,7 @@ class EvidenceLevel(str, Enum):
 class SyncPlane(str, Enum):
     # Convergence Planes (A)
     CANONICAL_STATE = "Canonical State Plane"
-    AGENT_TOOLS_SOURCE = "Agent Tools / Source Plane"
+    PRODUCT_SOURCE = "Product Source Plane"
     DEPLOYMENT_MIRROR = "Deployment Mirror Plane"
     DSH_PRESET = "DSH Preset Plane"
     DSH_CONFIG = "DSH Config Plane"

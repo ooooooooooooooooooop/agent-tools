@@ -56,7 +56,7 @@ Guarantees:
 ## New-device restore
 
 Bootstrap flow (see `BOOTSTRAP.md`) runs this overlay automatically after the repo is cloned:
-1. `git clone agent-tools` → validate → install skills
+1. `git clone personal-ai` → validate → install skills
 2. `<repo>/dsh/compaction-convergence/test/guard-convergence.ps1` → APPLY / VERIFY
 
 ## Upstream exit condition

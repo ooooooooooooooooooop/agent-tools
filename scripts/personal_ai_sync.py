@@ -88,7 +88,7 @@ def _path_key(path: Path) -> str:
 
 
 def _resolve_canonical_governance_root() -> Path:
-    """解析本设备的 canonical agent-tools checkout。
+    """解析本设备的 canonical personal-ai checkout。
 
     顺序：PERSONAL_AI_CANONICAL_GOVERNANCE_ROOT 环境变量 →
     this-device.yaml repos 中携带本控制面（scripts/personal_ai_sync.py）的条目
@@ -1031,7 +1031,7 @@ def _is_sync_eligible(repo: Path, rel_path: str, repo_name: str = "") -> bool:
         return False
     if repo_name == "personal-ai-private" or repo.name == "personal-ai-private":
         return norm.startswith(("state/", "sync/", "memory/", "projects/", "README"))
-    if repo_name == "agent-tools" or repo == REPO or (repo / "registry").is_dir():
+    if repo_name == "personal-ai" or repo == REPO or (repo / "registry").is_dir():
         if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/",
                             "state/", "tools/", "config/", "dsh-config/")):
             return True
@@ -1504,7 +1504,7 @@ def _mutation_lock_root_for_repo(repo: Path) -> Path:
 
 
 def _mutation_root_for_plane(name: str, repo: Path) -> Path | None:
-    if name == "agent-tools":
+    if name == "personal-ai":
         return CANONICAL_GOVERNANCE_ROOT if _path_key(repo) == _path_key(REPO) else repo
     if name == "personal-ai-private":
         return STATE_REPO if _path_key(repo) == _path_key(STATE_REPO) else repo
@@ -2564,12 +2564,12 @@ TARGET_DEPENDENCIES = {
 PREFERENCES_PATH = "state/preferences.md"
 
 
-def affected_targets(agent_tools_changed: list[str],
+def affected_targets(product_changed: list[str],
                      state_changed: list[str]) -> list[str]:
     """只返回真正受 canonical change 影响的 Harness（DSH ONLY）。"""
     targets = set()
     for t, deps in TARGET_DEPENDENCIES.items():
-        if any(any(f.startswith(d) for d in deps) for f in agent_tools_changed):
+        if any(any(f.startswith(d) for d in deps) for f in product_changed):
             targets.add(t)
     if any(f == PREFERENCES_PATH for f in state_changed):
         targets.add("dsh")
@@ -2773,7 +2773,7 @@ def execute_plan(plan: list[dict], classifications: dict,
                     if unowned:
                         review(item, f"DEFER: local commits lack canonical ownership receipts: {unowned}")
                         continue
-                    if name == "agent-tools":
+                    if name == "personal-ai":
                         hits = privacy_scan(repo, f"origin/{current['branch']}..HEAD")
                         if hits:
                             review(item, f"privacy scan hit: {hits}", BLOCKED_PRIVACY)
@@ -3004,7 +3004,7 @@ def _audit_classified_repositories(classifications: dict) -> dict:
     """Audit every repository that the sync run treats as a managed plane."""
     audits = {}
     for name, classification in classifications.items():
-        if name != "agent-tools" and name != "personal-ai-private" and not name.startswith("project:"):
+        if name != "personal-ai" and name != "personal-ai-private" and not name.startswith("project:"):
             continue
         repo = Path(classification.get("path", ""))
         if not (repo / ".git").exists():
@@ -3045,7 +3045,7 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     writable = mode in ("sync", "pull", "push", "restore")
 
     classifications: dict = {}
-    classifications["agent-tools"] = classify_repo(REPO)
+    classifications["personal-ai"] = classify_repo(REPO)
     state_repo = STATE_REPO if (STATE_REPO / ".git").exists() else None
     if state_repo:
         classifications["personal-ai-private"] = classify_repo(state_repo)
@@ -3101,11 +3101,11 @@ def run_sync(mode: str, detail: bool = False) -> dict:
             files = changed_paths(repo, f"{prev.strip()}..{head.strip()}")
         else:
             files = []
-        if item["plane"] == "agent-tools":
+        if item["plane"] == "personal-ai":
             changed_at = files
         elif item["plane"] == "personal-ai-private":
             changed_state = files
-    results["changed"] = {"agent-tools": changed_at, "personal-ai-private": changed_state}
+    results["changed"] = {"personal-ai": changed_at, "personal-ai-private": changed_state}
 
     # 基于 desired-state 的下游收敛（不再仅依赖 pull 变更列表，而是直接检验期望状态 vs 实际状态）
     if mode in ("sync", "restore"):
@@ -3198,7 +3198,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 state_repo: Path = STATE_REPO,
                 skills_dest: Path | None = None,
                 apply_dsh: bool = True,
-                agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai.git",
+                product_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai.git",
                 state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-private.git",
                 sessions_root: Path | None = None,
                 backup_root: Path | None = None) -> dict:
@@ -3259,7 +3259,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
     if not _is_canonical_mutation_repo(repo):
         step("canonical mutation ownership", True,
              "non-canonical restore source has no canonical writer identity")
-    clone_if_missing(repo, agent_tools_remote, "clone agent-tools")
+    clone_if_missing(repo, product_remote, "clone personal-ai")
     clone_if_missing(state_repo, state_remote, "clone personal-ai-private")
 
     if (repo / ".git").exists():
@@ -3373,7 +3373,7 @@ def run_provenance_audit() -> dict:
         "entrypoint": _default_entrypoint(),
         "provenance": {},
     }
-    targets = {"agent-tools": REPO}
+    targets = {"personal-ai": REPO}
     if (STATE_REPO / ".git").exists():
         targets["personal-ai-private"] = STATE_REPO
     for name, repo in targets.items():

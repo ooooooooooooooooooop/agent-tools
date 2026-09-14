@@ -67,7 +67,7 @@ def lifecycle_path(home: Path | None = None) -> Path:
 
 def deployment_mirror_path(home: Path | None = None) -> Path:
     root = home or dsh_home()
-    return root / DEPLOYMENT_MIRROR_DIR / "agent-tools"
+    return root / DEPLOYMENT_MIRROR_DIR / "personal-ai"
 
 
 def load_state(home: Path | None = None) -> dict:

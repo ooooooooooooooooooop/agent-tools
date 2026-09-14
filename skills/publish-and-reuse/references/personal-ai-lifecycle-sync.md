@@ -24,33 +24,33 @@ RESTORE  local canonical missing 时自动进入；复用 PULL + bootstrap + run
 
 | Plane | 内容 | Transport |
 |---|---|---|
-| **A. agent-tools** | Skills / scripts / Control Plane / model registry / routing / adapters / capabilities / governance / durability / publish-and-reuse | Git remote（public） |
-| **B. personal-ai-state** | identity / preferences / goals / Dynamic Memory canonical / private overlays / project index / private gateway mappings / sync metadata | Git remote（**private**，永不并入 public agent-tools） |
+| **A. personal-ai** | Skills / scripts / Control Plane / model registry / routing / adapters / capabilities / governance / durability / publish-and-reuse | Git remote（public） |
+| **B. personal-ai-private** | identity / preferences / goals / Dynamic Memory canonical / private overlays / project index / private gateway mappings / sync metadata | Git remote（**private**，永不并入 public personal-ai） |
 | **C. Project Repositories** | 项目 code + `/.ai/state/`（goal/architecture/decisions/constraints/completed/experiments/unresolved/next_actions），与代码共同演进 | 各自 Git remote |
 
-Project State 随项目仓库走；ACTIVE 项目由 personal-ai-state goals + project index 识别，不默认同步 archived/inactive。
+Project State 随项目仓库走；ACTIVE 项目由 personal-ai-private goals + project index 识别，不默认同步 archived/inactive。
 
 ## 3. SYNC_OWNERSHIP_MATRIX（实现前调查的真实状态）
 
 | data_class | canonical_owner | local_path | remote | pull_policy | push_policy | auto_merge | conflict_policy | device_local | derived | backup_only | rebuild_after_sync |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | personal-ai 代码 | personal-ai git | `Desktop\personal-ai` | public GitHub | FF | 需门禁 PASS + privacy scan | 否 | REVIEW | 否 | 否 | 否 | 受影响 runtime refresh |
-| identity | personal-ai-state | `state/identity.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW（禁 last-write-wins） | 否 | 否 | 否 | Context Builder 输入刷新 |
-| preferences | personal-ai-state | `state/preferences.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | 同上 |
-| goals | personal-ai-state | `state/goals.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | project discovery 重读 |
-| Dynamic Memory records | personal-ai-state | `memory/records/*/record.yaml` | private git | FF | committed ahead | **是**（不同 record 不同设备） | 同 ID 元数据不一致 → CONFLICT | 否 | 否 | 否 | derived index rebuild |
-| Memory revisions | personal-ai-state | `memory/records/*/revisions/*.yaml` | private git | FF | committed ahead | **是**（不同 immutable revision） | concurrent revision → 保留双方 + 标记 `concurrent-revisions`，supersede 消解 | 否 | 否 | 否 | derived index rebuild |
-| Memory lifecycle state | personal-ai-state | `memory/records/*/state.yaml` | private git | FF | committed ahead | 否（provider 契约：lifecycle 分歧按 (at, device_id) 取胜者 + 标记） | 标记冲突 | 否 | 否 | 否 | 同上 |
+| identity | personal-ai-private | `state/identity.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW（禁 last-write-wins） | 否 | 否 | 否 | Context Builder 输入刷新 |
+| preferences | personal-ai-private | `state/preferences.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | 同上 |
+| goals | personal-ai-private | `state/goals.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | project discovery 重读 |
+| Dynamic Memory records | personal-ai-private | `memory/records/*/record.yaml` | private git | FF | committed ahead | **是**（不同 record 不同设备） | 同 ID 元数据不一致 → CONFLICT | 否 | 否 | 否 | derived index rebuild |
+| Memory revisions | personal-ai-private | `memory/records/*/revisions/*.yaml` | private git | FF | committed ahead | **是**（不同 immutable revision） | concurrent revision → 保留双方 + 标记 `concurrent-revisions`，supersede 消解 | 否 | 否 | 否 | derived index rebuild |
+| Memory lifecycle state | personal-ai-private | `memory/records/*/state.yaml` | private git | FF | committed ahead | 否（provider 契约：lifecycle 分歧按 (at, device_id) 取胜者 + 标记） | 标记冲突 | 否 | 否 | 否 | 同上 |
 | project code | 各自项目 git | `Desktop\<project>` | 各自 remote | FF | privacy audit PASS 且 policy 允许 | 否 | REVIEW | 否 | 否 | 否 | 项目自身验证 |
 | Project State (`/.ai/state/`) | 各自项目 git | 随项目 | 随项目 | 随项目 | 随项目 | 否 | REVIEW | 否 | 否 | 否 | project context refresh |
-| private project overlays | personal-ai-state | `projects/<name>/overlay.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | Context Builder |
-| model registry | agent-tools | `registry/models.yaml` | public git | FF | 门禁 PASS | 否 | REVIEW | 否 | 否 | 否 | render 受影响 Harness model 段 |
-| routing policy | agent-tools | `routing-policy.yaml` | public git | FF | 门禁 PASS | 否 | REVIEW | 否 | 否 | 否 | refresh routing consumers |
-| gateway mappings | personal-ai-state | `registry/gateways.yaml` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | 受影响 adapter refresh |
+| private project overlays | personal-ai-private | `projects/<name>/overlay.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | Context Builder |
+| model registry | personal-ai | `registry/models.yaml` | public git | FF | 门禁 PASS | 否 | REVIEW | 否 | 否 | 否 | render 受影响 Harness model 段 |
+| routing policy | personal-ai | `routing-policy.yaml` | public git | FF | 门禁 PASS | 否 | REVIEW | 否 | 否 | 否 | refresh routing consumers |
+| gateway mappings | personal-ai-private | `registry/gateways.yaml` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | 受影响 adapter refresh |
 | Harness generated configs | aic render 产物 | 各 Harness 目录 | **无** | 不传输 | 不上传 | n/a | n/a | **是** | **是** | 否 | `aic discover→render→diff` |
-| Skills installed copy | agent-tools 的派生 | `~/.dsh/skills` | 无 | `sync_skills.py --apply` | 无（repo 才是 SSOT） | n/a | n/a | **是** | **是** | 否 | 增量 sync 受影响 skill |
-| Plugins installed copy | agent-tools `dsh/*` 派生 | `~/.dsh/profiles/web/plugins` | 无 | `sync_skills.py --plugins-destination` | 无 | n/a | n/a | **是** | **是** | 否 | 受影响插件 |
-| MCP runtime | agent-tools `mcp/*` | 仓库就地 | 随 agent-tools | git | git | 否 | REVIEW | 部分 | 否 | 否 | cordis.patch 校验 |
+| Skills installed copy | personal-ai 的派生 | `~/.dsh/skills` | 无 | `sync_skills.py --apply` | 无（repo 才是 SSOT） | n/a | n/a | **是** | **是** | 否 | 增量 sync 受影响 skill |
+| Plugins installed copy | personal-ai `dsh/*` 派生 | `~/.dsh/profiles/web/plugins` | 无 | `sync_skills.py --plugins-destination` | 无 | n/a | n/a | **是** | **是** | 否 | 受影响插件 |
+| MCP runtime | personal-ai `mcp/*` | 仓库就地 | 随 personal-ai | git | git | 否 | REVIEW | 部分 | 否 | 否 | cordis.patch 校验 |
 | derived Memory index | 无（本地重建） | 本地索引 | 无 | 不传输 | 不上传 | n/a | n/a | **是** | **是** | 否 | memory 变化后 rebuild |
 | projcache | 无 | `~/.dsh/storages` | 无 | 不传输 | 不上传 | n/a | n/a | **是** | **是** | 否 | 自动再生 |
 | sessions | 无（Durability） | `~/.dsh/sessions` | 无 | 不走 git sync | 不走 git sync | n/a | n/a | **是** | 否 | **是** | 无 |
@@ -95,14 +95,14 @@ BLOCKED_AUTH / BLOCKED_PRIVACY / OPTIONAL_NOT_INSTALLED / UNKNOWN
 | LOCAL_DIRTY | UNTOUCHED；禁止自动 add/commit/stash/reset/checkout/overwrite |
 | DIVERGED | REVIEW_REQUIRED；禁止自动 merge infra canonical / rebase / force push；Memory 除外（见下） |
 
-## 5. agent-tools 策略（最保守，§8）
+## 5. personal-ai 策略（最保守，§8）
 
 - remote ahead + clean → locked FF pull → `validate_repo --strict` + 相关 tests + 受影响 runtime refresh
 - local ahead → 仅显式 `push` 模式，且每个 ahead commit 有 ownership receipt、门禁通过、remote 无新历史 → PUSH（public：先 privacy scan）
 - dirty → 不碰
 - diverged → REVIEW，不得自动合并 Control Plane / registry / Skills infra code
 
-## 6. personal-ai-state 分两类（§9）
+## 6. personal-ai-private 分两类（§9）
 
 **A. Curated State**（identity/preferences/goals/overlays/gateways/sync metadata）：
 remote ahead + clean → PULL；local committed ahead 仅在显式 push 且 receipt 校验通过时 → PUSH_CANDIDATE；双端修改 → CONFLICT_REVIEW。禁止 last-write-wins，禁止自动语义融合。
@@ -176,7 +176,7 @@ governance script changed   → governance task validation
 
 ## 12. Machine-local Checkpoint（§25）
 
-`~/.dsh/.personal-ai-sync/status.json`：device_id / last_successful_sync / per_repo_last_seen_commit / last_memory_merge / runtime_render_revision / last_result。不进 canonical、不进 personal-ai-state git、可删、删除后可重新 discover。
+`~/.dsh/.personal-ai-sync/status.json`：device_id / last_successful_sync / per_repo_last_seen_commit / last_memory_merge / runtime_render_revision / last_result。不进 canonical、不进 personal-ai-private git、可删、删除后可重新 discover。
 
 Canonical mutation lease and receipts are machine-local durable evidence, not canonical content:
 `~/.dsh/.personal-ai-mutation/<repo-hash>.lock.json` and
@@ -191,10 +191,10 @@ longer alive. Receipts record `actor / trigger / task_id / base / result / stage
 
 ## 14. RESTORE（§28-§32）
 
-`agent-tools` 或 `personal-ai-state` missing → RESTORE = empty local 的特殊 SYNC，复用 PULL + bootstrap：
+`personal-ai` 或 `personal-ai-private` missing → RESTORE = empty local 的特殊 SYNC，复用 PULL + bootstrap：
 
 ```text
-Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
+Preflight → Auth check → Clone personal-ai → Clone personal-ai-private
 → aic discover → Discover active projects → Clone eligible projects
 → Validate canonical → Restore Skills/Plugins/MCP → Render installed Harnesses
 → Rebuild Memory index → Verify DSH session history（backup/live 计数 + 已知锚点 + schema 探针；非 PASS/NOT_APPLICABLE 则总体不得 PASS）
@@ -215,8 +215,8 @@ Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 ```text
 Personal AI Sync
 
-agent-tools          IN_SYNC / PULLED / PUSHED
-personal-ai-state    IN_SYNC / PULLED / PUSHED / MERGED
+personal-ai          IN_SYNC / PULLED / PUSHED
+personal-ai-private    IN_SYNC / PULLED / PUSHED / MERGED
 projects             <简要汇总>
 memory               <新增/合并/冲突数量>
 runtime              NO DRIFT / refreshed
@@ -254,9 +254,9 @@ restart, or machine restore:
 3. A commit writer declares an exact owned scope, stages only those paths, verifies the cached diff is a subset of
    that scope, and writes a receipt outside Git. A foreign staged path aborts before staging.
 4. `SYNC` may fast-forward only a clean repository and never creates a generic commit or pushes ahead history. The
-   sole commit exception is the deterministic `personal-ai-state` memory reconciliation in item 5. Push is available
+   sole commit exception is the deterministic `personal-ai-private` memory reconciliation in item 5. Push is available
    only in explicit `push` mode, only for clean local-ahead history whose every commit has a valid receipt.
-5. Diverged infrastructure is `REVIEW/DEFER`. The sole exception is deterministic `personal-ai-state` memory
+5. Diverged infrastructure is `REVIEW/DEFER`. The sole exception is deterministic `personal-ai-private` memory
    reconciliation under the lease and `memory/records/**` scope; it commits locally, writes a receipt, and still
    requires explicit push mode.
 6. A non-canonical bootstrap/restore source may clone into its own destination and refresh derived runtime files,

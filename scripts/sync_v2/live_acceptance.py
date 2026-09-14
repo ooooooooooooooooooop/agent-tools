@@ -133,7 +133,7 @@ def run_live_acceptance() -> dict:
         assert fixture_path.is_file(), "developer dirty fixture must remain untouched"
         assert fixture_path.read_text(encoding="utf-8") == "developer uncommitted scratchpad\n"
 
-        mirror_dir = home / ".deployment-mirror" / "agent-tools"
+        mirror_dir = home / ".deployment-mirror" / "personal-ai"
         assert not (mirror_dir / "tmp_dev_dirty_fixture.txt").exists(), "dirty file must not leak to production mirror"
         assert receipt.metadata.get("developer_workspace_dirty") is True
         results["G_developer_dirty_isolated"] = True

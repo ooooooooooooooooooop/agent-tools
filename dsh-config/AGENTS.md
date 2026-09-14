@@ -101,7 +101,7 @@ After approval, adoption must use the existing capability inventory/registry, AI
      autonomous task 进入安全默认 AUTONOMOUS_STANDARD，绝不落入无约束观察模式；
      profile widening 受 canonical 规则约束（evidences + reason + receipt，禁止
      Agent 自行选更宽松 profile；不重置累计 usage、不绕过 hard cap）。
-- Policy pointer（本机全文）：agent-tools 仓库 registry/autonomous-execution-governance.yaml
+- Policy pointer（本机全文）：personal-ai 仓库 registry/autonomous-execution-governance.yaml
   （含 harness_hook_matrix）、registry/execution-profiles.yaml、registry/checkpoint-schema.yaml、
   registry/usage-ledger-schema.yaml。
 <!-- aic:autonomous-execution-governance:end -->

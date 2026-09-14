@@ -143,7 +143,7 @@ class TestCanonicalWriterProvenance(unittest.TestCase):
         )
         self.assertTrue(ok, message)
 
-        plan = [{"plane": "agent-tools", "action": "PUSH", "state": pas.LOCAL_AHEAD}]
+        plan = [{"plane": "personal-ai", "action": "PUSH", "state": pas.LOCAL_AHEAD}]
         classification = {
             "path": str(repo),
             "branch": "main",
@@ -152,7 +152,7 @@ class TestCanonicalWriterProvenance(unittest.TestCase):
             "worktree_state": pas.WORKTREE_CLEAN,
             "dirty": False,
         }
-        pas.execute_plan(plan, {"agent-tools": classification}, None, "push", {
+        pas.execute_plan(plan, {"personal-ai": classification}, None, "push", {
             "actor": "test-writer",
             "actor_type": "automated",
             "trigger": "test-c",

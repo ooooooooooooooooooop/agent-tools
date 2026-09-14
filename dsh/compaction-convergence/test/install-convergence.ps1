@@ -16,7 +16,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$overlay = Split-Path -Parent $here          # agent-tools/dsh/compaction-convergence
+$overlay = Split-Path -Parent $here          # personal-ai/dsh/compaction-convergence
 $profileRoot = Join-Path $env:USERPROFILE ".dsh\profiles\web"
 $forkDest = Join-Path $profileRoot "plugins\dsh-compaction-convergence"
 
@@ -34,7 +34,7 @@ function HashOf($path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
 
 $Checkout = Resolve-Checkout
 
-# 1) fork copy (canonical source stays in agent-tools; profile copy is executable)
+# 1) fork copy (canonical source stays in personal-ai; profile copy is executable)
 New-Item -ItemType Directory -Force -Path $forkDest | Out-Null
 Copy-Item -Recurse -Force (Join-Path $overlay "lib") (Join-Path $forkDest "lib")
 Copy-Item -Force (Join-Path $overlay "package.json") (Join-Path $forkDest "package.json")

@@ -90,7 +90,7 @@ def render_human_receipt(receipt: SyncReceipt) -> str:
 
     convergence_order = [
         ("Personal AI State", "Canonical State Plane"),
-        ("Agent Tools", "Agent Tools / Source Plane"),
+        ("Product Source", "Product Source Plane"),
         ("Deployment Mirror", "Deployment Mirror Plane"),
         ("Presets", "DSH Preset Plane"),
         ("DSH Config", "DSH Config Plane"),

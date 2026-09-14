@@ -1,6 +1,6 @@
 ---
 name: publish-and-reuse
-description: Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下我的 Personal AI”自动判断 PULL/MERGE/NO ACTION/REVIEW/BLOCKED（AUTO_SYNC），覆盖 agent-tools、personal-ai-state（curated + Dynamic Memory 合并）、项目仓库、runtime refresh 与新设备 Fresh Restore；同时保留 DSH 四层环境上传/更新/体检/复现作为子步骤。只自动处理确定安全的变更，冲突与 dirty 一律留给人工；commit/push 受 canonical ownership lease 与 receipt 约束。
+description: Personal AI Infrastructure 多设备生命周期同步总入口：一句“同步一下我的 Personal AI”自动判断 PULL/MERGE/NO ACTION/REVIEW/BLOCKED（AUTO_SYNC），覆盖 personal-ai、personal-ai-private（curated + Dynamic Memory 合并）、项目仓库、runtime refresh 与新设备 Fresh Restore；同时保留 DSH 四层环境上传/更新/体检/复现作为子步骤。只自动处理确定安全的变更，冲突与 dirty 一律留给人工；commit/push 受 canonical ownership lease 与 receipt 约束。
 version: 2.0.0
 triggers:
   - "同步一下我的 Personal AI / 同步一下 / 更新一下这台电脑 / 让这台电脑跟另一台一致 / 把最新状态同步过来"
@@ -12,7 +12,7 @@ triggers:
   - "在新设备复现 / 安装我的环境"
   - "发布 Skill / 脚本 / 插件 / 整个仓库 / 跑发布门禁"
 not_for:
-  - "在非 skills/agent-tools 仓库的其他业务工作区中执行环境同步、更新或上传（本 skill 仅在 agent-tools 仓库本体生效）"
+  - "在非 personal-ai 仓库的其他业务工作区中执行环境同步、更新或上传（本 skill 仅在 personal-ai 仓库本体生效）"
   - "修改具体业务代码或单个 Skill 的内部逻辑实现（交给 minimal-implementation）"
   - "日常代码编写与单点 Bug 修复"
 depends_on:
@@ -37,7 +37,7 @@ Fresh Restore 只是 `local canonical missing` 时的特殊 SYNC。
 
 ## 不适用（负向边界）
 
-- 在非 agent-tools 仓库的其他业务工作区执行环境同步/上传/覆盖。
+- 在非 personal-ai 仓库的其他业务工作区执行环境同步/上传/覆盖。
 - 修改具体业务代码或单个 Skill 的内部实现（交给 `minimal-implementation`）。
 - 日常代码编写与单点 Bug 修复。
 - 用本入口同步 secrets、sessions、broker sqlite、device-local 路径或派生索引——这些永不进入 git 生命周期同步。
@@ -91,7 +91,7 @@ python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 ```text
 Personal AI Sync
 
-agent-tools          IN_SYNC / PULLED / PUSHED
+personal-ai          IN_SYNC / PULLED / PUSHED
 personal-ai-state    IN_SYNC / PULLED / PUSHED / MERGED
 projects             <简要汇总>
 memory               <新增/合并/冲突数量>

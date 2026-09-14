@@ -87,14 +87,14 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         """Scenario 2: IN_SYNC + DIRTY_SAFE (canonical eligible) -> REVIEW, no mutation."""
         (self.work / "scripts").mkdir(exist_ok=True)
         (self.work / "scripts" / "tool.py").write_text("print('canonical')", encoding="utf-8")
-        c = pas.classify_repo(self.work, repo_name="agent-tools")
+        c = pas.classify_repo(self.work, repo_name="personal-ai")
         self.assertEqual(c["graph_state"], pas.IN_SYNC)
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertIn("scripts/tool.py", c["eligible_canonical_changes"])
-        plan = pas.plan_actions({"agent-tools": c}, None, "sync")
+        plan = pas.plan_actions({"personal-ai": c}, None, "sync")
         self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
-        pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
+        pas.execute_plan(plan, {"personal-ai": c}, None, "sync", results)
         self.assertEqual(plan[0]["state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertEqual(pas._overall(plan, results), "REVIEW")
         self.assertTrue((self.work / "scripts" / "tool.py").is_file())
@@ -107,14 +107,14 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
     def test_scenario_3_in_sync_dirty_safe_non_canonical_local_only(self):
         """Scenario 3: IN_SYNC + DIRTY_SAFE (non-canonical local only) -> REVIEW, dirty preserved."""
         (self.work / ".verify-surface.mjs").write_text("local-only inspection", encoding="utf-8")
-        c = pas.classify_repo(self.work, repo_name="agent-tools")
+        c = pas.classify_repo(self.work, repo_name="personal-ai")
         self.assertEqual(c["graph_state"], pas.IN_SYNC)
         self.assertEqual(c["worktree_state"], pas.WORKTREE_DIRTY_SAFE)
         self.assertEqual(c["eligible_canonical_changes"], [])
-        plan = pas.plan_actions({"agent-tools": c}, None, "sync")
+        plan = pas.plan_actions({"personal-ai": c}, None, "sync")
         self.assertEqual(plan[0]["action"], "REVIEW")
         results: dict = {}
-        pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
+        pas.execute_plan(plan, {"personal-ai": c}, None, "sync", results)
         # Any dirty canonical worktree is deferred, even when the path is local-only.
         self.assertEqual((self.work / ".verify-surface.mjs").read_text(), "local-only inspection")
         self.assertEqual(plan[0]["action"], "REVIEW")
@@ -248,9 +248,9 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         secret_content = "api" + "_key: " + '"sk-0123456789abcdefghijklmnopqrstuvwxyz"'
         commit_file(self.work, "credentials.txt", secret_content)
         c = pas.classify_repo(self.work)
-        plan = pas.plan_actions({"agent-tools": c}, None, "sync")
+        plan = pas.plan_actions({"personal-ai": c}, None, "sync")
         results: dict = {}
-        pas.execute_plan(plan, {"agent-tools": c}, None, "sync", results)
+        pas.execute_plan(plan, {"personal-ai": c}, None, "sync", results)
         self.assertEqual(plan[0]["state"], pas.LOCAL_AHEAD)
         self.assertIn("explicit", plan[0]["reason"])
         self.assertEqual(pas._overall(plan, results), "REVIEW")
@@ -324,9 +324,9 @@ class TestGitClassification(unittest.TestCase):
         self.assertEqual(c["graph_state"], pas.REMOTE_AHEAD)
         self.assertEqual(c["sync_state"], pas.REMOTE_PENDING)
         # AUTO_SYNC：clean FF pull 安全执行
-        plan = pas.plan_actions({"agent-tools": c}, None, "sync")
+        plan = pas.plan_actions({"personal-ai": c}, None, "sync")
         self.assertEqual(plan[0]["action"], "PULL")
-        pas.execute_plan(plan, {"agent-tools": c}, None, "sync", {})
+        pas.execute_plan(plan, {"personal-ai": c}, None, "sync", {})
         self.assertTrue((self.work / "new.txt").is_file())
         self.assertEqual(plan[0]["state"], "PULLED")
 
@@ -631,7 +631,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
     def test_restore_from_empty(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
-            # 造最小 canonical remote：agent-tools-like + personal-ai-state-like
+            # 造最小 canonical remote：personal-ai-like + personal-ai-private-like
             at_remote, at_work = make_remote_with_clone(td / "a", "at")
             (at_work / "scripts").mkdir(exist_ok=True)
             commit_file(at_work, "SKILLS.md", "canonical")
@@ -642,15 +642,15 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
                 provenance={"source": "test"})
             st.push(st.devA)
 
-            dest_at = td / "restore" / "agent-tools"
+            dest_at = td / "restore" / "personal-ai"
             dest_st = td / "restore" / "personal-ai-private"
             dest_skills = td / "restore" / "skills"
             r = pas.run_restore(repo=dest_at, state_repo=dest_st,
                                 skills_dest=dest_skills, apply_dsh=False,
-                                agent_tools_remote=str(at_remote),
+                                product_remote=str(at_remote),
                                 state_remote=str(st.remote))
             steps = {s["step"]: s["ok"] for s in r["steps"]}
-            self.assertTrue(steps["clone agent-tools"])
+            self.assertTrue(steps["clone personal-ai"])
             self.assertTrue(steps["clone personal-ai-private"])
             self.assertTrue(steps["memory loadable"])
             self.assertTrue((dest_at / "SKILLS.md").is_file())
@@ -661,7 +661,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
             # 幂等：再跑一次 already present
             r2 = pas.run_restore(repo=dest_at, state_repo=dest_st,
                                  skills_dest=dest_skills, apply_dsh=False,
-                                 agent_tools_remote=str(at_remote),
+                                 product_remote=str(at_remote),
                                  state_remote=str(st.remote))
             self.assertEqual(r2["result"], "PASS")
 

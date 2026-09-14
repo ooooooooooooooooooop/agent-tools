@@ -26,7 +26,7 @@ from sync_v2.models import (
     SyncReceipt,
 )
 from sync_v2.planes import (
-    evaluate_agent_tools_source_plane,
+    evaluate_product_source_plane,
     evaluate_backup_recovery_health,
     evaluate_canonical_state_plane,
     evaluate_deployment_mirror_plane,
@@ -393,7 +393,7 @@ class FakeSyncRegressionTests(unittest.TestCase):
         self.assertIn("## 5. 同步结果", output)
         self.assertIn("## 6. 安全与健康检查", output)
         self.assertIn("Personal AI State", output)
-        self.assertIn("Agent Tools", output)
+        self.assertIn("Product Source", output)
         self.assertIn("DSH Runtime", output)
 
 class SessionResidueSemanticsTests(unittest.TestCase):
@@ -943,7 +943,7 @@ class SyncV3ConvergenceDriftReconciliationTests(unittest.TestCase):
         (self.home / "skills").mkdir(parents=True, exist_ok=True)
 
         # Mirror baseline
-        self.mirror_dir = self.home / ".deployment-mirror" / "agent-tools"
+        self.mirror_dir = self.home / ".deployment-mirror" / "personal-ai"
         self.mirror_dir.mkdir(parents=True, exist_ok=True)
 
         # State repo baseline
@@ -1034,8 +1034,8 @@ class SyncV3ConvergenceDriftReconciliationTests(unittest.TestCase):
         skills_eval = mock.MagicMock(return_value=in_sync("skills", SyncPlane.SKILL))
         patches = [
             mock.patch("sync_v2.engine._run_git", side_effect=self._call_git),
-            mock.patch("sync_v2.engine.evaluate_agent_tools_source_plane", return_value=ResourceRecord(
-                resource_id="agent_tools_source", plane=SyncPlane.AGENT_TOOLS_SOURCE,
+            mock.patch("sync_v2.engine.evaluate_product_source_plane", return_value=ResourceRecord(
+                resource_id="product_source", plane=SyncPlane.PRODUCT_SOURCE,
                 category=ResourceCategory.CONVERGENCE_PLANE, status=PlaneStatus.PASS_NO_CHANGE,
                 details={"dirty": False})),
             mock.patch("dsh_lifecycle.ensure_deployment_mirror", mirror_ensure),

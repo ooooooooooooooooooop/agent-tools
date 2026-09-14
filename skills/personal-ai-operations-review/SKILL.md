@@ -60,7 +60,7 @@ description: 对已进入 OPERATIONS MODE 的 Personal AI / DSH 基础设施做�
 ## 工作流程
 
 1. **定位真实入口**
-   - 找到 `agent-tools` 仓库根目录和当前分支/commit。
+   - 找到 `personal-ai` 仓库根目录和当前分支/commit。
    - 优先读取 `docs/personal-ai-operations.md`、当前 Architecture/operations handoff 与仓库已有脚本说明。
    - 命令或路径不存在时标 `UNKNOWN`，先搜索仓库实际入口；不要凭旧报告猜路径。
 

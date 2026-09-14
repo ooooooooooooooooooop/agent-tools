@@ -81,7 +81,7 @@
 Personal AI Bootstrap
 
 mode                 RESTORE / AUTO_SYNC
-agent-tools          <状态>
+personal-ai          <状态>
 personal-ai-state    <状态>
 runtime              <状态>
 dsh-session-history  <状态>（backup=<n> live=<n> missing=<n>）

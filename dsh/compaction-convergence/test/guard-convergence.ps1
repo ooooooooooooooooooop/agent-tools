@@ -10,7 +10,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$forkRoot = Split-Path -Parent $here          # agent-tools/dsh/compaction-convergence
+$forkRoot = Split-Path -Parent $here          # personal-ai/dsh/compaction-convergence
 $profileRoot = Join-Path $env:USERPROFILE ".dsh\profiles\web"
 $forkDest = Join-Path $profileRoot "plugins\dsh-compaction-convergence"
 $FORK_LIB_HASH = "5bbf319ce8238b15b8952a8552e92cbaf55d8265b5e58889ee9157287e2300ec"

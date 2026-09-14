@@ -11,7 +11,7 @@
 端到端演练：fresh-device 在独立 temp 目录物理执行 BOOTSTRAP §2 的
 克隆 → 校验 → 安装 full profile → RESTORE 全链路，不触碰 live 环境。
 （restore 的 state 侧用最小 canonical fixture，避免在 CI 上触发 aic discover
- 与真实 private remote；agent-tools 侧用真实仓库克隆，覆盖 §2 第 2-4 步。）
+ 与真实 private remote；personal-ai 侧用真实仓库克隆，覆盖 §2 第 2-4 步。）
 """
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             # restore 校验的 skills_dest 必须就是 §2.4 装好的 SKILLS_DIR（与 BOOTSTRAP 流程一致）
             r = pas.run_restore(repo=repo, state_repo=dest_state, apply_dsh=False,
                                 skills_dest=skills_dir,
-                                agent_tools_remote=str(ROOT),
+                                product_remote=str(ROOT),
                                 state_remote=str(remote))
             steps = {s["step"]: s["ok"] for s in r["steps"]}
             self.assertTrue(steps["clone personal-ai-private"], r["steps"])
@@ -165,7 +165,7 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
             # 幂等：完整重跑一次仍 PASS
             r2 = pas.run_restore(repo=repo, state_repo=dest_state, apply_dsh=False,
                                  skills_dest=skills_dir,
-                                 agent_tools_remote=str(ROOT),
+                                 product_remote=str(ROOT),
                                  state_remote=str(remote))
             self.assertEqual(r2["result"], "PASS", r2["steps"])
 

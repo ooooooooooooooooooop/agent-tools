@@ -68,9 +68,9 @@ class TestCanonicalMutationOwnership(unittest.TestCase):
             "eligible_canonical_changes": ["owned.txt"],
             "branch": "main",
         }
-        plan = pas.plan_actions({"agent-tools": classification}, None, "sync")
+        plan = pas.plan_actions({"personal-ai": classification}, None, "sync")
         self.assertEqual(plan[0]["action"], "REVIEW")
-        pas.execute_plan(plan, {"agent-tools": classification}, None, "sync", {})
+        pas.execute_plan(plan, {"personal-ai": classification}, None, "sync", {})
         self.assertEqual(git(repo, "rev-parse", "HEAD"), before_head)
         self.assertEqual((repo / "owned.txt").read_text(encoding="utf-8"), "owned\n")
         self.assertIn("dirty", plan[0]["reason"])
@@ -173,7 +173,7 @@ class TestCanonicalMutationOwnership(unittest.TestCase):
             state_repo=state_destination,
             skills_dest=self.root / "skills",
             apply_dsh=False,
-            agent_tools_remote=str(source),
+            product_remote=str(source),
             state_remote=str(state_source),
         )
         governance_steps = [s for s in restored["steps"] if s["step"] == "governance tasks"]

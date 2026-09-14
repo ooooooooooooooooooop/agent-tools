@@ -467,7 +467,7 @@ class RestoreAndSyncSemanticsTests(unittest.TestCase):
         """Req 20: personal_ai_sync prints distinct lifecycle layer lines."""
         results = {
             "mode": "check",
-            "planes": {"agent-tools": {"state": "IN_SYNC", "sync_state": "IN_SYNC", "worktree_state": "CLEAN"}},
+            "planes": {"personal-ai": {"state": "IN_SYNC", "sync_state": "IN_SYNC", "worktree_state": "CLEAN"}},
             "runtime": {"status": "NO DRIFT"},
             "secrets": {"status": "READY", "missing": []},
             "result": "PASS",

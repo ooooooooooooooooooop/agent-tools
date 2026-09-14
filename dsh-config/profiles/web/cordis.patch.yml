@@ -15,7 +15,7 @@
 #   - compaction-summarization-fallback.mjs
 #   - session-supervisor.mjs
 #   - session-surface-repair.mjs
-#   - web-search-adapter.js   (repo source exists: agent-tools dsh/web-search-adapter)
+#   - web-search-adapter.js   (repo source exists: personal-ai dsh/web-search-adapter)
 
 # MCP: agent-switchboard (local cross-agent broker from {{DESKTOP}}\skills\mcp).
 # Host-plane row: registers tools as mcp__agent-switchboard__* for every session.
