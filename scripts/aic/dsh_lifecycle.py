@@ -14,7 +14,7 @@ Establishes and verifies the unambiguous 8-layer DSH runtime lifecycle:
 Hard boundaries:
 - Personal AI writes to DSH ONLY.
 - Claude Code, Codex, Gemini are user/native owned (Personal AI write control forbidden).
-- Developer workspace (e.g. C:\\Desktop\\skills) is NEVER modified, stashed, or reset for production.
+- Developer workspace (e.g. C:\\Desktop\\personal-ai) is NEVER modified, stashed, or reset for production.
 - Production deployment is NEVER blocked by developer workspace being dirty.
 - Local-only dirty changes in developer workspace NEVER leak into production deployment.
 - Active runtime directory is IMMUTABLE while in use (no in-place destructive mutation).

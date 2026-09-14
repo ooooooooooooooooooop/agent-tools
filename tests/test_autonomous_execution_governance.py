@@ -98,6 +98,7 @@ class TestCheckpointTool(unittest.TestCase):
         self._state = str(Path(self._tmp.name))
         self.env = dict(os.environ, PERSONAL_AI_STATE=self._state,
                         PERSONAL_AI_LEDGER=str(Path(self._tmp.name) / "ledger" / "usage.jsonl"))
+        self.env.pop("PERSONAL_AI_HOME", None)
         self.py = sys.executable
         self.base = [self.py, str(ROOT / "scripts" / "autonomy" / "checkpoint.py")]
 

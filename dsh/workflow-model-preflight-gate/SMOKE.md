@@ -6,7 +6,7 @@
 ## 0. 静态校验（离线，先做）
 
 ```powershell
-node C:\Desktop\skills\dsh\workflow-model-preflight-gate\verify-deployment.mjs
+node C:\Desktop\personal-ai\dsh\workflow-model-preflight-gate\verify-deployment.mjs
 # 期望输出 VERIFY_DEPLOYMENT: PASS（部署一致性 / patch 登记 / 模块可加载 / 判定逻辑 6 项）
 ```
 

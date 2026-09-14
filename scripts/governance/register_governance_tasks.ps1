@@ -16,7 +16,7 @@ param(
 #        AppData\Local\Temp, bootstrap-drill-*, .claude\worktrees, temp fixtures).
 #        -> REGISTRATION_REJECTED_EPHEMERAL_PATH
 #     2. The repo root must be anchored in machine-local durable config
-#        (personal-ai-state/sync/this-device.yaml repos list).
+#        (<instance-root>/sync/this-device.yaml repos list).
 #        -> REGISTRATION_REJECTED_NON_CANONICAL
 #     3. Every registered action target must exist at registration time.
 $ErrorActionPreference = 'Stop'
@@ -45,7 +45,9 @@ if (Test-EphemeralPath -PathToTest $repo) {
 
 # Canonical anchor: this checkout must be listed in the machine-local durable
 # device config. No hardcoded user directories — the machine config is the SSOT.
-$stateRoot = $env:PERSONAL_AI_STATE
+$stateRoot = $env:PERSONAL_AI_HOME
+if (-not $stateRoot) { $stateRoot = $env:PERSONAL_AI_STATE }
+if (-not $stateRoot -and (Test-Path -LiteralPath (Join-Path $HOME '.personal-ai\instance.yaml'))) { $stateRoot = Join-Path $HOME '.personal-ai' }
 if (-not $stateRoot) { $stateRoot = Join-Path $HOME 'personal-ai-state' }
 $deviceCfgPath = Join-Path $stateRoot 'sync\this-device.yaml'
 if (-not (Test-Path -LiteralPath $deviceCfgPath)) {
@@ -115,7 +117,7 @@ foreach ($spec in $specs) {
 
   if (-not $CheckOnly -and -not $matches) {
     # 不设置 WorkingDirectory：Task Scheduler 在本机(UnifiedSchedulingEngine)
-    # 对 C:\Desktop\skills 的 cwd 解析会返回 ERROR_INVALID_NAME(0x8007010B)。
+    # 对仓库根目录的 cwd 解析会返回 ERROR_INVALID_NAME(0x8007010B)。
     # runners 一律用 $PSScriptRoot 自解析，不依赖 cwd。
     $taskAction = New-ScheduledTaskAction -Execute $execute -Argument $arguments
     Register-ScheduledTask -TaskName $spec.Name -Action $taskAction -Trigger $spec.Trigger `

@@ -34,7 +34,7 @@ Project State 随项目仓库走；ACTIVE 项目由 personal-ai-state goals + pr
 
 | data_class | canonical_owner | local_path | remote | pull_policy | push_policy | auto_merge | conflict_policy | device_local | derived | backup_only | rebuild_after_sync |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| agent-tools 代码 | agent-tools git | `Desktop\skills` | public GitHub | FF | 需门禁 PASS + privacy scan | 否 | REVIEW | 否 | 否 | 否 | 受影响 runtime refresh |
+| personal-ai 代码 | personal-ai git | `Desktop\personal-ai` | public GitHub | FF | 需门禁 PASS + privacy scan | 否 | REVIEW | 否 | 否 | 否 | 受影响 runtime refresh |
 | identity | personal-ai-state | `state/identity.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW（禁 last-write-wins） | 否 | 否 | 否 | Context Builder 输入刷新 |
 | preferences | personal-ai-state | `state/preferences.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | 同上 |
 | goals | personal-ai-state | `state/goals.md` | private git | FF | committed ahead | 否 | CONFLICT_REVIEW | 否 | 否 | 否 | project discovery 重读 |
@@ -205,7 +205,7 @@ Preflight → Auth check → Clone agent-tools → Clone personal-ai-state
 
 - Secrets（§29）：先自动完成所有不需要 secret 的部分；只列当前 active route/Harness 真正缺失的 secret；不因 optional Harness 未登录阻塞核心恢复
 - Multi-Harness（§30）：按实际 installed 的 render→diff→apply→diff；未安装 = OPTIONAL_NOT_INSTALLED，不自动装齐
-- Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate；只有 canonical `C:\Desktop\skills` restore 可注册，临时/测试副本不得取得 canonical writer lease 或触碰 live Scheduler
+- Governance（§31）：复用 `scripts/governance/register_governance_tasks.ps1` 注册/回读 scheduled tasks；必须 idempotent，重复 bootstrap 不产生 duplicate；只有 canonical `C:\Desktop\personal-ai` restore 可注册，临时/测试副本不得取得 canonical writer lease 或触碰 live Scheduler
 - Durability（§32）：不硬复制旧 `<BACKUP_ROOT>`，重新 discover disks/target/failure domains；无等价 target → DURABILITY=DEGRADED 但 PERSONAL_AI_CANONICAL_RESTORE 仍可 PASS；BACKUP_KEY_CUSTODY 继续 WAITING_FOR_CUSTODY_ROOT
 
 ## 15. 输出契约（§33-§35）

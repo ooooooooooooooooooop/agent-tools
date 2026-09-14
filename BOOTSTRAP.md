@@ -43,7 +43,7 @@
 
 1. **Preflight**：`git --version` 与 `python --version` 可用；`git ls-remote https://github.com/ooooooooooooooooooop/personal-ai.git HEAD` 能连通。失败 → §5（环境/认证）。
 2. **克隆 canonical**（public 仓库，无需认证）：
-   `git clone https://github.com/ooooooooooooooooooop/personal-ai.git <HOME>/Desktop/skills`，记为 `REPO`。
+   `git clone https://github.com/ooooooooooooooooooop/personal-ai.git <HOME>/Desktop/personal-ai`，记为 `REPO`。
    `REPO` 已存在则跳过克隆；存在但落后于远端则先按 §3 拉到最新再继续。
 3. **校验 canonical**：`python <REPO>/scripts/validate_repo.py --strict` 必须退出码 0，否则 §5。
 4. **安装 full Skill profile**（[skills.json](./skills.json) 中 profile `full`，含 publish-and-reuse）：

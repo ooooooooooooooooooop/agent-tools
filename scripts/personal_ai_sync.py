@@ -3294,7 +3294,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                     step("governance tasks", False, f"{exc.code}: {exc}")
             else:
                 step("governance tasks", True,
-                     "skipped: non-canonical restore source; scheduler registration requires C:\\Desktop\\skills")
+                     "skipped: non-canonical restore source; scheduler registration requires C:\\Desktop\\personal-ai")
         if (state_repo / "memory").is_dir():
             v = memory_merge_verify(state_repo)
             step("memory loadable", v["ok"], f"records={v.get('records')}")
