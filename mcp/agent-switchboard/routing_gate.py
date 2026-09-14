@@ -229,7 +229,7 @@ def _update_state(session_id: str, update) -> dict | None:
         return None
     try:
         with atomic_io.FileLock(
-            _session_lock_path(session_id), timeout=1.0, stale_seconds=30.0
+            _session_lock_path(session_id), timeout=10.0, stale_seconds=30.0
         ):
             state = _read_state(session_id)
             update(state)
