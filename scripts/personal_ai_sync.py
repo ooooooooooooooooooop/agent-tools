@@ -1029,7 +1029,9 @@ def _is_sync_eligible(repo: Path, rel_path: str, repo_name: str = "") -> bool:
     norm = rel_path.replace("\\", "/")
     if any(pat in norm for pat in NON_CANONICAL_PATTERNS):
         return False
-    if repo_name == "personal-ai-private" or repo.name == "personal-ai-private":
+    if (repo_name == "personal-ai-private"
+            or repo.name in ("personal-ai-private", "personal-ai-state")
+            or _path_key(repo) == _path_key(STATE_REPO)):
         return norm.startswith(("state/", "sync/", "memory/", "projects/", "README"))
     if repo_name == "personal-ai" or repo == REPO or (repo / "registry").is_dir():
         if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/",

@@ -29,7 +29,7 @@ FULL 中每一环标 `USED / NOT_NEEDED(reason) / UNKNOWN`，允许空环但不�
 ## 状态层（读写契约）
 
 ```text
-Canonical SSOT:  ~/personal-ai-state/world-model/
+Canonical SSOT:  ~/world-model/
   current.yaml      当前最佳压缩模型。每条模型条目字段：
                     命题 / 状态(当前最佳|竞争) / 定性置信 / 支持证据ref /
                     反例 / 竞争解释 / 适用范围(Model Coverage) /

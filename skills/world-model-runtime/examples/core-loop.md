@@ -4,7 +4,7 @@
 
 ```text
 WM_ACTIVATE      模式=CORE；理由：跨会话可复现 bug，修复需可验证预测
-STATE_RESTORE    读 ~/personal-ai-state/world-model/current.yaml → 空模型（首次）
+STATE_RESTORE    读 ~/world-model/current.yaml → 空模型（首次）
 CURRENT_MODEL    BOM 文件在部分 Windows 工具链上以 GBK 回退解码（推断，置信低）
 PREDICTION_CREATED
   P1: errors='replace' 的 read 调用会在 BOM 文件上产出 mojibake → refutable

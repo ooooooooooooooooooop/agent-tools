@@ -90,7 +90,7 @@ After approval, adoption must use the existing capability inventory/registry, AI
      由 Personal AI Model/Routing SSOT（registry/models.yaml + routing-policy.yaml）
      决定。
   5. 长时间任务必须 CHECKPOINT → COMPACT → RESUME；Checkpoint 写入 Personal AI
-     durable state（personal-ai-state/checkpoints/），resume 读 checkpoint 而非原
+     durable state（personal-ai-private/checkpoints/），resume 读 checkpoint 而非原
      conversation；cache-read token 计入预算，超限即触发 COMPACT。
   6. 无进展循环（PROGRESS_DELTA = 0 持续 N 轮；重复相同工具调用 / 错误 / 修复 /
      judge / provider probe）自动 circuit break，stop_reason=LOOP_BREAKER 落
