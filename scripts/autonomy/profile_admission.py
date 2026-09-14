@@ -8,7 +8,7 @@
 - 项目禁止复制 classifier；项目只消费 admission 结果。
 - 安全：UNKNOWN ≠ UNBOUNDED —— 无法分类的 autonomous task 进入 safe default
   （AUTONOMOUS_STANDARD），绝不进入无约束观察模式。
-- 结果 durable：personal-ai-state/checkpoints/<task_id>.admission.json + Usage Ledger
+- 结果 durable：personal-ai-private/checkpoints/<task_id>.admission.json + Usage Ledger
   kind=admission / escalation。
 
 用法：
@@ -27,6 +27,25 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = ROOT / "registry"
@@ -173,7 +192,7 @@ def classify(objective: str, declare: dict | None = None) -> dict:
 
 
 def admission_path(task_id: str) -> Path:
-    state = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
+    state = _instance_root()
     d = state / "checkpoints"
     d.mkdir(parents=True, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in task_id)
@@ -222,7 +241,7 @@ def read_admission(task_id: str) -> dict | None:
 
 
 def _checkpoint_file(task_id: str) -> Path:
-    state = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
+    state = _instance_root()
     safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in task_id)
     return state / "checkpoints" / f"{safe}.json"
 

@@ -142,14 +142,14 @@ class TestFreshDeviceBootstrapDrill(unittest.TestCase):
                 subprocess.run(["git", "-C", str(work), *args],
                                capture_output=True, check=True, env=GIT_ENV)
 
-            dest_state = home / "personal-ai-state"
+            dest_state = home / "personal-ai-private"
             # restore 校验的 skills_dest 必须就是 §2.4 装好的 SKILLS_DIR（与 BOOTSTRAP 流程一致）
             r = pas.run_restore(repo=repo, state_repo=dest_state, apply_dsh=False,
                                 skills_dest=skills_dir,
                                 agent_tools_remote=str(ROOT),
                                 state_remote=str(remote))
             steps = {s["step"]: s["ok"] for s in r["steps"]}
-            self.assertTrue(steps["clone personal-ai-state"], r["steps"])
+            self.assertTrue(steps["clone personal-ai-private"], r["steps"])
             self.assertTrue(steps["validate canonical"], r["steps"])
             self.assertTrue(steps["skills restore (apply)"], r["steps"])
             self.assertTrue(steps["memory loadable"], r["steps"])

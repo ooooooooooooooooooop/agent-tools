@@ -1,6 +1,6 @@
 """modernized_provider.py — Personal AI Modernized Hybrid Memory Provider.
 
-SSOT: personal-ai-state/memory/records/<id>/ (canonical YAML files).
+SSOT: personal-ai-private/memory/records/<id>/ (canonical YAML files).
 Index: Local SQLite FTS5 index (derived, fully rebuildable from canonical records).
 
 Features:

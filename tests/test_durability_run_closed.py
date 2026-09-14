@@ -29,6 +29,7 @@ class ClosedRunDurabilityTests(unittest.TestCase):
             f"device_id: TEST\nbackup_root: {self.backup_root}\n", encoding="utf-8")
         self._env = mock.patch.dict(os.environ, {
             "PERSONAL_AI_STATE": str(self.state_repo),
+            "PERSONAL_AI_HOME": str(self.state_repo),
         })
         self._env.start()
 

@@ -577,7 +577,7 @@ def cmd_validate(_args) -> int:
     try:
         policy_projection.load_policy(PRIVATE_STATE)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"personal-ai-state/state/preferences.md: {exc}")
+        errors.append(f"personal-ai-private/state/preferences.md: {exc}")
 
     for hname in ("codex", "claude", "gemini", "switchboard"):
         try:
@@ -783,7 +783,7 @@ def _policy_diff_row(name: str) -> dict | None:
     text = path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
     ok, observed = policy_projection.inspect_managed_block(text, policy_text)
     return {"file": path.name, "field": "<continuous-capability-adoption>",
-            "expected": "generated projection of personal-ai-state/state/preferences.md",
+            "expected": "generated projection of personal-ai-private/state/preferences.md",
             "actual": observed, "ok": ok}
 
 
@@ -794,11 +794,11 @@ def _policy_render_target(name: str) -> dict | None:
     try:
         policy_text = policy_projection.load_policy(PRIVATE_STATE)
         return {"file": path.name, "generated_instruction": policy_projection.render_managed_block(policy_text),
-                "source": "personal-ai-state/state/preferences.md",
+                "source": "personal-ai-private/state/preferences.md",
                 "owner": "aic"}
     except Exception as exc:  # noqa: BLE001
         return {"file": path.name, "generated_instruction": None,
-                "source": "personal-ai-state/state/preferences.md",
+                "source": "personal-ai-private/state/preferences.md",
                 "owner": "aic", "error": f"{type(exc).__name__}: {exc}"}
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """checkpoint.py — Personal AI durable Checkpoint tool（harness-neutral）。
 
-- Checkpoint 属于 Personal AI durable state：personal-ai-state/checkpoints/<task_id>.json
+- Checkpoint 属于 Personal AI durable state：personal-ai-private/checkpoints/<task_id>.json
   （PERSONAL_AI_STATE 可覆盖），永不只存在于某 Harness session history。
 - Schema：registry/checkpoint-schema.yaml（v1；实例为 JSON）。
 - resume 契约：读 checkpoint（next_executable_action / current_state / budget_remaining），

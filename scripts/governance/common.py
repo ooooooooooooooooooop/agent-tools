@@ -17,10 +17,29 @@ from pathlib import Path
 
 import yaml
 
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
+
 REPO = Path(__file__).resolve().parents[2]
 HOME = Path.home()
 REG = REPO / "registry"
-STATE = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state"))
+STATE = _instance_root()
 INBOX = Path.home() / ".dsh" / ".evolution-inbox" / "proposals"
 
 SECRET_RE = re.compile(

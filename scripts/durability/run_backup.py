@@ -24,6 +24,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import backup_root, device_config, ledger_append, now_iso, sha256_file  # noqa: E402
 
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -37,7 +56,7 @@ def get_git_version() -> str:
 
 
 def get_config_version() -> str:
-    cfg_path = Path(os.environ.get("PERSONAL_AI_STATE", Path.home() / "personal-ai-state")) / "sync" / "this-device.yaml"
+    cfg_path = _instance_root() / "sync" / "this-device.yaml"
     if cfg_path.is_file():
         return sha256_file(cfg_path)
     return "UNKNOWN_CONFIG"

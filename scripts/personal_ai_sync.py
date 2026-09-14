@@ -26,7 +26,25 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-STATE_REPO = Path.home() / "personal-ai-state"
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
+STATE_REPO = _instance_root()
 CHECKPOINT = Path.home() / ".dsh" / ".personal-ai-sync" / "status.json"
 AIC = REPO / "scripts" / "aic" / "aic.py"
 SYNC_SKILLS = REPO / "scripts" / "sync_skills.py"
@@ -652,7 +670,7 @@ KNOWN_SESSION_ANCHORS = [
 
 
 def _device_backup_root(state_repo: Path | None = None) -> Path | None:
-    """解析 durability backup root（personal-ai-state/sync/this-device.yaml）。
+    """解析 durability backup root（<instance-root>/sync/this-device.yaml）。
     失败返回 None（该设备未配置备份 = NOT_APPLICABLE 语义）。"""
     if state_repo:
         rel = state_repo / "sync" / "this-device.yaml"
@@ -665,7 +683,7 @@ def _device_backup_root(state_repo: Path | None = None) -> Path | None:
             except Exception:  # noqa: BLE001
                 return None
         return None
-    rel = Path.home() / "personal-ai-state" / "sync" / "this-device.yaml"
+    rel = STATE_REPO / "sync" / "this-device.yaml"
     if not rel.is_file():
         rel = Path(os.environ.get("PERSONAL_AI_STATE", "")) / "sync" / "this-device.yaml"
     if not rel.is_file():
@@ -1011,7 +1029,7 @@ def _is_sync_eligible(repo: Path, rel_path: str, repo_name: str = "") -> bool:
     norm = rel_path.replace("\\", "/")
     if any(pat in norm for pat in NON_CANONICAL_PATTERNS):
         return False
-    if repo_name == "personal-ai-state" or repo.name == "personal-ai-state":
+    if repo_name == "personal-ai-private" or repo.name == "personal-ai-private":
         return norm.startswith(("state/", "sync/", "memory/", "projects/", "README"))
     if repo_name == "agent-tools" or repo == REPO or (repo / "registry").is_dir():
         if norm.startswith(("registry/", "scripts/", "dsh/", "skills/", "docs/", "tests/",
@@ -1488,7 +1506,7 @@ def _mutation_lock_root_for_repo(repo: Path) -> Path:
 def _mutation_root_for_plane(name: str, repo: Path) -> Path | None:
     if name == "agent-tools":
         return CANONICAL_GOVERNANCE_ROOT if _path_key(repo) == _path_key(REPO) else repo
-    if name == "personal-ai-state":
+    if name == "personal-ai-private":
         return STATE_REPO if _path_key(repo) == _path_key(STATE_REPO) else repo
     if name.startswith("project:"):
         return repo
@@ -2494,7 +2512,7 @@ def discover_projects(state_repo: Path) -> list[dict]:
                     repos.append(m.group(1).strip())
                 elif line.strip() and not line.startswith(" "):
                     break
-    infra = {str(REPO).lower(), str(state_repo).lower(), "skills", "agent-tools", "personal-ai-state"}
+    infra = {str(REPO).lower(), str(state_repo).lower(), "skills", "agent-tools", "personal-ai-state", "personal-ai-private"}
     projects = []
     active_names = set()
     paused = False
@@ -2833,7 +2851,7 @@ def execute_plan(plan: list[dict], classifications: dict,
             review(item, "DEFER: implicit AUTO_COMMIT is disabled; use explicit owned commit")
         elif action == "DEPLOY_FROM_MIRROR":
             review(item, "DEFER: dirty canonical source cannot be bypassed through a deployment mirror")
-        elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-state":
+        elif action == "REVIEW" and item["state"] == DIVERGED and name == "personal-ai-private":
             _handle_state_divergence(item, repo, c, mode, results)
 
 
@@ -2843,13 +2861,13 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
     scope = ["memory/records/**"]
     try:
         lock = _mutation_lock_for_plane(
-            "personal-ai-state", repo, results,
+            "personal-ai-private", repo, results,
             operation="deterministic-memory-merge", scope=scope,
             scope_contract="personal-ai-memory-record-subtree")
         with lock:
             if uncommitted_files(repo):
                 item["action"] = "REVIEW"
-                item["reason"] = "DEFER: personal-ai-state became dirty before deterministic merge"
+                item["reason"] = "DEFER: personal-ai-private became dirty before deterministic merge"
                 item["executed"] = False
                 return
             _handle_state_divergence_locked(item, repo, c, mode, results, lock)
@@ -2862,7 +2880,7 @@ def _handle_state_divergence(item: dict, repo: Path, c: dict,
 def _handle_state_divergence_locked(item: dict, repo: Path, c: dict,
                                     mode: str, results: dict,
                                     lock: CanonicalMutationLock) -> None:
-    """personal-ai-state DIVERGED（§9/§10/§11）。
+    """personal-ai-private DIVERGED（§9/§10/§11）。
 
     git 只做 transport；语义判定复用 MemoryProvider 冻结契约
     （record.yaml first-write-kept、revision 全保留、concurrent 标记、
@@ -2986,7 +3004,7 @@ def _audit_classified_repositories(classifications: dict) -> dict:
     """Audit every repository that the sync run treats as a managed plane."""
     audits = {}
     for name, classification in classifications.items():
-        if name != "agent-tools" and name != "personal-ai-state" and not name.startswith("project:"):
+        if name != "agent-tools" and name != "personal-ai-private" and not name.startswith("project:"):
             continue
         repo = Path(classification.get("path", ""))
         if not (repo / ".git").exists():
@@ -3030,9 +3048,9 @@ def run_sync(mode: str, detail: bool = False) -> dict:
     classifications["agent-tools"] = classify_repo(REPO)
     state_repo = STATE_REPO if (STATE_REPO / ".git").exists() else None
     if state_repo:
-        classifications["personal-ai-state"] = classify_repo(state_repo)
+        classifications["personal-ai-private"] = classify_repo(state_repo)
     else:
-        results["planes"]["personal-ai-state"] = {"state": UNKNOWN,
+        results["planes"]["personal-ai-private"] = {"state": UNKNOWN,
                                                   "reason": "local canonical missing → RESTORE"}
     projects = discover_projects(state_repo) if state_repo else []
     for p in projects:
@@ -3085,9 +3103,9 @@ def run_sync(mode: str, detail: bool = False) -> dict:
             files = []
         if item["plane"] == "agent-tools":
             changed_at = files
-        elif item["plane"] == "personal-ai-state":
+        elif item["plane"] == "personal-ai-private":
             changed_state = files
-    results["changed"] = {"agent-tools": changed_at, "personal-ai-state": changed_state}
+    results["changed"] = {"agent-tools": changed_at, "personal-ai-private": changed_state}
 
     # 基于 desired-state 的下游收敛（不再仅依赖 pull 变更列表，而是直接检验期望状态 vs 实际状态）
     if mode in ("sync", "restore"):
@@ -3181,7 +3199,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 skills_dest: Path | None = None,
                 apply_dsh: bool = True,
                 agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai.git",
-                state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-state.git",
+                state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-private.git",
                 sessions_root: Path | None = None,
                 backup_root: Path | None = None) -> dict:
     """RESTORE = local canonical missing 时的特殊 SYNC（§28），复用 PULL+bootstrap。
@@ -3242,7 +3260,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
         step("canonical mutation ownership", True,
              "non-canonical restore source has no canonical writer identity")
     clone_if_missing(repo, agent_tools_remote, "clone agent-tools")
-    clone_if_missing(state_repo, state_remote, "clone personal-ai-state")
+    clone_if_missing(state_repo, state_remote, "clone personal-ai-private")
 
     if (repo / ".git").exists():
         vscript = repo / "scripts" / "validate_repo.py"
@@ -3357,7 +3375,7 @@ def run_provenance_audit() -> dict:
     }
     targets = {"agent-tools": REPO}
     if (STATE_REPO / ".git").exists():
-        targets["personal-ai-state"] = STATE_REPO
+        targets["personal-ai-private"] = STATE_REPO
     for name, repo in targets.items():
         try:
             results["provenance"][name] = audit_canonical_commits(repo)

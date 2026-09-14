@@ -378,7 +378,7 @@ class TestMultiDeviceRuntimeConvergence(unittest.TestCase):
 
             # B：pull → diff 必须发现 drift → apply → NO DRIFT
             envB = {**os.environ, "HOME": str(homeB), "USERPROFILE": str(homeB), "DSH_HOME": str(dshB),
-                    "PERSONAL_AI_STATE": str(Path.home() / "personal-ai-state")}
+                    "PERSONAL_AI_STATE": os.environ.get("PERSONAL_AI_HOME", str(Path.home() / "personal-ai-state"))}
             aicB = devB / "scripts" / "aic" / "aic.py"
             subprocess.run(["git", "-C", str(devB), "pull", "--ff-only", "origin", "main"],
                            check=True, capture_output=True, env=env_git)

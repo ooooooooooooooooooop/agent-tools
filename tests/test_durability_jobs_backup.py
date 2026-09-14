@@ -63,6 +63,7 @@ class JobsBackupTests(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {
             "PERSONAL_AI_JOBS_DB": str(self.src_db),
             "PERSONAL_AI_STATE": str(self.state_repo),
+            "PERSONAL_AI_HOME": str(self.state_repo),
         })
         self._env.start()
 
@@ -137,6 +138,7 @@ class SessionsManifestMergeTests(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {
             "PERSONAL_AI_SESSIONS_SRC": str(self.src),
             "PERSONAL_AI_STATE": str(self.state_repo),
+            "PERSONAL_AI_HOME": str(self.state_repo),
         })
         self._env.start()
 

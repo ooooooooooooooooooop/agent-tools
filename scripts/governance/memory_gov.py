@@ -125,7 +125,7 @@ def main() -> int:
                     {"id": rid, "scope": scope, "staleness": s,
                      "confidence": rec.get("confidence"),
                      "created_at": created.get("at")},
-                    "low", "personal-ai-state/memory",
+                    "low", "personal-ai-private/memory",
                     f"review candidate ({s}); no automatic deletion")
 
     for f in findings:

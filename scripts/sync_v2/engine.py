@@ -45,6 +45,25 @@ from .planes import (
 )
 from .receipt import render_human_receipt
 
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
+
 
 def _find_live_dsh_process() -> Optional[dict]:
     """Query Win32_Process for the live running DSH Web host process with start time."""
@@ -98,7 +117,7 @@ class SyncEngine:
     ) -> None:
         self.home = home or Path.home() / ".dsh"
         self.repo_root = repo_root or ROOT
-        self.state_repo = state_repo or (Path.home() / "personal-ai-state")
+        self.state_repo = state_repo or _instance_root()
         self.mirror_dir = self.home / ".deployment-mirror" / "agent-tools"
         self.db_path = db_path
         self.registry = DurableJobRegistry(self.db_path)
@@ -188,15 +207,15 @@ class SyncEngine:
             if not check_only and p1_res.details.get("direction") == "REMOTE_AHEAD":
                 if not p1_res.details.get("dirty"):
                     subprocess.run(["git", "-C", str(self.state_repo), "pull", "--ff-only"], capture_output=True)
-                    changes_applied.append(f"personal-ai-state 已快进拉取最新远端提交 ({p1_res.details.get('remote_commit')[:8]})")
+                    changes_applied.append(f"personal-ai-private 已快进拉取最新远端提交 ({p1_res.details.get('remote_commit')[:8]})")
                     p1_res = evaluate_canonical_state_plane(self.state_repo, snapshot)
             elif not check_only and p1_res.details.get("direction") == "LOCAL_AHEAD":
                 if not p1_res.details.get("dirty"):
                     subprocess.run(["git", "-C", str(self.state_repo), "push"], capture_output=True)
-                    changes_applied.append(f"personal-ai-state 本地提交已同步推送到远端 ({p1_res.details.get('local_commit')[:8]})")
+                    changes_applied.append(f"personal-ai-private 本地提交已同步推送到远端 ({p1_res.details.get('local_commit')[:8]})")
                     p1_res = evaluate_canonical_state_plane(self.state_repo, snapshot)
             elif p1_res.details.get("direction") == "DIVERGED":
-                issues.append("personal-ai-state 与远端存在分叉 (REVIEW_REQUIRED_DIVERGED)")
+                issues.append("personal-ai-private 与远端存在分叉 (REVIEW_REQUIRED_DIVERGED)")
                 tradeoffs.append({
                     "title": "保留分叉状态等待人工确认",
                     "action": "未自动执行 git merge 或 rebase",

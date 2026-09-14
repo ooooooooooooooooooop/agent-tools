@@ -429,7 +429,7 @@ class TestPrivacyScan(unittest.TestCase):
 
 
 class StateRepoFixture:
-    """双设备 personal-ai-state 模拟：bare remote + devA + devB（§38）。"""
+    """双设备 personal-ai-private 模拟：bare remote + devA + devB（§38）。"""
 
     def __init__(self, td: Path):
         self.remote, self.devA = make_remote_with_clone(td, "state")
@@ -451,8 +451,8 @@ class StateRepoFixture:
     def sync_on(self, repo: Path) -> dict:
         c = pas.classify_repo(repo)
         results: dict = {}
-        plan = pas.plan_actions({"personal-ai-state": c}, repo, "sync")
-        pas.execute_plan(plan, {"personal-ai-state": c}, repo, "sync", results)
+        plan = pas.plan_actions({"personal-ai-private": c}, repo, "sync")
+        pas.execute_plan(plan, {"personal-ai-private": c}, repo, "sync", results)
         return {"plan": plan[0], "results": results}
 
 
@@ -643,7 +643,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
             st.push(st.devA)
 
             dest_at = td / "restore" / "agent-tools"
-            dest_st = td / "restore" / "personal-ai-state"
+            dest_st = td / "restore" / "personal-ai-private"
             dest_skills = td / "restore" / "skills"
             r = pas.run_restore(repo=dest_at, state_repo=dest_st,
                                 skills_dest=dest_skills, apply_dsh=False,
@@ -651,7 +651,7 @@ class TestFreshRestoreRehearsal(unittest.TestCase):
                                 state_remote=str(st.remote))
             steps = {s["step"]: s["ok"] for s in r["steps"]}
             self.assertTrue(steps["clone agent-tools"])
-            self.assertTrue(steps["clone personal-ai-state"])
+            self.assertTrue(steps["clone personal-ai-private"])
             self.assertTrue(steps["memory loadable"])
             self.assertTrue((dest_at / "SKILLS.md").is_file())
             # memory canonical 恢复且可读
@@ -827,9 +827,10 @@ class TestActiveProjectDiscovery(unittest.TestCase):
         projs = pas.discover_projects(pas.STATE_REPO)
         names = {p["name"]: p for p in projs}
         # 本机真实设备元数据决定 projects 集合；novel-main 仅在被克隆/登记时才出现。
-        # 无论是否存在，infra 仓库(skills/agent-tools/personal-ai-state)必须被排除。
+        # 无论是否存在，infra 仓库(skills/agent-tools/personal-ai-state/personal-ai-private)必须被排除。
         self.assertNotIn("skills", names)      # infra 排除
         self.assertNotIn("personal-ai-state", names)
+        self.assertNotIn("personal-ai-private", names)
         self.assertNotIn("agent-tools", names)
         if names.get("novel-main"):
             self.assertEqual(names["novel-main"]["status"], "PAUSED")  # paused_external_auth

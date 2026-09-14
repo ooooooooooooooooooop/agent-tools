@@ -1,6 +1,6 @@
 """Render curated Personal AI policies into generated static instruction blocks.
 
-The policy remains canonical in ``personal-ai-state/state/preferences.md`` and
+The policy remains canonical in ``personal-ai-private/state/preferences.md`` and
 ``registry/autonomous-execution-governance.yaml``. Harness instruction files
 contain checksum-protected generated projections only.
 
@@ -15,6 +15,25 @@ import os
 import re
 from pathlib import Path
 
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
+
+
 POLICY_ID = "CONTINUOUS_CAPABILITY_ADOPTION"
 _BLOCK_SLUG = POLICY_ID.lower().replace("_", "-")
 BLOCK_END = f"<!-- aic:{_BLOCK_SLUG}:end -->"
@@ -27,7 +46,7 @@ def preferences_path(state_root: str | Path | None = None) -> Path:
     root = Path(
         state_root
         or os.environ.get("PERSONAL_AI_STATE")
-        or (Path.home() / "personal-ai-state")
+        or _instance_root()
     )
     return root / "state" / "preferences.md"
 

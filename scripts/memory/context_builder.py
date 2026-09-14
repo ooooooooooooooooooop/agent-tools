@@ -7,7 +7,7 @@ memory carries provenance. Subagents never query the provider directly;
 the main agent injects a package subset honoring access_policy.inject.
 
 Usage:
-  python scripts/memory/context_builder.py --state-root <personal-ai-state> \
+  python scripts/memory/context_builder.py --state-root <personal-ai-private> \
       --project-root <project repo> --project <name> --task "..." [--budget 4000]
 """
 from __future__ import annotations

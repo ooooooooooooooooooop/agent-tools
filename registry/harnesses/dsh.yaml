@@ -3,7 +3,7 @@
 harness: dsh
 schema_version: 3
 consumes:
-  - personal-ai-state:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
+  - personal-ai-private:state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION
 render_targets:
   - id: settings
     path: "{{DSH_HOME}}/settings.yaml"
@@ -17,7 +17,7 @@ render_targets:
   - id: continuous-capability-adoption
     path: "{{DSH_HOME}}/AGENTS.md"
     mode: managed-instruction-block
-    source: "personal-ai-state/state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION"
+    source: "personal-ai-private/state/preferences.md#CONTINUOUS_CAPABILITY_ADOPTION"
     owner: aic
     note: "GENERATED projection；preferences.md 是唯一 canonical；只改带 checksum marker 的块"
   - id: autonomous-execution-governance

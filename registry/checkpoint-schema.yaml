@@ -1,7 +1,7 @@
 # checkpoint-schema.yaml — Personal AI cross-harness Checkpoint Contract（canonical · v1）
 #
 # 目的：一个 Harness 中断后，其他支持本协议的 Harness 可仅凭 durable state 理解并继续任务。
-# 存储：Checkpoint 实例 = JSON（<task_id>.json），落 personal-ai-state/checkpoints/（Personal AI
+# 存储：Checkpoint 实例 = JSON（<task_id>.json），落 personal-ai-private/checkpoints/（Personal AI
 #   durable state，随 git 传输，跨设备可恢复）。JSON 而非 YAML 是为了让无 YAML 依赖的
 #   Harness adapter（DSH 插件等在 profile 环境）可直接读写 —— 本文件是 schema 的 YAML 描述。
 # 写入方：scripts/checkpoint/checkpoint.py（harness 中立）或各 harness adapter（同一 schema）。

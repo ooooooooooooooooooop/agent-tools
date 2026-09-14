@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import yaml
 
 from .models import (
+
     EvidenceLevel,
     PlaneStatus,
     ResourceCategory,
@@ -25,6 +26,24 @@ from .models import (
     SnapshotContext,
     SyncPlane,
 )
+
+def _is_instance_root(p: Path) -> bool:
+    # instance-contract-v1: instance.yaml or state/ marker
+    return (p / "instance.yaml").is_file() or (p / "state").is_dir()
+
+
+def _instance_root() -> Path:
+    # instance-contract-v1: env > default(~/.personal-ai) > legacy discovery
+    for var in ("PERSONAL_AI_HOME", "PERSONAL_AI_STATE"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    default = Path.home() / ".personal-ai"
+    legacy = Path.home() / "personal-ai-state"
+    if _is_instance_root(default) or not _is_instance_root(legacy):
+        return default
+    return legacy
+
 
 try:
     from ..skill_visibility import INDETERMINATE, classify_skill_visibility, scan_skill_visibility
@@ -114,7 +133,7 @@ def atomic_copy(source: Path, destination: Path) -> None:
 
 # ---------------------------------------------------------------- Plane 1: Personal AI State
 def evaluate_canonical_state_plane(state_repo: Path, snapshot: Optional[SnapshotContext] = None) -> ResourceRecord:
-    """Plane 1: personal-ai-state Git ancestry evaluation."""
+    """Plane 1: personal-ai-private Git ancestry evaluation."""
     if not state_repo.is_dir() or not (state_repo / ".git").exists():
         return ResourceRecord(
             resource_id="personal_ai_state",
@@ -122,9 +141,9 @@ def evaluate_canonical_state_plane(state_repo: Path, snapshot: Optional[Snapshot
             category=ResourceCategory.CONVERGENCE_PLANE,
             status=PlaneStatus.OPTIONAL_UNAVAILABLE,
             symbol="○",
-            summary="personal-ai-state 未配置或目录不存在 (单机运行)",
+            summary="personal-ai-private 未配置或目录不存在 (单机运行)",
             required_evidence_level=EvidenceLevel.L1_ARTIFACT,
-            warnings=["未检测到 personal-ai-state 远端同步仓库"],
+            warnings=["未检测到 personal-ai-private 远端同步仓库"],
         )
 
     rc_stat, stat_out = _run_git(state_repo, "status", "--porcelain")
@@ -141,7 +160,7 @@ def evaluate_canonical_state_plane(state_repo: Path, snapshot: Optional[Snapshot
             category=ResourceCategory.CONVERGENCE_PLANE,
             status=PlaneStatus.FAILED,
             symbol="✗",
-            summary="无法读取 personal-ai-state 本地 HEAD 提交",
+            summary="无法读取 personal-ai-private 本地 HEAD 提交",
             required_evidence_level=EvidenceLevel.L3_REPRODUCED,
             blockers=["Git rev-parse HEAD 失败"],
         )
@@ -226,7 +245,7 @@ def evaluate_canonical_state_plane(state_repo: Path, snapshot: Optional[Snapshot
         required_evidence_level=EvidenceLevel.L3_REPRODUCED,
         evidence_refs=[{"type": "git_ancestry", "local": local_commit, "remote": remote_commit, "status": "DIVERGED"}],
         details={"direction": "DIVERGED", "local_commit": local_commit, "remote_commit": remote_commit},
-        blockers=["personal-ai-state 分支与远端分叉，禁止自动重写历史，需人工合并"],
+        blockers=["personal-ai-private 分支与远端分叉，禁止自动重写历史，需人工合并"],
     )
 
 
@@ -1474,7 +1493,7 @@ def evaluate_session_continuity_health(
 # ---------------------------------------------------------------- Health 13: Backup / Recovery
 #
 # Semantic rule (2026-09-03 remediation): the canonical backup destination is
-# NOT ~/.dsh/backup. It is backup_root from personal-ai-state/sync/this-device.yaml
+# NOT ~/.dsh/backup. It is backup_root from personal-ai-private/sync/this-device.yaml
 # (the same machine policy the durability pipeline itself reads). Health is
 # decomposed into independent signals — BACKUP_FRESHNESS (RPO per dataset),
 # BACKUP_INTEGRITY (artifacts exist & verified), RESTORE_EVIDENCE (latest
@@ -1488,7 +1507,7 @@ _BACKUP_RPO_DEFAULTS = {"sessions": 26.0, "broker": 26.0, "configs": 168.0,
 
 def _load_backup_policy(state_repo: Path | None) -> tuple | None:
     """(device_config, error). Reads the same machine policy as the durability pipeline."""
-    root = Path(state_repo) if state_repo else (Path.home() / "personal-ai-state")
+    root = Path(state_repo) if state_repo else _instance_root()
     cfg_file = root / "sync" / "this-device.yaml"
     if not cfg_file.is_file():
         return None, f"device config missing: {cfg_file}"
@@ -1665,7 +1684,7 @@ def evaluate_backup_recovery_health(home: Path,
 
     details = {
         "backup_root": str(backup_root),
-        "policy_source": str((Path(state_repo) if state_repo else Path.home() / "personal-ai-state")
+        "policy_source": str((Path(state_repo) if state_repo else _instance_root())
                              / "sync" / "this-device.yaml"),
         "BACKUP_FRESHNESS": freshness,
         "BACKUP_FRESHNESS_STATE": freshness_state,

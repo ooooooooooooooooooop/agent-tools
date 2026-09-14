@@ -117,7 +117,8 @@ def main() -> int:
         print(__doc__)
         return 2
     gateways = {}
-    candidates = [Path.home() / "personal-ai-state" / "registry" / "gateways.yaml",
+    candidates = [Path(os.environ.get("PERSONAL_AI_HOME") or os.environ.get("PERSONAL_AI_STATE") or str(Path.home() / ".personal-ai")) / "registry" / "gateways.yaml",
+                  Path.home() / "personal-ai-state" / "registry" / "gateways.yaml",
                   ROOT / "registry" / "gateways.yaml"]
     for gw_path in candidates:
         if gw_path.is_file():
