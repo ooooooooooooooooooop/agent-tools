@@ -107,6 +107,14 @@ def load_config(path: Path) -> dict:
     }
 
 
+def _win_long(p: Path) -> Path:
+    """Extended-length path (\\\\?\\C:\\...) so >MAX_PATH files still work."""
+    s = str(p if p.is_absolute() else p.resolve())
+    if os.name == "nt" and not s.startswith("\\\\?\\"):
+        return Path("\\\\?\\" + s)
+    return p
+
+
 def sha256(p: Path) -> str:
     h = hashlib.sha256()
     with p.open("rb") as f:
@@ -153,7 +161,7 @@ def verify(snapshot_dir: Path) -> int:
         if not line.strip():
             continue
         sha, _, rel = line.partition("  ")
-        fp = snapshot_dir / rel.strip()
+        fp = _win_long(snapshot_dir / rel.strip())
         per_bucket[rel.split("/", 1)[0]].append(line.strip())
         if not fp.is_file() or sha256(fp) != sha:
             bad.append(rel.strip())
@@ -230,9 +238,9 @@ def main() -> int:
     sums: list[str] = []
     per_bucket: dict[str, list[str]] = {b: [] for b in BUCKETS}
     for bucket, src, rel in files:
-        dst = dest / bucket / rel
+        dst = _win_long(dest / bucket / rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        shutil.copy2(_win_long(src), dst)
         line = f"{sha256(dst)}  {bucket}/{rel.as_posix()}"
         sums.append(line)
         per_bucket[bucket].append(line)
