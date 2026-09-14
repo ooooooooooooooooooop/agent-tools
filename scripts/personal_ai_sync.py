@@ -3169,7 +3169,7 @@ def run_restore(detail: bool = False, repo: Path = REPO,
                 state_repo: Path = STATE_REPO,
                 skills_dest: Path | None = None,
                 apply_dsh: bool = True,
-                agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/agent-tools.git",
+                agent_tools_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai.git",
                 state_remote: str = "git@github.com:ooooooooooooooooooop/personal-ai-state.git",
                 sessions_root: Path | None = None,
                 backup_root: Path | None = None) -> dict:

@@ -4,7 +4,7 @@
 
 > **用一句话配置这台电脑（唯一入口）** — 把下面这句原样发给本机 Agent：
 >
-> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
+> **读取 <https://github.com/ooooooooooooooooooop/personal-ai/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
 >
 > 安装 / 更新 / 恢复 / 同步的全部意图都固化在 [BOOTSTRAP.md](./BOOTSTRAP.md)：没装 Skill 会自动 bootstrap 并恢复全量环境，已安装会自动判定同步方向；用户无需知道任何 Skill 名、Git 命令或同步细节。
 
@@ -28,8 +28,8 @@ MCP 的机器可读登记信息位于 [mcp.json](./mcp.json)。`agent-switchboar
 ### 安装 MCP
 
 ```powershell
-git clone https://github.com/ooooooooooooooooooop/agent-tools.git
-Set-Location .\agent-tools\mcp\agent-switchboard
+git clone https://github.com/ooooooooooooooooooop/personal-ai.git
+Set-Location .\personal-ai\mcp\agent-switchboard
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-agent-broker.ps1
 ```
 
@@ -67,7 +67,7 @@ Skill 安装 profile 定义在 [skills.json](./skills.json)。
 ### 安装 Skill
 
 ```bash
-npx skills add https://github.com/ooooooooooooooooooop/agent-tools --skill <skill-name>
+npx skills add https://github.com/ooooooooooooooooooop/personal-ai --skill <skill-name>
 ```
 
 ## DSH 插件

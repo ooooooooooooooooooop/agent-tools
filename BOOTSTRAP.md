@@ -3,7 +3,7 @@
 本文件是这台电脑 Personal AI 生命周期的**唯一入口**。
 用户只需要对这台电脑上的 Agent 说一句：
 
-> **读取 <https://github.com/ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
+> **读取 <https://github.com/ooooooooooooooooooop/personal-ai/blob/main/BOOTSTRAP.md>，自主配置这台电脑**
 
 安装 / 更新 / 恢复 / 同步的全部意图都已固化在本文件中。读到本文件的 Agent 必须自主执行到底，只在 §5 列出的情形下才向用户报告。
 
@@ -23,7 +23,7 @@
 
 依序执行只读检查：
 
-1. 定位本机 agent-tools 克隆：依次探测 `<HOME>/Desktop/skills`、`<HOME>/Desktop/agent-tools`、`<HOME>/agent-tools`，要求存在 `.git` 且 `git remote get-url origin` 指向 `ooooooooooooooooooop/agent-tools`。命中后记为 `REPO`；都找不到则 `REPO = 缺失`。
+1. 定位本机 personal-ai 克隆：依次探测 `<HOME>/Desktop/skills`、`<HOME>/Desktop/personal-ai`、`<HOME>/personal-ai`、`<HOME>/Desktop/agent-tools`、`<HOME>/agent-tools`，要求存在 `.git` 且 `git remote get-url origin` 指向 `ooooooooooooooooooop/personal-ai`（旧名 `agent-tools` 的远端视为等价命中）。命中后记为 `REPO`；都找不到则 `REPO = 缺失`。
 2. 定位当前 Harness 的用户级 Skill 目录 `SKILLS_DIR`：
    - DSH：`<HOME>/.dsh/skills`（插件目录 `<HOME>/.dsh/profiles/web/plugins`）
    - Codex：`<HOME>/.codex/skills`
@@ -41,9 +41,9 @@
 
 ## 2. BOOTSTRAP（没安装 Skill 的全新/残缺设备）
 
-1. **Preflight**：`git --version` 与 `python --version` 可用；`git ls-remote https://github.com/ooooooooooooooooooop/agent-tools.git HEAD` 能连通。失败 → §5（环境/认证）。
+1. **Preflight**：`git --version` 与 `python --version` 可用；`git ls-remote https://github.com/ooooooooooooooooooop/personal-ai.git HEAD` 能连通。失败 → §5（环境/认证）。
 2. **克隆 canonical**（public 仓库，无需认证）：
-   `git clone https://github.com/ooooooooooooooooooop/agent-tools.git <HOME>/Desktop/skills`，记为 `REPO`。
+   `git clone https://github.com/ooooooooooooooooooop/personal-ai.git <HOME>/Desktop/skills`，记为 `REPO`。
    `REPO` 已存在则跳过克隆；存在但落后于远端则先按 §3 拉到最新再继续。
 3. **校验 canonical**：`python <REPO>/scripts/validate_repo.py --strict` 必须退出码 0，否则 §5。
 4. **安装 full Skill profile**（[skills.json](./skills.json) 中 profile `full`，含 publish-and-reuse）：

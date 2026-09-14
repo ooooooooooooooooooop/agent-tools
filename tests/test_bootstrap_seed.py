@@ -31,7 +31,7 @@ import personal_ai_sync as pas  # noqa: E402
 from provider import FileMemoryProvider  # noqa: E402
 
 BOOTSTRAP = ROOT / "BOOTSTRAP.md"
-TRIGGER = ("读取 <https://github.com/ooooooooooooooooooop/agent-tools/"
+TRIGGER = ("读取 <https://github.com/ooooooooooooooooooop/personal-ai/"
            "blob/main/BOOTSTRAP.md>，自主配置这台电脑")
 
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
@@ -54,7 +54,7 @@ class TestBootstrapSeedContract(unittest.TestCase):
     def test_seed_exists_and_declares_single_trigger(self):
         self.assertIn(TRIGGER, self.text)
         # 触发句必须指向本仓库 main 分支的 BOOTSTRAP.md
-        self.assertIn("ooooooooooooooooooop/agent-tools/blob/main/BOOTSTRAP.md", self.text)
+        self.assertIn("ooooooooooooooooooop/personal-ai/blob/main/BOOTSTRAP.md", self.text)
 
     def test_readme_first_screen_points_to_bootstrap(self):
         first_screen = "\n".join(
