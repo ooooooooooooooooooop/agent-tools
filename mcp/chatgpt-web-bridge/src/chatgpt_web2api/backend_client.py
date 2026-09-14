@@ -532,16 +532,32 @@ class BackendClient:
                 "  var r = await fetch('/backend-api/conversation/' + __D.conv_id, {"
                 "    headers: {'Authorization': 'Bearer ' + __D.token}"
                 "  });"
-                "  return await r.text();"
+                "  var t = await r.text();"
+                "  return JSON.stringify({status: r.status, body: t});"
                 "})()",
                 {"conv_id": conversation_id, "token": d._access_token},
                 timeout=30,
             )
             self._check_auth_in_raw(raw)
-            return json.loads(raw)
+            envelope = json.loads(raw)
+            status = envelope.get("status")
+            try:
+                body = json.loads(envelope.get("body") or "")
+            except json.JSONDecodeError:
+                body = None
+            if isinstance(body, dict):
+                # Annotate with the real HTTP status so callers can tell a
+                # 404 (bad id) apart from an empty-but-valid conversation —
+                # both used to collapse into indistinguishable empty results.
+                body["_fetch_status"] = status
+                return body
+            return {
+                "_fetch_status": status,
+                "_fetch_body": (envelope.get("body") or "")[:500],
+            }
         except (CDPJSError, json.JSONDecodeError) as e:
             logger.warning("get_conversation failed: %s", e)
-            return {}
+            return {"_fetch_status": None, "_fetch_error": str(e)[:200]}
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """Delete a conversation. Returns True on success."""

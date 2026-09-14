@@ -27,8 +27,13 @@ from chatgpt_web2api.mcp_server import _mcp_server_identity
 # ── 1 & 2: config ────────────────────────────────────────────────────────
 
 
-def test_config_default_parallel_tabs_false():
+def test_config_default_parallel_tabs_false(monkeypatch, tmp_path):
     """parallel_tabs defaults to False (legacy behavior)."""
+    # Isolate from the operator's real ~/.chatgpt_web2api/config.json —
+    # load(None) auto-discovers it and a real deployment may legitimately
+    # have parallel_tabs enabled, which is not the built-in default.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     cfg = Config.load(None)
     assert cfg.chatgpt.parallel_tabs is False
 

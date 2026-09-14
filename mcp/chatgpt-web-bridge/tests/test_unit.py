@@ -8,10 +8,10 @@ def test_imports():
 
 
 def test_tool_count():
-    """15 tools defined."""
+    """17 tools defined."""
     from chatgpt_web2api.mcp_server import _build_tools
     tools = _build_tools()
-    assert len(tools) == 16
+    assert len(tools) == 17
 
 
 def test_tool_names_match_enum():

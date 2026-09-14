@@ -33,6 +33,24 @@ Local delta carried in this copy (applied on top of upstream):
   first tool call — harness-bound lifecycle, zero resident daemons when the
   tool is never invoked. `install.ps1` resolves the venv via `W2A_VENV`
   (repo-external) else package-local `.venv`, matching `start.ps1`.
+- **reply-persistence reporting** (`chat_completion`, `chat_with_gpt`):
+  post-send tail check adds `reply_persisted` to the result —
+  true = assistant reply persisted; false = tail is still the caller's own
+  user message, i.e. the generation died mid-stream (the empirical recovery
+  is a short nudge like 「继续」 in the same conversation, not polling —
+  observed 2026-09-14: an agent hand-polled a dead generation for ~7 min);
+  null = inconclusive. Failed/ambiguous fetches can never crash a
+  successful send.
+- **`wait_reply` tool**: blocks until an assistant message persists,
+  `timeout_seconds` hits, or the tail stays the caller's user message past
+  `dead_after_seconds` (default 120) → `status:"dead"` early exit.
+  `since_total` accepts a prior `get_conversation` `total` to wait only for
+  a NEW reply. Replaces hand-rolled get_conversation+sleep polling loops.
+- **`get_conversation` disambiguation + file channel**: results now carry
+  `reason` (`ok` / `empty` / `not_found` / `fetch_failed`) — 404s and fetch
+  errors no longer masquerade as empty conversations — and `out_file`
+  (absolute path) writes the page to disk so long replies never have to
+  cross the MCP tool-result budget.
 
 Runtime state is NOT vendored: `.venv`, `~/.chatgpt_web2api/` (config, tab
 registry, pace file), Chrome profile, and conversation ids live per-device /

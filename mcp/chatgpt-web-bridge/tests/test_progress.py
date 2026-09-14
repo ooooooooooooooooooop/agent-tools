@@ -60,7 +60,7 @@ async def test_chat_completion_progress_cadence():
     from chatgpt_web2api import mcp_server
     from chatgpt_web2api.mcp_server import _PROGRESS_EVERY_N_CHUNKS
 
-    # 25 deltas → expect fire on 1, N, 2N, terminal
+    # 25 deltas → expect fire on 1, N, 2N, terminal + persistence check
     n = _PROGRESS_EVERY_N_CHUNKS
     deltas = [f"chunk{i} " for i in range(25)]
     driver = _streaming_driver(deltas)
@@ -68,10 +68,11 @@ async def test_chat_completion_progress_cadence():
     result = await mcp_server.do_chat_completion(
         driver, {"message": "hi"}, None, on_progress=_recording_callback(record),
     )
-    expected_calls = 1 + (25 // n) + 1  # first + every-Nth + terminal
+    expected_calls = 1 + (25 // n) + 2  # first + every-Nth + terminal + verify
     assert len(record) == expected_calls, f"got {record}"
     assert record[0] == "Assistant is responding…"
-    assert record[-1] == "Finalizing…"
+    assert record[-2] == "Finalizing…"
+    assert record[-1] == "Verifying reply persisted…"
     assert "Streaming" in record[1]
     assert result["content"] == "".join(deltas)
 
@@ -240,8 +241,8 @@ async def test_coalescing_no_per_delta_flood():
     await mcp_server.do_chat_completion(
         driver, {"message": "hi"}, None, on_progress=_recording_callback(record),
     )
-    # first(1) + every Nth (N, 2N, 3N = 3) + terminal(1) = 5
-    expected = 1 + (total_chunks // n) + 1
+    # first(1) + every Nth (N, 2N, 3N = 3) + terminal(1) + verify(1) = 6
+    expected = 1 + (total_chunks // n) + 2
     assert len(record) == expected, f"expected {expected}, got {len(record)}: {record}"
 
 

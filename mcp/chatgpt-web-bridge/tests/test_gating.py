@@ -48,6 +48,7 @@ def test_default_surface_excludes_write_and_destructive(monkeypatch):
     for tn in [
         ToolName.LIST_MODELS, ToolName.LIST_PROJECTS,
         ToolName.LIST_CONVERSATIONS, ToolName.GET_CONVERSATION,
+        ToolName.WAIT_REPLY,
         ToolName.LIST_MEMORIES, ToolName.LIST_GPTS,
         ToolName.LIST_PROJECT_FILES,
     ]:
@@ -75,6 +76,7 @@ def test_default_surface_exact_name_set(monkeypatch):
         ToolName.LIST_PROJECTS.value,
         ToolName.LIST_CONVERSATIONS.value,
         ToolName.GET_CONVERSATION.value,
+        ToolName.WAIT_REPLY.value,
         ToolName.LIST_MEMORIES.value,
         ToolName.LIST_GPTS.value,
         ToolName.LIST_PROJECT_FILES.value,
@@ -113,12 +115,12 @@ def test_destructive_env_exposes_delete_tools(monkeypatch):
         assert tn.value in visible, f"{tn.value} should appear with {DESTRUCTIVE_ENV}=1"
 
 
-def test_both_gates_expose_all_sixteen(monkeypatch):
-    """With both gates on, the full 16-tool surface is restored."""
+def test_both_gates_expose_all_seventeen(monkeypatch):
+    """With both gates on, the full 17-tool surface is restored."""
     clear_gate_envs(monkeypatch)
     monkeypatch.setenv(WRITE_ENV, "1")
     monkeypatch.setenv(DESTRUCTIVE_ENV, "1")
-    assert len(build_tools()) == 16
+    assert len(build_tools()) == 17
 
 
 # ── Block-at-call: hidden tools refuse to execute ─────────────

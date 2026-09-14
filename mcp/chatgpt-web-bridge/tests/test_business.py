@@ -24,6 +24,8 @@ def mock_driver():
 
     # Wire select_model (returns True by default)
     driver.select_model = AsyncMock(return_value=True)
+    # Project name→gizmo resolution: gizmo ids pass through unchanged
+    driver.resolve_project_id = AsyncMock(side_effect=lambda p: p)
 
     # Wire send_and_stream to yield a simple response
     async def _stream(text, timeout=120, *, budgets=None, model=None):
@@ -616,3 +618,204 @@ def test_js_with_data_escapes_properly():
     js_code = f"const __D = {serialized};"
     # No assertion on JS execution here — just that JSON is valid
     assert "__D" in js_code
+
+
+# ── reply persistence check (dead-generation detection) ─────
+
+
+def _chain_driver(messages):
+    """Mock driver whose get_conversation returns a linear chain built from
+    [(role, text), ...]; current_node = last node."""
+    from chatgpt_web2api.cdp_driver import CDPDriver
+
+    driver = MagicMock(spec=CDPDriver)
+    mapping = {}
+    prev = None
+    for i, (role, text) in enumerate(messages):
+        nid = f"n{i}"
+        mapping[nid] = {
+            "parent": prev,
+            "message": {"author": {"role": role}, "content": {"parts": [text]}},
+        }
+        prev = nid
+    driver.get_conversation = AsyncMock(
+        return_value={"id": "c", "title": "t", "current_node": prev, "mapping": mapping}
+    )
+    return driver
+
+
+@pytest.mark.asyncio
+async def test_verify_reply_persisted_true_when_tail_is_assistant():
+    from chatgpt_web2api.mcp_server import _verify_reply_persisted
+
+    d = _chain_driver([("user", "q"), ("assistant", "a")])
+    assert await _verify_reply_persisted(d, "c") is True
+
+
+@pytest.mark.asyncio
+async def test_verify_reply_persisted_false_when_tail_is_own_message():
+    """Dead-generation signature: the reply never persisted, the tail is
+    still our own user message. Callers must nudge, not poll."""
+    from chatgpt_web2api.mcp_server import _verify_reply_persisted
+
+    d = _chain_driver([("user", "q1"), ("assistant", "a1"), ("user", "q2")])
+    assert await _verify_reply_persisted(d, "c") is False
+    assert d.get_conversation.await_count == 3  # exhausted the grace retries
+
+
+@pytest.mark.asyncio
+async def test_verify_reply_persisted_none_when_unverifiable():
+    from chatgpt_web2api.mcp_server import _verify_reply_persisted
+
+    d = MagicMock()
+    d.get_conversation = AsyncMock(
+        return_value={"_fetch_status": None, "_fetch_error": "boom"}
+    )
+    assert await _verify_reply_persisted(d, "c") is None
+    assert await _verify_reply_persisted(d, None) is None
+
+
+# ── get_conversation reason + out_file ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_reason_ok():
+    from chatgpt_web2api.mcp_server import do_get_conversation
+
+    d = _chain_driver([("user", "q"), ("assistant", "a")])
+    result = await do_get_conversation(d, {"conversation_id": "c"})
+    assert result["reason"] == "ok"
+    assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_reason_not_found():
+    """404 used to surface as an indistinguishable empty result."""
+    from chatgpt_web2api.mcp_server import do_get_conversation
+
+    d = MagicMock()
+    d.get_conversation = AsyncMock(
+        return_value={"_fetch_status": 404, "_fetch_body": '{"detail":"nf"}'}
+    )
+    result = await do_get_conversation(d, {"conversation_id": "bad-id"})
+    assert result["reason"] == "not_found"
+    assert result["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_reason_fetch_failed_and_empty():
+    from chatgpt_web2api.mcp_server import do_get_conversation
+
+    d = MagicMock()
+    d.get_conversation = AsyncMock(
+        return_value={"_fetch_status": None, "_fetch_error": "js blew up"}
+    )
+    result = await do_get_conversation(d, {"conversation_id": "c"})
+    assert result["reason"] == "fetch_failed"
+
+    d.get_conversation = AsyncMock(return_value={"_fetch_status": 200})
+    result = await do_get_conversation(d, {"conversation_id": "c"})
+    assert result["reason"] == "empty"  # reachable but nothing visible
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_out_file_writes_and_omits_inline(tmp_path):
+    """out_file keeps long replies out of the tool result entirely."""
+    from chatgpt_web2api.mcp_server import do_get_conversation
+
+    d = _chain_driver([("user", "hello"), ("assistant", "world " * 500)])
+    target = tmp_path / "conv" / "page.txt"
+    result = await do_get_conversation(
+        d, {"conversation_id": "c", "out_file": str(target)}
+    )
+    assert "messages" not in result
+    assert result["messages_written"] == 2
+    assert result["out_file"] == str(target)
+    body = target.read_text(encoding="utf-8")
+    assert "## user" in body and "hello" in body
+    assert "## assistant" in body and "world" in body
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_out_file_rejects_relative_path(tmp_path):
+    from chatgpt_web2api.mcp_server import do_get_conversation
+
+    d = _chain_driver([("user", "q")])
+    with pytest.raises(ValueError):
+        await do_get_conversation(
+            d, {"conversation_id": "c", "out_file": "relative/page.txt"}
+        )
+
+
+# ── wait_reply ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_returns_immediately_when_tail_is_assistant():
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    d = _chain_driver([("user", "q"), ("assistant", "a")])
+    result = await do_wait_reply(d, {"conversation_id": "c", "timeout_seconds": 30})
+    assert result["status"] == "replied"
+    assert result["last_role"] == "assistant"
+    assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_since_total_waits_for_new_reply():
+    """since_total must ignore an already-present tail reply."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    two = _chain_driver([("user", "q"), ("assistant", "old")]).get_conversation
+    three = _chain_driver(
+        [("user", "q"), ("assistant", "old"), ("user", "q2"), ("assistant", "new")]
+    ).get_conversation
+    d = MagicMock()
+    d.get_conversation = AsyncMock(side_effect=[await two("c"), await three("c")])
+
+    result = await do_wait_reply(
+        d,
+        {
+            "conversation_id": "c",
+            "timeout_seconds": 30,
+            "since_total": 2,
+            "poll_seconds": 8,
+        },
+    )
+    assert result["status"] == "replied"
+    assert result["total"] == 4
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_timeout_reports_last_role():
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    d = _chain_driver([("user", "q")])  # dead generation: tail stays 'user'
+    result = await do_wait_reply(
+        d, {"conversation_id": "c", "timeout_seconds": 1, "poll_seconds": 8}
+    )
+    assert result["status"] == "timeout"
+    assert result["last_role"] == "user"
+    assert result["waited_s"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_dead_when_user_tail_persists():
+    """A user tail that persists past dead_after_seconds exits early with
+    'dead' — the empirical dead-generation signature (QIFEI 2026-09-14:
+    reply never persisted, caller should nudge, not wait the timeout out)."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    d = _chain_driver([("user", "q")])  # tail never becomes assistant
+    result = await do_wait_reply(
+        d,
+        {
+            "conversation_id": "c",
+            "timeout_seconds": 600,
+            "poll_seconds": 8,
+            "dead_after_seconds": 1,
+        },
+    )
+    assert result["status"] == "dead"
+    assert result["last_role"] == "user"
+    assert result["waited_s"] < 30  # early exit — nowhere near the 600s timeout

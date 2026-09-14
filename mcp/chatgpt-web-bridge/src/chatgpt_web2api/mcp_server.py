@@ -33,8 +33,10 @@ import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from mcp import types as mcp_types
@@ -159,6 +161,56 @@ class GetConversationInput(BaseModel):
         description="Max messages to return per call. Lower this (e.g. 15) if "
         "the conversation has very long messages and the result is being "
         "truncated before reaching you.",
+    )
+    out_file: str | None = Field(
+        default=None,
+        description=(
+            "Absolute path to write this page's messages to as UTF-8 text "
+            "(## role + content per message). When set, messages are NOT "
+            "returned inline — the tool result stays tiny no matter how long "
+            "the messages are, and you read the file instead. Use this for "
+            "long replies instead of fighting tool-result truncation."
+        ),
+    )
+
+
+class WaitReplyInput(BaseModel):
+    """Input for waiting until the assistant reply persists."""
+
+    conversation_id: str = Field(
+        description="UUID of the conversation to watch",
+    )
+    timeout_seconds: int = Field(
+        default=600,
+        ge=1,
+        le=3600,
+        description="Give up after this many seconds (default 600).",
+    )
+    since_total: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Only count replies that arrive AFTER this many total messages. "
+            "Pass the `total` from a prior get_conversation call to wait for a "
+            "NEW reply instead of matching an already-present tail message."
+        ),
+    )
+    poll_seconds: int = Field(
+        default=15,
+        ge=8,
+        le=120,
+        description="Interval between backend polls (default 15; the account-level read pace gate applies on top).",
+    )
+    dead_after_seconds: int = Field(
+        default=120,
+        ge=0,
+        le=1800,
+        description=(
+            "If the conversation tail stays your own user message this long, "
+            "return status='dead' early — the generation died mid-stream and "
+            "the reply will never persist (nudge with a follow-up instead of "
+            "waiting out the full timeout). 0 disables the early exit."
+        ),
     )
 
 
@@ -304,6 +356,7 @@ class ToolName(str, Enum):
     # Conversations
     GET_CONVERSATION = "get_conversation"
     LIST_CONVERSATIONS = "list_conversations"
+    WAIT_REPLY = "wait_reply"
     DELETE_CONVERSATION = "delete_conversation"
     ARCHIVE_CONVERSATION = "archive_conversation"
     # Projects
@@ -331,6 +384,16 @@ CHAT_COMPLETION_OUTPUT = {
         "conversation_id": {
             "type": "string",
             "description": "UUID of the conversation for multi-turn follow-up",
+        },
+        "reply_persisted": {
+            "type": ["boolean", "null"],
+            "description": (
+                "Post-send tail check: true = the assistant reply persisted "
+                "to the conversation; false = the last stored message is "
+                "still your own (the generation died mid-stream — resend a "
+                "short nudge like '继续' instead of polling); null = the "
+                "check was inconclusive."
+            ),
         },
     },
     "required": ["content", "model", "conversation_id"],
@@ -406,8 +469,49 @@ GET_CONVERSATION_OUTPUT = {
             "type": "boolean",
             "description": "True if more pages remain; page through by increasing offset by limit.",
         },
+        "reason": {
+            "type": "string",
+            "description": (
+                "Why the result looks the way it does: 'ok' = messages "
+                "returned; 'empty' = conversation reachable but no messages "
+                "visible (may be transient mid-generation); 'not_found' = "
+                "backend 404 (wrong/inaccessible conversation id); "
+                "'fetch_failed' = the backend fetch itself errored."
+            ),
+        },
+        "out_file": {
+            "type": "string",
+            "description": "Absolute path the page was written to (only when requested).",
+        },
+        "messages_written": {
+            "type": "integer",
+            "description": "How many messages were written to out_file.",
+        },
     },
     "required": ["id", "total", "has_more"],
+}
+
+WAIT_REPLY_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "conversation_id": {"type": "string"},
+        "status": {
+            "type": "string",
+            "description": (
+                "'replied' = an assistant message landed; 'timeout' = deadline hit "
+                "first; 'dead' = the tail stayed your own user message past "
+                "dead_after_seconds — generation died, nudge in the same "
+                "conversation instead of waiting."
+            ),
+        },
+        "total": {"type": "integer", "description": "Message count observed on the last poll."},
+        "last_role": {
+            "type": ["string", "null"],
+            "description": "Role of the last stored message on the final poll.",
+        },
+        "waited_s": {"type": "number", "description": "Seconds actually waited."},
+    },
+    "required": ["conversation_id", "status", "total", "waited_s"],
 }
 
 CONVERSATION_ITEM = {
@@ -809,10 +913,16 @@ async def do_chat_completion(
             conv_id = driver._current_conv_id or ""
             await _notify(on_progress, "Finalizing…")
 
+    # Dead-generation check: the streamed response can look complete locally
+    # while the reply never persisted server-side (mid-stream death/retract).
+    await _notify(on_progress, "Verifying reply persisted…")
+    persisted = await _verify_reply_persisted(driver, conv_id)
+
     return {
         "content": full_response,
         "model": validated.model,
         "conversation_id": conv_id,
+        "reply_persisted": persisted,
     }
 
 
@@ -840,18 +950,18 @@ async def do_list_projects(driver: CDPDriver) -> dict:
     }
 
 
-async def do_get_conversation(driver: CDPDriver, args: dict) -> dict:
-    """Retrieve conversation history (paginated, oldest-first)."""
-    validated = GetConversationInput(**args)
-    data = await driver.get_conversation(validated.conversation_id)
+def _conversation_chain(data: dict) -> list[dict]:
+    """Walk the backend mapping tree from current_node backwards →
+    oldest-first [{role, content}] of user/assistant messages.
 
-    # Walk the conversation tree from current_node backwards
-    mapping = data.get("mapping", {})
-    current_node = data.get("current_node")
+    Returns [] when the payload carries no mapping (failed/404/empty fetches
+    all collapse here — callers distinguish them via the _fetch_* annotations
+    backend_client stamps on the result).
+    """
+    mapping = data.get("mapping") or {}
+    node_id = data.get("current_node")
     chain = []
     visited = set()
-    node_id = current_node
-
     while node_id and node_id not in visited:
         visited.add(node_id)
         node_data = mapping.get(node_id, {})
@@ -863,20 +973,167 @@ async def do_get_conversation(driver: CDPDriver, args: dict) -> dict:
             if text and role in ("user", "assistant"):
                 chain.append({"role": role, "content": text})
         node_id = node_data.get("parent")
-
     chain.reverse()
+    return chain
+
+
+# Post-send persistence-check timings — module-level so tests can
+# monkeypatch them to 0 instead of sleeping for real.
+_PERSIST_MAX_CHECKS = 3
+_PERSIST_TAIL_USER_DELAY_S = 6.0  # grace when tail is still our own message
+_PERSIST_EMPTY_DELAY_S = 4.0      # retry delay on inconclusive (empty/failed) fetch
+
+
+async def _verify_reply_persisted(
+    driver: CDPDriver, conv_id: str | None
+) -> bool | None:
+    """Post-send tail check: did the assistant reply actually persist?
+
+    The DOM stream can return a partial/corrupt response for a generation
+    that dies mid-stream and is then retracted server-side — the reply never
+    lands in the conversation. Callers polling get_conversation for that
+    ghost reply burn minutes; this check turns it into one flag.
+
+    Returns True (tail is assistant), False (tail is still our own user
+    message after a short grace — dead generation, nudge instead of poll),
+    None (undeterminable: no conv_id, or fetches kept failing).
+    """
+    if not conv_id:
+        return None
+    for attempt in range(_PERSIST_MAX_CHECKS):
+        try:
+            data = await driver.get_conversation(conv_id)
+            # Non-dict (mock/weird backend) = inconclusive, never crash the send.
+            chain = _conversation_chain(data) if isinstance(data, dict) else []
+        except Exception:
+            # A weird/failed fetch must never break a successful send —
+            # inconclusive just means "retry or report unknown".
+            chain = []
+        if chain:
+            if chain[-1]["role"] == "assistant":
+                return True
+            if chain[-1]["role"] == "user":
+                if attempt < _PERSIST_MAX_CHECKS - 1:
+                    # Backend persistence can lag the DOM stream by a few
+                    # seconds — grace window before declaring it dead.
+                    await asyncio.sleep(_PERSIST_TAIL_USER_DELAY_S)
+                    continue
+                return False
+        # Empty chain = failed/404/in-flight fetch — inconclusive; brief retry.
+        if attempt < _PERSIST_MAX_CHECKS - 1:
+            await asyncio.sleep(_PERSIST_EMPTY_DELAY_S)
+    return None
+
+
+async def do_get_conversation(driver: CDPDriver, args: dict) -> dict:
+    """Retrieve conversation history (paginated, oldest-first)."""
+    validated = GetConversationInput(**args)
+    data = await driver.get_conversation(validated.conversation_id)
+    chain = _conversation_chain(data)
+
+    # Why the result looks the way it does — previously 404s, fetch errors
+    # and genuinely-empty conversations all surfaced as identical {[], 0}.
+    if data.get("_fetch_error"):
+        reason = "fetch_failed"
+    elif data.get("_fetch_status") == 404:
+        reason = "not_found"
+    elif isinstance(data.get("_fetch_status"), int) and data["_fetch_status"] >= 400:
+        reason = "fetch_failed"
+    elif not chain:
+        reason = "empty"
+    else:
+        reason = "ok"
 
     total = len(chain)
     page = chain[validated.offset : validated.offset + validated.limit]
-
-    return {
+    result = {
         "id": data.get("id", validated.conversation_id),
         "title": data.get("title", ""),
-        "messages": page,
         "offset": validated.offset,
         "limit": validated.limit,
         "total": total,
         "has_more": validated.offset + len(page) < total,
+        "reason": reason,
+    }
+
+    if validated.out_file:
+        p = Path(validated.out_file)
+        if not p.is_absolute():
+            raise ValueError("out_file must be an absolute path")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        text = "".join(f"## {m['role']}\n\n{m['content']}\n\n" for m in page)
+        p.write_text(text, encoding="utf-8")
+        result["out_file"] = str(p)
+        result["messages_written"] = len(page)
+    else:
+        result["messages"] = page
+
+    return result
+
+
+async def do_wait_reply(
+    driver: CDPDriver,
+    args: dict,
+    on_progress: ProgressCallback | None = None,
+) -> dict:
+    """Block until an assistant reply persists (or the deadline hits).
+
+    Replaces hand-rolled get_conversation+sleep polling: the failure mode it
+    prevents is waiting on a ghost — if the last stored message is still the
+    caller's own user message, the generation is dead, and the right move is
+    a nudge, not more polling. Status tells the two apart.
+    """
+    validated = WaitReplyInput(**args)
+    deadline = time.monotonic() + validated.timeout_seconds
+    start = time.monotonic()
+    total = 0
+    last_role = None
+    user_tail_since: float | None = None
+
+    while True:
+        try:
+            data = await driver.get_conversation(validated.conversation_id)
+        except Exception:
+            data = {}
+        chain = _conversation_chain(data) if isinstance(data, dict) else []
+        total = len(chain)
+        last_role = chain[-1]["role"] if chain else None
+
+        replied = last_role == "assistant" and (
+            validated.since_total is None or total > validated.since_total
+        )
+        if replied:
+            status = "replied"
+            break
+        # Dead-generation detection: a persistent user tail means the
+        # assistant node never persisted (mid-stream death) — the empirical
+        # recovery is a nudge in the same conversation, not more waiting.
+        if last_role == "user":
+            user_tail_since = user_tail_since or time.monotonic()
+            if (
+                validated.dead_after_seconds
+                and time.monotonic() - user_tail_since >= validated.dead_after_seconds
+            ):
+                status = "dead"
+                break
+        else:
+            user_tail_since = None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            status = "timeout"
+            break
+        await _notify(
+            on_progress,
+            f"Waiting for reply… total={total} last={last_role or 'none'}",
+        )
+        await asyncio.sleep(min(validated.poll_seconds, remaining))
+
+    return {
+        "conversation_id": validated.conversation_id,
+        "status": status,
+        "total": total,
+        "last_role": last_role,
+        "waited_s": round(time.monotonic() - start, 1),
     }
 
 
@@ -1044,11 +1301,14 @@ async def do_chat_with_gpt(
         if chunk.finish_reason:
             conv_id = driver._current_conv_id or ""
             await _notify(on_progress, "Finalizing…")
+
+    persisted = await _verify_reply_persisted(driver, conv_id)
     return {
         "content": full_response,
         "model": "gpt",
         "conversation_id": conv_id,
         "gpt_id": validated.gpt_id,
+        "reply_persisted": persisted,
     }
 
 
@@ -1171,13 +1431,45 @@ def _build_tools() -> list[mcp_types.Tool]:
                 "most recent page), page through by increasing offset by limit each "
                 "call until has_more is false: "
                 "get_conversation(id, offset=0, limit=50), then offset=50, offset=100, … . "
-                "If a single page's result is truncated before reaching you, lower limit "
-                "(e.g. 15) and retry — long messages can overflow a tool-result budget."
+                "If a single page's result is truncated before reaching you, either "
+                "lower limit (e.g. 15) and retry, or pass `out_file` (absolute path) "
+                "to write the page to disk and read the file — the tool result then "
+                "stays tiny no matter how long the messages are.\n\n"
+                "Empty results are disambiguated by `reason`: 'not_found' = backend "
+                "404 (check the id against list_conversations), 'empty' = reachable "
+                "but nothing visible yet (often mid-generation), 'fetch_failed' = "
+                "the fetch itself errored."
             ),
             inputSchema=GetConversationInput.model_json_schema(),
             outputSchema=GET_CONVERSATION_OUTPUT,
             annotations=mcp_types.ToolAnnotations(
                 title="Get Conversation",
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        mcp_types.Tool(
+            name=ToolName.WAIT_REPLY.value,
+            title="Wait for Reply",
+            description=(
+                "Block until an assistant reply persists in the conversation "
+                "(or the timeout hits). Use after chat_completion when the "
+                "stream looked corrupt/truncated, or `reply_persisted` came "
+                "back false — instead of hand-polling get_conversation.\n\n"
+                "Pass `since_total` (a prior call's `total`) to wait for a NEW "
+                "reply past an existing tail. Status 'dead' fires early when "
+                "the tail stays your own user message past dead_after_seconds "
+                "(default 120) — the generation died mid-stream, so resend a "
+                "short nudge ('继续') in the same conversation instead of "
+                "waiting longer. Read-only; polls the backend at poll_seconds "
+                "intervals under the account pace gate."
+            ),
+            inputSchema=WaitReplyInput.model_json_schema(),
+            outputSchema=WAIT_REPLY_OUTPUT,
+            annotations=mcp_types.ToolAnnotations(
+                title="Wait for Reply",
                 readOnlyHint=True,
                 destructiveHint=False,
                 idempotentHint=True,
@@ -1735,6 +2027,7 @@ def create_server() -> Server:
             ToolName.LIST_PROJECTS.value: lambda: do_list_projects(driver),
             ToolName.GET_CONVERSATION.value: lambda: do_get_conversation(driver, arguments),
             ToolName.LIST_CONVERSATIONS.value: lambda: do_list_conversations(driver, arguments),
+            ToolName.WAIT_REPLY.value: lambda: do_wait_reply(driver, arguments, on_progress),
             ToolName.DELETE_CONVERSATION.value: lambda: do_delete_conversation(driver, arguments),
             ToolName.CREATE_PROJECT.value: lambda: do_create_project(driver, arguments),
             ToolName.DELETE_PROJECT.value: lambda: do_delete_project(driver, arguments),
@@ -1791,6 +2084,7 @@ def create_server() -> Server:
             ToolName.LIST_PROJECTS.value: lambda: do_list_projects(_driver),
             ToolName.GET_CONVERSATION.value: lambda: do_get_conversation(_driver, arguments),
             ToolName.LIST_CONVERSATIONS.value: lambda: do_list_conversations(_driver, arguments),
+            ToolName.WAIT_REPLY.value: lambda: do_wait_reply(_driver, arguments, on_progress),
             ToolName.DELETE_CONVERSATION.value: lambda: do_delete_conversation(_driver, arguments),
             ToolName.CREATE_PROJECT.value: lambda: do_create_project(_driver, arguments),
             ToolName.DELETE_PROJECT.value: lambda: do_delete_project(_driver, arguments),

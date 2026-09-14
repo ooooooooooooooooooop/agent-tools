@@ -35,6 +35,8 @@ def _make_client():
     driver._js_with_data_strict = AsyncMock(return_value="")
     driver.ensure_token = AsyncMock(return_value="tok")
     driver._refresh_token = AsyncMock()
+    driver._pace = MagicMock()
+    driver._pace.pace = AsyncMock()
     return BackendClient(driver), driver
 
 
@@ -237,3 +239,43 @@ async def test_create_memory_success_false_when_get_memories_no_match():
     result = await client.create_memory("remember this please")
     assert result["success"] is False
     driver.get_memories.assert_awaited_once()
+
+
+# ── get_conversation status envelope ─────────────────────────
+# The fetch now annotates results with _fetch_status/_fetch_error so callers
+# can tell a 404 (bad id) from an empty-but-reachable conversation — both
+# used to collapse into the same silent {}.
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_annotates_http_status():
+    client, driver = _make_client()
+    body = json.dumps({"id": "c", "mapping": {}})
+    driver._js_with_data_strict = AsyncMock(
+        return_value=json.dumps({"status": 200, "body": body})
+    )
+    result = await client.get_conversation("c")
+    assert result["_fetch_status"] == 200
+    assert result["id"] == "c"
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_404_annotated_not_silent_empty():
+    client, driver = _make_client()
+    driver._js_with_data_strict = AsyncMock(
+        return_value=json.dumps({"status": 404, "body": '{"detail":"nf"}'})
+    )
+    result = await client.get_conversation("bad-id")
+    assert result["_fetch_status"] == 404
+    assert "mapping" not in result
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_fetch_error_annotated():
+    from chatgpt_web2api.cdp_driver import CDPJSError
+
+    client, driver = _make_client()
+    driver._js_with_data_strict = AsyncMock(side_effect=CDPJSError("js boom"))
+    result = await client.get_conversation("c")
+    assert result["_fetch_status"] is None
+    assert "js boom" in result["_fetch_error"]

@@ -149,6 +149,7 @@ async def test_ensure_send_ready_routes_navigation_through_driver():
     dom, driver = _make_dom()
     reg = BreakerRegistry()
     driver._breakers = reg
+    driver._conv_target = False  # non-conv-bound tab: nav-to-new-chat path
     driver._wait_for_composer = AsyncMock(side_effect=[False, False])  # never ready
     driver.navigate_new_chat = AsyncMock()
 

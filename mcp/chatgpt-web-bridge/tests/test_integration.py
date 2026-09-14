@@ -77,7 +77,7 @@ async def _session_for(server):
 
 @pytest.mark.asyncio
 async def test_client_sees_default_safe_surface(monkeypatch):
-    """A real MCP client sees exactly the 9 safe tools by default."""
+    """A real MCP client sees exactly the 10 safe tools by default."""
     clear_gate_envs(monkeypatch)
     monkeypatch.setattr(mod, "_driver", make_mock_driver())
     monkeypatch.setattr(mod, "_config", None)
@@ -92,6 +92,7 @@ async def test_client_sees_default_safe_surface(monkeypatch):
             ToolName.CHAT_COMPLETION.value, ToolName.CHAT_WITH_GPT.value,
             ToolName.LIST_MODELS.value, ToolName.LIST_PROJECTS.value,
             ToolName.LIST_CONVERSATIONS.value, ToolName.GET_CONVERSATION.value,
+            ToolName.WAIT_REPLY.value,
             ToolName.LIST_MEMORIES.value, ToolName.LIST_GPTS.value,
             ToolName.LIST_PROJECT_FILES.value,
         }
@@ -105,7 +106,7 @@ async def test_client_sees_default_safe_surface(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_client_sees_full_surface_with_both_gates(monkeypatch):
-    """With both gate envs set, the client sees all 15 tools."""
+    """With both gate envs set, the client sees all 17 tools."""
     clear_gate_envs(monkeypatch)
     monkeypatch.setenv(WRITE_ENV, "1")
     monkeypatch.setenv(DESTRUCTIVE_ENV, "1")
@@ -117,7 +118,7 @@ async def test_client_sees_full_surface_with_both_gates(monkeypatch):
     try:
         resp = await session.list_tools()
         names = {t.name for t in resp.tools}
-        assert len(names) == 16
+        assert len(names) == 17
         assert ToolName.DELETE_MEMORY.value in names
         assert ToolName.CREATE_PROJECT.value in names
     finally:

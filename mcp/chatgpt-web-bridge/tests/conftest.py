@@ -28,6 +28,18 @@ def e2e_enabled() -> bool:
     return os.environ.get("W2A_E2E_RUN") == "1"
 
 
+@pytest.fixture(autouse=True)
+def _fast_persist_check(monkeypatch):
+    """Zero the reply-persistence retry delays in mcp_server so mocked-driver
+    tests don't sleep real seconds (the check retries on 'tail still user')."""
+    try:
+        import chatgpt_web2api.mcp_server as ms
+    except Exception:
+        return
+    monkeypatch.setattr(ms, "_PERSIST_TAIL_USER_DELAY_S", 0.0)
+    monkeypatch.setattr(ms, "_PERSIST_EMPTY_DELAY_S", 0.0)
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Deselect e2e-marked items unless ``W2A_E2E_RUN=1``.
 
