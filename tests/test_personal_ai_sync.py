@@ -120,6 +120,21 @@ class TestStateMatrix14Scenarios(unittest.TestCase):
         self.assertEqual(plan[0]["action"], "REVIEW")
         self.assertEqual(pas._overall(plan, results), "REVIEW")
 
+    def test_state_plane_eligibility_under_legacy_dir_name(self):
+        """legacy 窗口内实例根仍叫 personal-ai-state 时，memory/projects 变更必须仍判 eligible。"""
+        legacy = self.td / "personal-ai-state"
+        subprocess.run(["git", "clone", "--no-hardlinks", str(self.remote), str(legacy)],
+                       capture_output=True, check=True, env=GIT_ENV)
+        (legacy / "memory" / "records" / "r1").mkdir(parents=True)
+        (legacy / "memory" / "records" / "r1" / "record.yaml").write_text("id: r1\n", encoding="utf-8")
+        (legacy / "projects").mkdir(exist_ok=True)
+        (legacy / "projects" / "p.md").write_text("p\n", encoding="utf-8")
+        (legacy / "junk.tmp").write_text("x\n", encoding="utf-8")
+        c = pas.classify_repo(legacy)
+        self.assertIn("memory/records/r1/record.yaml", c["eligible_canonical_changes"])
+        self.assertIn("projects/p.md", c["eligible_canonical_changes"])
+        self.assertNotIn("junk.tmp", c["eligible_canonical_changes"])
+
     def test_scenario_4_remote_ahead_clean(self):
         """Scenario 4: REMOTE_AHEAD + CLEAN -> PULL (ff-only), PASS."""
         other = self.td / "other"

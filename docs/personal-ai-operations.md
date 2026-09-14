@@ -76,7 +76,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 | Session 误删 | 从 `<BACKUP_ROOT>\sessions\daily-<date>\` 找回，三方哈希一致（T4） |
 | Broker 损坏 | 用 `<BACKUP_ROOT>\broker\broker-*.sqlite` 最新 verified 快照替换（T3，integrity_check=ok） |
 | 仓库丢失 | `git clone` 远端恢复到最近 push 点；未推送部分从 <BACKUP_ROOT> 无（→ 所以 check_repos 的 UNPUSHED_DURABILITY_RISK 要重视） |
-| DSH 丢失 | canonical（registry/）+ personal-ai-state 已推送远端；另一 Harness 仅凭 `.ai/state/` + Context Package 即可接手（Phase5 实测） |
+| DSH 丢失 | canonical（registry/）+ personal-ai-private 已推送远端；另一 Harness 仅凭 `.ai/state/` + Context Package 即可接手（Phase5 实测） |
 | 本机磁盘全毁 | **BLOCKED_BY_KEY_CUSTODY**：密文在，Gen2 key 不在 → 不可恢复（诚实状态，见 §10） |
 
 ### 7.1 Nightly Backup 生产恢复闭环与状态判定（SSOT 契约）
@@ -87,7 +87,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
    - Action Target：`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<REPO_ROOT>\scripts\durability\run_nightly.ps1"`。
    - 调度主控：`scripts/durability/run_backup.py`（生成唯一 Run Identity 并编排各子任务）。
 2. **实际 Destination**：
-   - `<BACKUP_ROOT>`（与 `personal-ai-state/sync/this-device.yaml#backup_root` 严格一致）。
+   - `<BACKUP_ROOT>`（与 `personal-ai-private/sync/this-device.yaml#backup_root` 严格一致）。
 3. **真实一致性模型（Consistency Model & Boundaries）**：
    - 采用 `composite-per-dataset-transactional-and-stable-copy` 模型，不虚构跨全部文件系统和数据库的全局瞬时原子锁：
      - **事务级快照 (ACID Transaction Snapshot)**：`durable_jobs.db`、`broker/state.sqlite`、`broker/cc-switch.db` 通过 SQLite Online Backup API（`sqlite3.backup`）在并发写安全状态下生成点时间事务快照，并通过 `PRAGMA integrity_check`。
@@ -139,7 +139,7 @@ Windows Task Scheduler 边界翻译已验证的结构化结果，保持 `check` 
 
 ## 11. Future Change Management
 
-`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-state/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `<REPO_ROOT>` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
+`CONTINUOUS_CAPABILITY_ADOPTION` 的偏好 canonical 位于 private `personal-ai-private/state/preferences.md`。现有 weekly governance 运行 `upstream_capability_review.py`：先用 `aic discover --propose-admissions` 更新 generated inventory，再对已安装 Harness 版本变化建立 proposal-only 评估证据。`discovery ≠ adoption`；任何正式纳入仍走下述 change 流程，并进入 capabilities registry、AIC deployment/recovery、drift 检查与兼容性验证。AIC 只把该 canonical policy 渲染成各 Harness 静态指令文件中的 checksum-managed generated block；`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` 不是新 canonical。`scripts/governance/register_governance_tasks.ps1` 仅允许从 canonical `<REPO_ROOT>` 幂等复用 Windows Task Scheduler 注册并回读 frequent/weekly runner；restore/bootstrap 在临时或测试副本中不得触碰 live scheduler，也不为 AIC 增加 scheduler。
 
 ### 11.0 Canonical Mutation Ownership
 

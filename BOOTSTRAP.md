@@ -53,7 +53,7 @@
    该工具只做增量覆盖，绝不删除目标端额外文件；装完重跑 `--check` 必须退出码 0。
 5. **Handoff 给 `$publish-and-reuse`**：打开 [`skills/publish-and-reuse/SKILL.md`](./skills/publish-and-reuse/SKILL.md)（权威细节：[`references/personal-ai-lifecycle-sync.md`](./skills/publish-and-reuse/references/personal-ai-lifecycle-sync.md)），严格按其 **RESTORE** 模式契约执行：
    `python <REPO>/scripts/personal_ai_sync.py restore`
-   restore 自动完成：克隆 personal-ai-state（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills → `aic apply dsh` 重建固定 Node/Base/UI/五个 overlay/Profile → 校验 Memory canonical 可读 → **校验 DSH 会话历史**（备份计数 / live 计数 / 已知锚点 / schema 探针；非 `PASS|NOT_APPLICABLE` 时总体不得 PASS，历史缺失绝不因"配置恢复成功"而放行）→ 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
+   restore 自动完成：克隆 personal-ai-private（private，需本机 Git SSH 认证）→ aic discover → 恢复 Skills → `aic apply dsh` 重建固定 Node/Base/UI/五个 overlay/Profile → 校验 Memory canonical 可读 → **校验 DSH 会话历史**（备份计数 / live 计数 / 已知锚点 / schema 探针；非 `PASS|NOT_APPLICABLE` 时总体不得 PASS，历史缺失绝不因"配置恢复成功"而放行）→ 检测 secret 引用 → 已安装 Harness drift 检查。全部幂等。
 6. restore 结果 `PASS` → §4 收尾；`REVIEW` / `BLOCKED` → §5。
 
 ## 3. AUTO_SYNC（已安装设备的日常入口）
@@ -67,7 +67,7 @@
    | IN_SYNC | NO ACTION |
    | REMOTE_AHEAD + clean | fast-forward PULL → 受影响面 refresh |
    | LOCAL_AHEAD + 显式 `push` 模式 + ownership receipt + 验证通过 + privacy scan PASS | PUSH |
-   | personal-ai-state 仅 memory 路径不相交 | 确定性 MERGE（MemoryProvider 冻结契约） |
+   | personal-ai-private 仅 memory 路径不相交 | 确定性 MERGE（MemoryProvider 冻结契约） |
    | dirty / 未授权 ahead / diverged curated / 隐私命中 | 不碰，转 §5 REVIEW |
 
    随后自动完成受影响 Harness runtime refresh 与派生索引重建，并写 machine-local checkpoint。
@@ -82,7 +82,7 @@ Personal AI Bootstrap
 
 mode                 RESTORE / AUTO_SYNC
 personal-ai          <状态>
-personal-ai-state    <状态>
+personal-ai-private    <状态>
 runtime              <状态>
 dsh-session-history  <状态>（backup=<n> live=<n> missing=<n>）
 secrets              <状态>

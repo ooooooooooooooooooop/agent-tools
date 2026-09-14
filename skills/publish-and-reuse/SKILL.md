@@ -92,7 +92,7 @@ python scripts\personal_ai_sync.py restore    # Fresh/缺失恢复
 Personal AI Sync
 
 personal-ai          IN_SYNC / PULLED / PUSHED
-personal-ai-state    IN_SYNC / PULLED / PUSHED / MERGED
+personal-ai-private    IN_SYNC / PULLED / PUSHED / MERGED
 projects             <简要汇总>
 memory               <新增/合并/冲突数量>
 runtime              NO DRIFT / refreshed
