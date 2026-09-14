@@ -33,7 +33,10 @@ class ColdRestartSurvivalTests(unittest.TestCase):
 
         # Mirror essential files from live ~/.dsh/profiles/web
         live_profile = DSH_HOME / "profiles" / "web"
-        if not live_profile.is_dir():
+        live_base = live_profile / "base-dsh-0.1.1-rc.2"
+        live_node = DSH_HOME / "runtime" / "node-v22.19.0-win-x64"
+        entry = live_base / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        if not (live_base.is_dir() and live_node.is_dir() and entry.is_file()):
             self.skipTest("requires live DSH web profile")
         
         # Copy config files and manifests
@@ -49,15 +52,12 @@ class ColdRestartSurvivalTests(unittest.TestCase):
 
         # Create junctions/symlinks to base distribution and runtime node
         self.base_dir = self.profile_dir / "base-dsh-0.1.1-rc.2"
-        # Junction to actual base
-        live_base = live_profile / "base-dsh-0.1.1-rc.2"
         subprocess.run(["cmd", "/c", "mklink", "/J", str(self.base_dir), str(live_base)],
                        capture_output=True, check=True)
 
         # Node runtime
         self.runtime_dir = self.temp_root / "runtime"
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        live_node = DSH_HOME / "runtime" / "node-v22.19.0-win-x64"
         subprocess.run(["cmd", "/c", "mklink", "/J",
                         str(self.runtime_dir / "node-v22.19.0-win-x64"), str(live_node)],
                        capture_output=True, check=True)
