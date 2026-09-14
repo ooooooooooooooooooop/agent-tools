@@ -2053,8 +2053,9 @@ def _commit_owned_files_locked(
     rc, diff = git(lock.repo, "diff", "--cached")
     if rc != 0:
         return False, f"staged diff failed: {diff}"
+    added = _diff_added_text(diff)
     for pattern in PRIVACY_PATTERNS:
-        if re.search(pattern, diff):
+        if re.search(pattern, added):
             return False, f"privacy scan hit in staged diff: {pattern}"
 
     # Commit Gate enforcement (fail-closed on any missing or mismatched receipt)
@@ -2299,6 +2300,15 @@ def classify_repo(repo: Path, fetch: bool = True, repo_name: str = "") -> dict:
     return r
 
 
+def _diff_added_text(diff: str) -> str:
+    """Diff text restricted to added lines: privacy scan must not trip on
+    removed content (deleting a private path is a privacy improvement)."""
+    return "\n".join(
+        line[1:] for line in diff.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+
+
 def changed_paths(repo: Path, refspec: str) -> list[str]:
     rc, out = git(repo, "diff", "--name-only", refspec)
     return [l.strip() for l in out.splitlines() if l.strip()] if rc == 0 else []
@@ -2321,9 +2331,10 @@ def privacy_scan(repo: Path, refspec: str) -> list[str]:
     rc, diff = git(repo, "diff", refspec)
     if rc != 0:
         return ["<diff failed>"]
+    added = _diff_added_text(diff)
     hits = []
     for pat in list(PRIVACY_PATTERNS) + _extra_privacy_patterns():
-        if re.search(pat, diff):
+        if re.search(pat, added):
             hits.append(pat)
     for changed in changed_paths(repo, refspec):
         if changed.rsplit("/", 1)[-1] in PRIVACY_FORBIDDEN_FILE_NAMES:

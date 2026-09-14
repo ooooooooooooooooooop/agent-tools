@@ -45,7 +45,7 @@
 ```powershell
 # 1. 装 DSH + 配置 provider 环境变量
 # 2. 克隆仓库
-git clone <私有远程> C:\Users\<bob>\Desktop\skills
+git clone <私有远程> C:\Desktop\personal-ai
 
 # 3. 源端自检
 python scripts\validate_repo.py --strict
