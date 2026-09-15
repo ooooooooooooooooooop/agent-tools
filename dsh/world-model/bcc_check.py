@@ -158,7 +158,7 @@ GUARD_FIXTURES = [
     {"name": "irreversible w/o flag deny", "tool": "exec", "args": {"command": "rm -rf /tmp/x"}, "mode": "core",
      "preds": [{"intended_action": "exec cleanup"}], "expect": "deny"},
     {"name": "irreversible flagged permit", "tool": "exec", "args": {"command": "rm -rf /tmp/x"}, "mode": "core",
-     "preds": [{"intended_action": "exec cleanup", "irreversible": True}], "expect": "permit"},
+     "preds": [{"intended_action": "exec rm -rf /tmp/x", "irreversible": True}], "expect": "permit"},
 ]
 
 
