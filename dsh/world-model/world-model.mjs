@@ -22,7 +22,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, hostname } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 export const name = 'dsh-world-model';
 export const inject = ['tools', 'systemPrompt'];
@@ -109,7 +109,9 @@ export function apply(ctx, config = {}) {
   const canonicalDir = config.canonicalDir || process.env.WORLD_MODEL_HOME
     || (existsSync(wmDefault) || !existsSync(wmLegacy) ? wmDefault : wmLegacy);
   const bodyId = config.bodyId || `dsh-${hostname()}`;
-  const envMode = String(config.mode || process.env.DSH_WM_MODE || 'off').toLowerCase();
+  // fail-closed: 未知模式回退 core（守卫在场），不能因笔误静默变 off
+  const rawMode = String(config.mode || process.env.DSH_WM_MODE || 'off').toLowerCase().trim();
+  const envMode = ['off', 'strict-off', 'core', 'full'].includes(rawMode) ? rawMode : 'core';
   for (const d of [join(wmDir, 'ledger'), join(wmDir, 'runs'), join(canonicalDir, 'proposals'), join(canonicalDir, 'history')]) {
     try { mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
   }
@@ -128,7 +130,14 @@ export function apply(ctx, config = {}) {
     return sessions.get(sid);
   }
 
-  function runtimeState() { return readJson(join(canonicalDir, 'runtime-state.json')) || {}; }
+  // runtime-state.json 是 governance.yaml 的编译投影。区分三种状态：
+  //   absent（fresh canonical，bootstrap 合法）/ present（严格用它）/ corrupt（fail-closed）。
+  function runtimeState() {
+    const p = join(canonicalDir, 'runtime-state.json');
+    if (!existsSync(p)) return { _present: false };
+    try { return { _present: true, ...JSON.parse(readFileSync(p, 'utf8')) }; }
+    catch { return { _present: true, _corrupt: true }; }
+  }
 
   function emit(sessionId, eventType, data = {}) {
     const s = sessions.get(sessionId);
@@ -153,13 +162,18 @@ export function apply(ctx, config = {}) {
   // ---- body lease: single canonical writer per entity (V0.3.1 §11) ----
   function leaseCheck(s) {
     const rs = runtimeState();
-    const active = rs.active_body || {};
+    if (rs._corrupt) {
+      emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: 'corrupt-runtime-state' };
+    }
+    const active = (rs.active_body && typeof rs.active_body === 'object') ? rs.active_body : {};
     if (!active.body_id) return { ok: true, note: 'no active body bound' };
     if (active.body_id === bodyId) {
-      // fork detection: canonical head moved under us by another writer
+      // fork detection: canonical head moved under us by another writer → deny further writes
       const head = rs.lineage_head;
       if (bodyState.last_lineage_head && head && head !== bodyState.last_lineage_head) {
         emit(s.id, 'FORK_DETECTED', { happened: 'canonical lineage_head changed under active lease', payload: { expected: bodyState.last_lineage_head, seen: head }, source: 'plugin' });
+        return { ok: false, holder: 'fork-detected' };
       }
       bodyState.last_lineage_head = head || bodyState.last_lineage_head;
       bodyState.epoch_seen = rs.continuity_epoch || bodyState.epoch_seen;
@@ -245,7 +259,7 @@ export function apply(ctx, config = {}) {
     try {
       let text = readFileSync(p, 'utf8').trim();
       if (!text) return null;
-      if (bytes(text) > BRIEF_HARD_CAP) text = text.slice(0, BRIEF_HARD_CAP - 60) + '\n…(hard-capped at 8KiB)';
+      if (bytes(text) > BRIEF_HARD_CAP) text = Buffer.from(text, 'utf8').slice(0, BRIEF_HARD_CAP - 60).toString('utf8') + '\n…(hard-capped at 8KiB)';
       return text;
     } catch { return null; }
   }
@@ -317,11 +331,12 @@ export function apply(ctx, config = {}) {
         const base = { subject: input.subject, evidence_refs: input.evidence_refs || [] };
         switch (op) {
           case 'activate': {
-            if (input.mode) s.mode = input.mode;
+            // off/strict-off 由 env/config 决定——会话不可自行关闸；activate 只能维持或升级形式化深度
+            if (input.mode === 'core' || input.mode === 'full') s.mode = input.mode;
             s.activated = true;
             const lease = leaseCheck(s);
             emit(s.id, 'WM_ACTIVATE', { ...base, happened: `world-model activated mode=${s.mode}`, payload: { mode: s.mode, reason: input.reason, lease } });
-            return { ok: true, mode: s.mode, lease, note: 'WM active (schema 1.1 / V0.3.1). Before consequential mutations: world_model(op:"predict") with intended_action binding.' };
+            return { ok: true, mode: s.mode, lease, note: 'WM active (schema 1.2 / V0.4). Before consequential mutations: world_model(op:"predict") with intended_action binding.' };
           }
           case 'model': {
             const ids = (input.models || []).map(m => m.id || m.model_id || m.proposition || 'unnamed');
@@ -375,6 +390,9 @@ export function apply(ctx, config = {}) {
             return { ok: true, prior: pred ? 'bound' : 'unbound', verdict: input.verdict };
           }
           case 'update': {
+            // 审计顺序：先验租约（失败只落 LEASE_DENIED），再落成功事件
+            const lease = leaseCheck(s);
+            if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
             emit(s.id, 'MODEL_UPDATED', { ...base, model_id: input.model_id, prediction_id: input.prediction_id, happened: `revision=${input.revision_type}`, payload: { revision_type: input.revision_type, change: input.change, reason: input.reason, supersedes: input.supersedes, update_class: input.update_class || 'world_model' } });
             const r = writeProposal('model-update', { model_id: input.model_id, revision_type: input.revision_type, change: input.change, reason: input.reason, update_class: input.update_class || 'world_model' }, s.id, s);
             if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
@@ -389,13 +407,15 @@ export function apply(ctx, config = {}) {
             return { ok: true };
           }
           case 'value': {
-            emit(s.id, 'VALUE_DECISION', { ...base, happened: 'value/decision recorded', payload: { goal: input.goal, decision_criteria: input.decision_criteria, proxy_risk: input.proxy_risk } });
             let proposal;
             if (input.value_update) {
+              const lease = leaseCheck(s);
+              if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
               const r = writeProposal('value-update', { ...input.value_update, status: 'proposed', update_class: 'value_model' }, s.id, s);
               if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
               proposal = r.path;
             }
+            emit(s.id, 'VALUE_DECISION', { ...base, happened: 'value/decision recorded', payload: { goal: input.goal, decision_criteria: input.decision_criteria, proxy_risk: input.proxy_risk } });
             return proposal ? { ok: true, value_proposal: proposal } : { ok: true };
           }
           case 'input': {
@@ -411,8 +431,16 @@ export function apply(ctx, config = {}) {
             }
             if (st === 'NORMATIVE_DIRECTIVE') {
               const rs = runtimeState();
-              const auth = (((rs.normative_authorities || {})[src] || {}).scopes || {})[scope];
-              if (auth === 'authoritative' || auth === 'authoritative-via-value-proposal' || (src === 'user' && !Object.keys(rs.normative_authorities || {}).length)) {
+              if (rs._corrupt) {
+                emit(s.id, 'NORMATIVE_DENIED', { ...base, happened: 'normative denied: runtime-state corrupt (fail closed)', payload: { source_id: src, scope }, source_id: src });
+                return { ok: false, code: 'NORMATIVE_DENIED', scope, authority: 'corrupt-runtime-state' };
+              }
+              const table = rs.normative_authorities || {};
+              const tablePresent = rs._present && Object.keys(table).length > 0;
+              const auth = (((table[src] || {}).scopes || {})[scope]);
+              // default-user-root 只在编译投影缺失（fresh canonical bootstrap）时兜底；
+              // 投影存在 → 严格查表，自报 source_id 不能凭空获得权威
+              if (auth === 'authoritative' || auth === 'authoritative-via-value-proposal' || (!tablePresent && src === 'user')) {
                 emit(s.id, 'CONSTRAINT_ACCEPTED', { ...base, happened: `normative directive accepted scope=${scope}`, payload: { source_id: src, scope, authority: auth || 'default-user-root', content: content.slice(0, 500) }, source_id: src });
                 return { ok: true, routed: 'constraint', scope, authority: auth || 'default-user-root' };
               }
@@ -424,6 +452,8 @@ export function apply(ctx, config = {}) {
               return { ok: true, routed: 'session_authorization', note: 'action-scoped permission; NOT a durable value' };
             }
             if (st === 'DURABLE_VALUE_STATEMENT') {
+              const lease = leaseCheck(s);
+              if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
               const r = writeProposal('value-update', { durable_value: content, source_id: src, authorization_ref: input.action_ref || `input:${s.id}`, update_class: 'value_model', status: 'proposed' }, s.id, s);
               if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
               emit(s.id, 'INPUT_ROUTED', { ...base, happened: `DURABLE_VALUE_STATEMENT → value proposal`, payload: { source_id: src, proposal: r.path }, source_id: src });
@@ -435,6 +465,8 @@ export function apply(ctx, config = {}) {
           case 'declassify': {
             // Declassification proposal (§8)：只产出提案，不改原件等级
             if (!input.declassify_target) return { ok: false, code: 'NEED_TARGET' };
+            const lease = leaseCheck(s);
+            if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
             const r = writeProposal('declassification', {
               target: input.declassify_target, destination: input.destination,
               redaction_manifest: input.redaction_manifest || [], update_class: 'declassification',
@@ -445,6 +477,11 @@ export function apply(ctx, config = {}) {
             return { ok: true, proposal: r.path };
           }
           case 'persist': {
+            // canonical_proposal 带租约语义——先验租约再落 STATE_PERSISTED，保证审计顺序真实
+            if (input.canonical_proposal) {
+              const lease = leaseCheck(s);
+              if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
+            }
             emit(s.id, 'STATE_PERSISTED', { ...base, happened: 'state persisted', payload: { summary: input.summary, open_loops: input.open_loops } });
             const cur = join(wmDir, 'current.json');
             let prior = {};
@@ -464,8 +501,7 @@ export function apply(ctx, config = {}) {
             return proposal ? { ok: true, state: st, canonical_proposal: proposal } : { ok: true, state: st };
           }
           case 'status': {
-            const cur = join(wmDir, 'current.json');
-            const st = existsSync(cur) ? JSON.parse(readFileSync(cur, 'utf8')) : {};
+            const st = readJson(join(wmDir, 'current.json')) || {};
             const rs = runtimeState();
             return { ok: true, mode: s.mode, session_predictions: [...s.predictions.keys()], current: st, identity: rs.identity || null, lineage_head: rs.lineage_head || null, epoch: rs.continuity_epoch || null, body_id: bodyId, bcc: BCC_VERSION };
           }
