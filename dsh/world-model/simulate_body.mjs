@@ -38,7 +38,8 @@ for (const step of scenario.steps || []) {
     if (out?.prediction_id) lastPid = out.prediction_id;
     events.push({ step: 'tool_call', op: inp?.op, out });
   } else if (step.type === 'guard') {
-    const r = ctx._guard?.({ name: step.tool, arguments: step.arguments || {}, agent: { session: { id: step.session || 's1' } } });
+    // exec_extra: 往 execution 上注入别名/未知参数键（parameters/tool_input/自有键）
+    const r = ctx._guard?.({ name: step.tool, arguments: step.arguments || {}, ...(step.exec_extra || {}), agent: { session: { id: step.session || 's1' } } });
     guardDecisions.push({ tool: step.tool, args: step.arguments || {}, decision: r === undefined ? 'permit' : 'deny', msg: r || null });
   }
 }

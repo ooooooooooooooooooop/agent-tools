@@ -387,6 +387,10 @@ class TestDeclassificationTaint(unittest.TestCase):
     def test_declassify_op_creates_proposal_not_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             canon = fixture_canonical(Path(td))
+            rs = canonical_compile.compile_runtime_state(canon)
+            rs["active_body"] = {"body_id": "body-A",
+                                 "lease": "exclusive-canonical-writer"}
+            (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
             before = (canon / "current.yaml").read_bytes()
             out = run_body(Path(td), canon, [
                 {"type": "tool_call", "input": {"op": "declassify",

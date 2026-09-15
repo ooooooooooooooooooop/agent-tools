@@ -57,22 +57,30 @@ const CONSEQUENT_STEMS = ['exec', 'shell', 'bash', 'terminal', 'powershell', 'pw
   'notebookedit', 'notebookwrite', 'strreplace', 'multiedit', 'editor',
   'texteditor', 'fs', 'os', 'sys', 'node', 'io', 'delete', 'move', 'rename',
   'kill'];
-// 只读白名单：归一名以这些开头 = 纯读/元操作，不需要预测仪式。
-// 其余一切未知工具名一律 consequential（denylist 枚举不完 = 反转默认，
-// 新工具名最坏结果是多要一次 predict——安全方向）。
-// 注意顺序：consequential 判定先于白名单——notebookedit 命中 notebook* 词根，
-// notebookread 才落到这里。不收录 printenv/whoami/echo（信息泄漏面）。
-const SAFE_READONLY_STEMS = ['read', 'glob', 'grep', 'search', 'find', 'list',
-  'fetch', 'get', 'view', 'status', 'show', 'describe', 'cat', 'head',
-  'tail', 'ls', 'dir', 'websearch', 'webfetch', 'codesearch', 'askuser',
+// 只读白名单：精确匹配归一名（非前缀！）——前缀匹配会把 read_exec/getshell/
+// search_replace 这类变异/恶意命名放进免门区，等于在反转默认里重开一个
+// 可枚举逃逸面。名字不在此表的 = consequential。不收录 printenv/whoami/echo。
+const SAFE_READONLY_TOOLS = new Set(['read', 'readfile', 'readtool', 'glob',
+  'grep', 'search', 'find', 'findfilebyname', 'list', 'fetch', 'get', 'getoutput',
+  'view', 'status', 'show', 'describe', 'cat', 'head', 'tail', 'ls', 'dir',
+  'websearch', 'webfetch', 'codesearch', 'askuser', 'askuserquestion',
   'worldmodel', 'dshworldmodel', 'skill', 'todowrite', 'notebookread',
-  'resolve', 'exists', 'count', 'diff', 'inspect'];
+  'resolve', 'exists', 'count', 'diff', 'inspect', 'readresource',
+  'mcpreadresource', 'mcplisttools', 'mcplistservers', 'readsubagent',
+  'getmanagedclaudesupervisor', 'listmanagedclaudesupervisors']);
 function isConsequential(name) {
   const tn = normToolName(name);
   if (!tn) return true;   // 无名工具不可绑定预测 → 按 consequential 挡（fail closed）
   if (CONSEQUENT_TOOLS.has(tn) || CONSEQUENT_STEMS.some(st => tn.startsWith(st))) return true;
-  return !SAFE_READONLY_STEMS.some(st => tn.startsWith(st));
+  return !SAFE_READONLY_TOOLS.has(tn);   // 未知 = consequential（反转默认）
 }
+// 可逆编辑类（VCS 下可回滚）保持检测层；其余 consequential 一律
+// default-irreversible——未知变更通道必须带 irreversible:true 预测。
+const REVERSIBLE_EDIT_TOOLS = new Set(['edit', 'write', 'strreplaceeditor',
+  'notebookedit', 'applypatch', 'fswrite', 'fsedit', 'strreplace', 'multiedit',
+  'writefile', 'editfile', 'replaceinfile', 'renamefile', 'copyfile',
+  'createfile', 'patchfile', 'patch', 'editor', 'fileeditor', 'texteditor',
+  'fseditfile']);
 // 默认不可逆：参数=任意命令/远端调用/权限申请/GUI动作/删除移动的通道，载荷不可
 // 静态证安全 → 一律要求 irreversible:true 预测。扫描器在此之下只剩纵深意义。
 // 文件编辑类（edit/write/patch/fs_write）保持检测层——VCS 下可回滚。
@@ -86,8 +94,13 @@ const IRREVERSIBLE_STEMS = ['exec', 'shell', 'bash', 'terminal', 'powershell', '
   'browser', 'computer', 'deletefile', 'movefile'];
 function isIrreversibleByDefault(name) {
   const tn = normToolName(name);
-  return IRREVERSIBLE_BY_DEFAULT.has(tn) || IRREVERSIBLE_STEMS.some(st => tn.startsWith(st));
+  if (IRREVERSIBLE_BY_DEFAULT.has(tn) || IRREVERSIBLE_STEMS.some(st => tn.startsWith(st))) return true;
+  // 未知 consequential 工具 = 不可证可逆 → default-irreversible（N11 对称反转）
+  return isConsequential(name) && !REVERSIBLE_EDIT_TOOLS.has(tn);
 }
+// 多工具枚举检测词典：只数会受守卫约束的名字——ia 'exec ls' 里的 ls 是
+// 命令参数不是被授权的工具；只读名本就不在门内，计数反而批发误伤。
+const TOOL_LEXICON = new Set([...CONSEQUENT_TOOLS, ...IRREVERSIBLE_BY_DEFAULT, ...REVERSIBLE_EDIT_TOOLS]);
 // 不可逆判定（宽检测、安全方向偏向）：arguments 全部字符串值展平 → unicode 归一
 // （全角/长短破折号→-，弯引号→'，驼峰边界断词）→ 按空白+shell 元字符+路径分隔
 // 切词（管道/分号/$(…)/重定向/路径段都断词）→ 剥引号 → flag 归一 → basename/
@@ -98,27 +111,60 @@ function flattenStrings(v, acc) {
   const t = typeof v;
   if (t === 'string' || t === 'number' || t === 'boolean') acc.push(String(v));
   else if (Array.isArray(v)) for (const x of v) flattenStrings(x, acc);
-  else if (t === 'object') for (const k of Object.keys(v)) flattenStrings(v[k], acc);
+  // key 也展平——藏在对象键里的命令同样要过扫描（{rm:'-rf /'} 形态）
+  else if (t === 'object') for (const k of Object.keys(v)) { acc.push(k); flattenStrings(v[k], acc); }
+  return acc;
+}
+// 值限定版：绑定词表只用值（键名是结构不是载荷）；键名藏命令由 walkCmd 兜住
+function flattenVals(v, acc) {
+  if (v == null) return acc;
+  const t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean') acc.push(String(v));
+  else if (Array.isArray(v)) for (const x of v) flattenVals(x, acc);
+  else if (t === 'object') for (const k of Object.keys(v)) flattenVals(v[k], acc);
   return acc;
 }
 const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'nice', 'ionice', 'time', 'timeout', 'watch', 'xargs', 'parallel', 'command', 'exec', 'start', 'runas', 'busybox', 'sshpass', 'stdbuf', 'strace', 'ltrace', 'unbuffer', 'expect', 'ssh', 'wsl']);
 // 内联代码解释器：-c/-e/-Command/-EncodedCommand/-m/-jar 等 → 载荷不可静态证安全 → 必标
 const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'nodejs', 'deno', 'bun', 'perl', 'ruby', 'php', 'lua', 'osascript', 'mshta', 'rundll32', 'regsvr32', 'installutil', 'wscript', 'cscript', 'wmic', 'bash', 'sh', 'zsh', 'fish', 'dash', 'ksh', 'powershell', 'pwsh', 'cmd', 'eval', 'source', 'iex', 'invoke-expression', 'groovy', 'jjs', 'irb', 'java', 'rscript', 'msbuild', 'dotnet', 'forfiles', 'nc', 'ncat', 'netcat', 'go']);
 // 裸用即破坏的命令（删/覆写/擦除/分区/服务/进程终止）
-const DESTRUCTIVE_CMDS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'unlink', 'shred', 'srm', 'wipe', 'sdelete', 'wipefs', 'remove-item', 'clear-content', 'set-content', 'rimraf', 'format', 'dd', 'diskpart', 'sfdisk', 'shutdown', 'reboot', 'poweroff', 'halt', 'init', 'telinit', 'fdisk', 'parted', 'bcdedit', 'vssadmin', 'wevtutil', 'fsutil', 'chattr', 'tee', 'truncate', 'mv', 'robocopy', 'cipher', 'kill', 'pkill', 'taskkill', 'umount', 'swapoff', 'rmmod', 'modprobe', 'setenforce', 'takeown', 'icacls', 'attrib', 'passwd', 'userdel', 'groupdel', 'stop-service', 'remove-service', 'restart-computer']);
+const DESTRUCTIVE_CMDS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'unlink', 'shred', 'srm', 'wipe', 'sdelete', 'wipefs', 'remove-item', 'clear-content', 'set-content', 'rimraf', 'format', 'dd', 'diskpart', 'sfdisk', 'shutdown', 'reboot', 'poweroff', 'halt', 'init', 'telinit', 'fdisk', 'parted', 'bcdedit', 'vssadmin', 'wevtutil', 'fsutil', 'chattr', 'tee', 'truncate', 'mv', 'robocopy', 'cipher', 'kill', 'pkill', 'taskkill', 'umount', 'swapoff', 'rmmod', 'modprobe', 'setenforce', 'takeown', 'icacls', 'attrib', 'passwd', 'userdel', 'groupdel', 'stop-service', 'remove-service', 'restart-computer',
+  // PowerShell verb-noun 矩阵补全 + 系统变更补充
+  'stop-computer', 'stop-process', 'clear-disk', 'format-volume', 'move-item',
+  'copy-item', 'rename-item', 'out-file', 'add-content', 'new-item',
+  'set-item', 'set-itemproperty', 'new-itemproperty', 'remove-itemproperty',
+  'invoke-command', 'enter-pssession', 'start-process', 'set-executionpolicy',
+  'invoke-wmimethod', 'remove-wmiobject', 'remove-psdrive', 'clear-eventlog',
+  'remove-eventlog', 'set-mppreference', 'set-service', 'new-service',
+  'restart-service', 'reset-computermachinepassword', 'disable-computerrestore',
+  'mke2fs', 'mkfs.ext4', 'insmod', 'swapon', 'setsebool', 'usermod',
+  'sysctl', 'tskill', 'fuser', 'sshd', 'timedatectl', 'hostname',
+  'useradd', 'groupadd', 'visudo', 'ansible-playbook', 'socat', 'pkexec',
+  'docker-compose', 'ip6tables', 'nft', 'ebtables', 'ifconfig', 'drush']);
 // host 工具 + 危险子命令矩阵
 const HOST_TOOLS = new Set(['git', 'docker', 'podman', 'nerdctl', 'buildah', 'kubectl', 'terraform', 'npm', 'pip', 'pip3', 'yarn', 'pnpm', 'apt', 'apt-get', 'dnf', 'pacman', 'zypper', 'snap', 'flatpak', 'winget', 'choco', 'scoop', 'gem', 'cargo', 'composer', 'brew', 'helm', 'redis-cli', 'mongo', 'mongosh', 'mysql', 'psql', 'sqlite3', 'az', 'aws', 'gcloud', 'sc', 'schtasks', 'reg', 'dism', 'netsh', 'net', 'iptables', 'ufw', 'systemctl', 'find', 'sed', 'perl', 'awk', 'chmod', 'chown', 'mv', 'cp', 'copy', 'move', 'xcopy', 'svn', 'hg', 'p4', 'crontab', 'at', 'cmdkey', 'gpg', 'rsync', 'rclone', 'curl', 'wget', 'certutil', 'bitsadmin', 'scp', 'msiexec', 'tar', 'unzip', 'virsh', 'drush']);
 const DANGER_SUBS = new Set(['delete', 'destroy', 'prune', 'uninstall', 'unpublish', 'publish', 'flushall', 'flushdb', 'flush', 'remove', 'purge', 'drop', 'truncate', 'reset', 'clean', 'cleanup', 'restore', 'expire', 'clear', 'disable', 'stop', 'kill', 'terminate', 'wipe', 'create', 'add', 'config', 'poweroff', 'reboot', 'shutdown', 'undefine', 'strip', 'autoremove', 'apply', 'drain', 'rmi', 'rb', 'erase',
   // 包安装/容器执行/远程拉取 = 任意代码执行面（scoped：仅当 host 词同现）
-  'install', 'require', 'i', 'ci', 'run', 'exec', 'start', 'up', 'login', 'pull', 'load', 'import']);
+  'install', 'require', 'i', 'ci', 'run', 'exec', 'start', 'up', 'login', 'pull', 'load', 'import',
+  'down', 'build', 'push', 'deploy', 'eval', 'script', 'command']);
 // LOLBin：任意参数形态都可执行代码/拉取载荷——存在即标
 const LOLBINS = new Set(['mshta', 'regsvr32', 'rundll32', 'msiexec', 'javaws', 'wscript', 'cscript', 'hh', 'installutil', 'regasm', 'regsvcs', 'pcalua', 'url.dll', 'msbuild', 'dnx', 'rcsi', 'csi']);
 const SCRIPT_EXTS = new Set(['py', 'js', 'mjs', 'cjs', 'sh', 'ps1', 'bat', 'cmd', 'rb', 'pl', 'php', 'lua', 'vbs', 'vbe', 'hta', 'jar', 'exe', 'dll', 'wsf', 'reg', 'inf', 'txt']);
+// 长 flag → 等效短 flag 字符（归一后走同一 has() 检查）
+const LONG_FLAG_ALIASES = { 'in-place': 'i', inplace: 'i', recursive: 'r', force: 'f',
+  extract: 'x', overwrite: 'o', output: 'o', delete: 'd', expire: 'e', quiet: 'q',
+  'all': 'a', 'yes': 'y', 'no-preserve-root': '', 'interactive': 'i' };
 // basename/版本/后缀归一：python3.11 / python.exe / /usr/bin/python3 → python
 function normWord(w) { return w.replace(/\.(exe|com|dll)$/i, '').replace(/[\d.]+$/, ''); }
-function isIrreversibleArgs(args) {
+// 命令面键：这些键名下的字符串按"可执行内容"绑定（不只 token 重叠）
+const CMD_ARG_KEYS = new Set(['command', 'cmd', 'script', 'code', 'commandline', 'command_line', 'cmdline', 'shell', 'run', 'exec', 'argv', 'input_line', 'stdin', 'program', 'executable', 'file', 'path', 'file_path', 'filepath', 'target', 'url', 'uri']);
+// 命令词表：词头落在其中 = 命令面字符串（与扫描器共享同一份语义）
+const CMD_HEAD_LEX = new Set([...INTERPRETERS, ...DESTRUCTIVE_CMDS, ...CMD_WRAPPERS, ...HOST_TOOLS]);
+// execution 上的结构性自有键——参数载体之外的元数据不参与绑定词表
+const EXEC_STRUCT_KEYS = new Set(['name', 'arguments', 'args', 'params', 'input', 'parameters', 'payload', 'tool_input', 'agent', 'session', 'id', 'meta', 'metadata', 'context']);
+// 参数切词器（守卫绑定与扫描器共用同一 token 视图——防止两处语义漂移）
+function scanTokens(args) {
   const raw = flattenStrings(args, []);
-  if (!raw.length) return false;
   const norm = s => s.replace(/[‐‑‒–—―−﹘﹣－]/g, '-').replace(/[‘’‚‛]/g, "'").replace(/[“”„‟]/g, '"').replace(/([a-z])(?=[A-Z])/g, '$1 ');
   const rawJoined = raw.map(norm).join(' ').toLowerCase();
   const toks = raw
@@ -129,6 +175,22 @@ function isIrreversibleArgs(args) {
     // 全量剥引号（不只两端）：'r''m' → rm
     .map(s => s.replace(/["'`]/g, '').toLowerCase())
     .filter(Boolean);
+  const flagChars = new Set(), flagWords = new Set(), words = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (/^--[a-z][a-z0-9-]*/i.test(t)) flagWords.add(t.slice(2));
+    else if (/^-[a-z]{4,}/i.test(t)) flagWords.add(t.slice(1));
+    else if (/^-[a-z]/i.test(t)) for (const c of t.slice(1)) flagChars.add(c);
+    else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));
+    else if (/^\/[a-z][a-z0-9:=.]*$/i.test(t)) flagWords.add(t.slice(1));
+    else words.push(t);
+  }
+  return { raw, rawJoined, toks, flagChars, flagWords, words };
+}
+function isIrreversibleArgs(args) {
+  const st = scanTokens(args);
+  if (!st.raw.length) return false;
+  const { rawJoined, toks, flagChars, flagWords, words } = st;
   if (!toks.length) {
     // 全是元字符也危险：fork bomb ':(){:|:&};:' 类
     return /:\s*\(\s*\)\s*\{[^}]*[:|]/.test(rawJoined);
@@ -141,22 +203,24 @@ function isIrreversibleArgs(args) {
   if (/:\s*\(\s*\)\s*\{/.test(rawJoined)) return true;
   // 环境变量前缀 FOO=bar cmd：赋值 token 不挡后续命令词（全位置扫描已覆盖，
   // 此条只兜底 '$CMD -rf' 式纯变量调用——flags 集合留档即可）
-  const flagChars = new Set(), flagWords = new Set(), words = [];
+  // flag 集合已由 scanTokens 提供；此处只保留重定向/管道扫描
   let sawRedirect = false, pipeToInterp = false;
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
     if (t === '>' || t === '<') { sawRedirect = true; continue; }
     if (t === '|' || t === '|&') {
-      const nxt = toks[i + 1];
-      if (nxt && INTERPRETERS.has(normWord(nxt))) pipeToInterp = true;
+      // 管道目标穿包装检测：curl x | sudo sh / | env sh —— wrapper 后面才是真命令
+      let k = i + 1;
+      while (k < toks.length && (CMD_WRAPPERS.has(toks[k]) || CMD_WRAPPERS.has(normWord(toks[k])))) k++;
+      if (k < toks.length && INTERPRETERS.has(normWord(toks[k]))) pipeToInterp = true;
       continue;
     }
-    if (/^--[a-z][a-z0-9-]*/i.test(t)) flagWords.add(t.slice(2));
-    else if (/^-[a-z]{4,}/i.test(t)) flagWords.add(t.slice(1));   // PowerShell/长单横线 flag（-delete/-EncodedCommand）
-    else if (/^-[a-z]/i.test(t)) for (const c of t.slice(1)) flagChars.add(c);  // Unix 短 flag 束（-rf）
-    else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));     // cmd 单字符 /s
-    else if (/^\/[a-z][a-z0-9:=.]*$/i.test(t)) flagWords.add(t.slice(1));  // cmd 长 flag（/delete /cleanup /mir）
-    else words.push(t);
+  }
+  // 长 flag 语义归一：--in-place→i、--recursive→r、--force→f 等，
+  // 否则 sed --in-place / tar --extract / chmod --recursive 漏检
+  for (const w of flagWords) {
+    const c = LONG_FLAG_ALIASES[w];
+    if (c) flagChars.add(c);
   }
   if (sawRedirect || pipeToInterp) return true;
   const has = (...cs) => cs.some(c => flagChars.has(c) || flagWords.has(c));
@@ -211,7 +275,7 @@ function isIrreversibleArgs(args) {
     if (DESTRUCTIVE_CMDS.has(cmd) || DESTRUCTIVE_CMDS.has(ncmd) || cmd.startsWith('mkfs')) return true;
     if (cmd.includes('rmtree') || cmd.startsWith('drop') || cmd.startsWith('delete') || cmd.startsWith('destroy')) return true;
     if ((INTERPRETERS.has(cmd) || INTERPRETERS.has(ncmd)) && sub && (SCRIPT_EXTS.has(sub) || SCRIPT_EXTS.has(nsub) || sub === '-')) return true;
-    if ((cmd === 'sed' || cmd === 'perl' || cmd === 'awk' || cmd === 'find') && has('i', 'delete', 'exec')) return true;
+    if ((cmd === 'sed' || cmd === 'perl' || cmd === 'awk' || cmd === 'find') && has('i', 'delete', 'exec', 'fprintf', 'f')) return true;
     if ((cmd === 'cp' || cmd === 'copy' || cmd === 'move' || cmd === 'xcopy' || cmd === 'scp') && (has('f', 'y') || hasWord('/dev/null') || words.length - j >= 3)) return true;
     if ((cmd === 'tar') && has('x', 'w', 'o')) return true;
     if ((cmd === 'unzip' || cmd === 'expand') && has('o', 'f', 'd')) return true;
@@ -384,38 +448,67 @@ export function apply(ctx, config = {}) {
       // Object.prototype 会崩掉整个权威表 → 静默退回 bootstrap）。own-prop 语义。
       const table = Object.create(null);
       let inBlock = false, cur = null, inScopes = false, found = false;
+      // pendingScope：'name:' 空值声明的 scope 挂起等 level: 子键——
+      // 绝不自动授予（nested-map 写法里 level 属性不是 scope 本身）。
+      let pendingScope = null;
       // BOM/CRLF 归一：BOM 会让首行缩进错位 → 整个权威节静默失配
-      for (const ln of readFileSync(gp, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)) { // eslint-disable-line
-        // 列表式 scope 条目（'    - task_goal'）——bootstrap canonical 的写法，
-        // 丢了会让骨架仓连 owner 的 NORMATIVE 都被拒（fail-closed 但不可用）。
-        const li = ln.match(/^(\s*)-\s+([^#:]+?)\s*$/);
+      for (const rawLn of readFileSync(gp, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)) { // eslint-disable-line
+        // YAML 禁 tab 缩进——含 tab 的文件 PyYAML 拒绝，mini-parser 若接受
+        // 就与编译投影语义分叉（授予了编译器从未产出的权威）→ fail closed
+        if (/\t/.test(rawLn)) throw new Error('tab indentation not allowed');
+        // 先剥行内注释再匹配（'  - task_goal # note' 也是合法条目）
+        const ln = rawLn.replace(/\s+#.*$/, '');
+        if (!ln.trim()) continue;
+        const li = ln.match(/^(\s*)-\s+(.+?)\s*$/);
         if (li && inBlock && inScopes && cur && Object.hasOwn(table, cur) && li[1].length >= 4) {
-          table[cur].scopes[li[2].trim()] = 'authoritative';
+          // 列表项：'- task_goal' → authoritative（bootstrap 写法）；
+          // '- name: x' → 挂 pendingScope，由 level: 子项决定（默认 none）
+          const item = li[2];
+          const im = item.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
+          if (im && im[1] === 'name') { pendingScope = im[2] || null; }
+          else if (im) { table[cur].scopes[im[1]] = im[2] || 'none'; pendingScope = null; }
+          else { table[cur].scopes[item] = 'authoritative'; pendingScope = null; }
           continue;
         }
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
         const indent = m[1].length, key = m[2].trim();
-        // 行内注释：值里 ' # …' 起算注释（YAML 规则：# 前需空白）
-        const val = (m[3] || '').replace(/\s+#.*$/, '').trim();
-        if (indent === 0) { inBlock = key === 'normative_authorities'; if (inBlock) found = true; cur = null; inScopes = false; continue; }
-        if (!inBlock) continue;
-        if (indent === 2) { cur = key; inScopes = false; if (!Object.hasOwn(table, cur)) table[cur] = { scopes: Object.create(null) }; continue; }
-        if (!cur || !Object.hasOwn(table, cur)) continue;
-        // 兄弟键必须重置 inScopes——否则 roles:/notes: 子项被吞进 scopes 造出幻影权威
-        if (indent === 4) { inScopes = key === 'scopes'; continue; }
-        if (inScopes && indent >= 6) {
-          // 'name: authoritative' 或 'name: {level: authoritative}' 内联表 → 取 key 为 scope；
-          // 空值（'name:'）当 list-entry 处理 = authoritative
-          table[cur].scopes[key] = (val === '' || val.startsWith('{')) ? 'authoritative' : val;
+        const val = (m[3] || '').trim();
+        if (indent === 0) {
+          inBlock = key === 'normative_authorities'; cur = null; inScopes = false; pendingScope = null;
+          // last-wins：重复节重置表——合并会让已被后一节撤销的权威复活
+          if (inBlock) { found = true; for (const k of Object.keys(table)) delete table[k]; }
+          continue;
         }
+        if (!inBlock) continue;
+        if (indent === 2) { cur = key; inScopes = false; pendingScope = null;
+          table[cur] = { scopes: Object.create(null) };   // 重复 source → last-wins
+          continue;
+        }
+        if (!cur || !Object.hasOwn(table, cur)) continue;
+        // 兄弟键必须重置 inScopes——否则 roles:/notes: 子项被吞进 scopes 造幻影权威
+        if (indent === 4) { inScopes = key === 'scopes'; pendingScope = null; continue; }
+        if (!inScopes) continue;
+        if (pendingScope && indent >= 8) {
+          // pendingScope 的属性行——只认 level:，其余属性不是 scope
+          if (key === 'level') table[cur].scopes[pendingScope] = val || 'none';
+          continue;
+        }
+        if (indent < 6) continue;
+        pendingScope = null;
+        if (val === '') { pendingScope = key; continue; }          // 'name:' → 等 level: 子键
+        if (val.startsWith('{')) {                                  // 'name: {level: x}' 内联
+          const lm = val.match(/level\s*:\s*['"]?([A-Za-z0-9_-]+)/);
+          table[cur].scopes[key] = lm ? lm[1] : 'none';
+          continue;
+        }
+        table[cur].scopes[key] = val;
       }
-      // 文件存在但无 normative_authorities 节 = 已声明治理但没有权威 → deny-all，
-      // 不得静默回退 bootstrap（否则 typo 的节名就把 default-user-root 送出去）
+      // 悬空 pendingScope（'name:' 无 level 子键）→ 不落表 = none（fail closed）
+      // 文件存在但无 normative_authorities 节 = 已声明治理但没有权威 → deny-all
       return found ? table : Object.create(null);
     } catch {
-      // 存在但不可读/解析失败（目录、损坏）→ 权威声明失效 = deny-all，
-      // 绝不能静默回退 bootstrap（会把 default-user-root 送给自报 user）
+      // 存在但不可读/解析失败（目录、损坏、tab 缩进）→ 权威声明失效 = deny-all
       return Object.create(null);
     }
   }
@@ -431,17 +524,21 @@ export function apply(ctx, config = {}) {
   } catch { auditOk = false; }
 
   const EV_KEEP_KEYS = new Set(['event_id', 'schema_version', 'theory_version', 'session_id', 'seq', 'prev_event', 'event_type', 'timestamp', 'actor', 'body_id', 'bcc', 'layer', 'access']);
+  const ACCESS_ENUM = new Set(['PUBLIC', 'SANITIZED', 'INTERNAL', 'PRIVATE']);
   function emit(sessionId, eventType, data = {}) {
     const s = sessions.get(sessionId);
     const seq = ++globalSeq;
     let ev = {
+      ...data,
+      // envelope 字段最后写——调用方控制的 data 键不得覆盖事件身份/链指针
+      // （data.prev_event/event_type/timestamp 任意值会断链或伪造审计语义）。
       event_id: randomUUID(), schema_version: SCHEMA_VERSION, theory_version: THEORY_VERSION,
       session_id: sessionId, seq, prev_event: s ? s.lastEventId : null,
       event_type: eventType, timestamp: new Date().toISOString(), actor: 'agent',
       body_id: bodyId, bcc: BCC_VERSION,
       layer: eventType === 'RAW_EVIDENCE' ? 'L0' : 'L1',
-      access: data.access || 'PRIVATE',
-      ...data
+      // access 是分类声明——非法值按最严档处理（不得任由调用方自标 PUBLIC）
+      access: ACCESS_ENUM.has(data.access) ? data.access : 'PRIVATE'
     };
     try {
       let line = safeJson(ev);
@@ -469,6 +566,38 @@ export function apply(ctx, config = {}) {
     return ev;
   }
 
+  // lineage.yaml 是 lineage 权威源（runtime-state.json 只是编译投影）。
+  // 投影缺失时不得视为"无 active body"——那会跳过 lease 检查直接放行
+  // canonical 写。投影缺 + lineage 在 = 从权威源重建语义；都缺 = 全新 canonical。
+  function lineageState() {
+    const p = join(canonicalDir, 'lineage.yaml');
+    if (!existsSync(p)) return { _present: false };
+    try {
+      const out = { _present: true };
+      let inActive = false;
+      for (const rawLn of readFileSync(p, 'utf8').replace(/^﻿/, '').split(/\r?\n/)) {
+        if (/\t/.test(rawLn)) throw new Error('tab indentation not allowed');
+        const ln = rawLn.replace(/\s+#.*$/, '');
+        if (!ln.trim()) continue;
+        const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
+        if (!m) continue;
+        const indent = m[1].length, key = m[2].trim();
+        const val = (m[3] || '').trim().replace(/^['"]|['"]$/g, '');
+        if (indent === 0) {
+          inActive = key === 'active_body';
+          if (!inActive && val !== '') out[key] = val;
+          continue;
+        }
+        if (inActive && indent >= 2 && val !== '') (out.active_body ??= {})[key] = val;
+      }
+      if (out.continuity_epoch != null) {
+        const n = Number(out.continuity_epoch);
+        out.continuity_epoch = Number.isSafeInteger(n) ? n : NaN;  // NaN → 下游 malformed 判 fail closed
+      }
+      return out;
+    } catch { return { _present: true, _corrupt: true }; }
+  }
+
   // ---- body lease: single canonical writer per entity (V0.3.1 §11) ----
   function leaseCheck(s) {
     const rs = runtimeState();
@@ -476,11 +605,17 @@ export function apply(ctx, config = {}) {
       emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
       return { ok: false, holder: 'corrupt-runtime-state' };
     }
+    // runtime-state.json 缺失时 lineage.yaml 接管——缺失即放行 = 绕过 lease 检查
+    const eff = rs._present ? rs : lineageState();
+    if (eff._corrupt) {
+      emit(s.id, 'LEASE_DENIED', { happened: 'lineage.yaml corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: 'corrupt-lineage' };
+    }
     // active_body 存在但畸形（string/0/null/非对象/缺 body_id）= 状态不可信 → fail closed
-    const rawActive = rs._present ? rs.active_body : undefined;
+    const rawActive = eff._present ? eff.active_body : undefined;
     if (rawActive !== undefined && rawActive !== null
         && (typeof rawActive !== 'object' || typeof rawActive.body_id !== 'string' || !rawActive.body_id)) {
-      emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json active_body malformed — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      emit(s.id, 'LEASE_DENIED', { happened: 'active_body malformed — fail closed', payload: { requester: bodyId }, source: 'plugin' });
       return { ok: false, holder: 'malformed-active-body' };
     }
     const active = (rawActive && typeof rawActive === 'object') ? rawActive : {};
@@ -493,7 +628,7 @@ export function apply(ctx, config = {}) {
     if (active.body_id === bodyId) {
       // fork detection：已记录的 head 之后，head 缺失/变化/epoch 回退都 = 不可信 → 拒写。
       // head 必须是 string|null——对象/数字会让 !== 比较每次自叉（自锁死）。
-      const head = rs.lineage_head;
+      const head = eff.lineage_head;
       if (head != null && typeof head !== 'string') {
         emit(s.id, 'LEASE_DENIED', { happened: 'lineage_head malformed (non-string) — fail closed', payload: { seen_type: typeof head }, source: 'plugin' });
         return { ok: false, holder: 'lineage-head-malformed' };
@@ -504,24 +639,24 @@ export function apply(ctx, config = {}) {
       }
       // epoch 必须安全整数——非整数/非数值（"abc"/NaN/1e99/5.5）= 状态不可信 → fail closed，
       // 且绝不写进 epoch_seen（否则毒化 floor 后真实回退也被放行）。
-      if (rs.continuity_epoch != null && !Number.isSafeInteger(rs.continuity_epoch)) {
-        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch malformed (non-integer) — fail closed', payload: { seen: rs.continuity_epoch }, source: 'plugin' });
+      if (eff.continuity_epoch != null && !Number.isSafeInteger(eff.continuity_epoch)) {
+        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch malformed (non-integer) — fail closed', payload: { seen: eff.continuity_epoch }, source: 'plugin' });
         return { ok: false, holder: 'epoch-malformed' };
       }
       const seenEpoch = Number.isSafeInteger(bodyState.epoch_seen) ? bodyState.epoch_seen : null;
-      if (seenEpoch != null && rs.continuity_epoch != null) {
-        if (rs.continuity_epoch < seenEpoch) {
-          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch regressed — state not trusted', payload: { seen: rs.continuity_epoch, expected_min: seenEpoch }, source: 'plugin' });
+      if (seenEpoch != null && eff.continuity_epoch != null) {
+        if (eff.continuity_epoch < seenEpoch) {
+          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch regressed — state not trusted', payload: { seen: eff.continuity_epoch, expected_min: seenEpoch }, source: 'plugin' });
           return { ok: false, holder: 'epoch-regression' };
         }
         // 前跳荒谬值（5→1e9）也会永久锁死 floor —— 超界即不可信
-        if (rs.continuity_epoch > seenEpoch + 1000000) {
-          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch implausible forward jump — fail closed', payload: { seen: rs.continuity_epoch, expected_max: seenEpoch + 1000000 }, source: 'plugin' });
+        if (eff.continuity_epoch > seenEpoch + 1000000) {
+          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch implausible forward jump — fail closed', payload: { seen: eff.continuity_epoch, expected_max: seenEpoch + 1000000 }, source: 'plugin' });
           return { ok: false, holder: 'epoch-forward-jump' };
         }
       }
       bodyState.last_lineage_head = head || bodyState.last_lineage_head;
-      if (rs.continuity_epoch != null) bodyState.epoch_seen = rs.continuity_epoch;
+      if (eff.continuity_epoch != null) bodyState.epoch_seen = eff.continuity_epoch;
       saveBodyState();
       return { ok: true };
     }
@@ -703,7 +838,7 @@ export function apply(ctx, config = {}) {
         // 审计不可用 = fail closed：任何会落账的操作在零审计状态下都拒绝
         if (!auditOk && op !== 'status') return { ok: false, code: 'AUDIT_UNAVAILABLE', message: 'stateDir unwritable — audit infrastructure down, ops refused (fail closed)' };
         const base = { subject: input.subject, evidence_refs: input.evidence_refs || [] };
-        switch (op) {
+        const out = (() => { switch (op) {
           case 'activate': {
             // off/strict-off 由 env/config 决定——会话不可自行关闸；activate 只能维持或升级形式化深度
             if (input.mode === 'core' || input.mode === 'full') s.mode = input.mode;
@@ -715,9 +850,17 @@ export function apply(ctx, config = {}) {
           case 'model': {
             const modelList = Array.isArray(input.models) ? input.models : [];
             const ids = modelList.map(m => (m && typeof m === 'object' ? (m.id || m.model_id || m.proposition) : null) || 'unnamed');
-            // access taint: model entries inherit strictest level of their evidence; default PRIVATE
+            // access taint: model entries inherit strictest level of their evidence; default PRIVATE。
+            // 自报 access 不可信：level 非法一律回落；SANITIZED/PUBLIC 必须带 declass_ref
+            // （declassification 链证据），否则降到 INTERNAL——绕开提案链自标公开 = 泄漏面。
+            const declLevel = ACCESS_ENUM.has(input.access_level) ? input.access_level : 'PRIVATE';
             for (const m of modelList) {
-              if (m && typeof m === 'object' && !m.access) m.access = { level: input.access_level || 'PRIVATE', basis: ['taint_or_default'] };
+              if (m && typeof m === 'object') {
+                const lvl = (m.access && typeof m.access === 'object') ? m.access.level : null;
+                let level = ACCESS_ENUM.has(lvl) ? lvl : declLevel;
+                if ((level === 'SANITIZED' || level === 'PUBLIC') && !(typeof m.declass_ref === 'string' && m.declass_ref)) level = 'INTERNAL';
+                m.access = { level, basis: ['taint_or_default'] };
+              }
             }
             const cur = join(wmDir, 'current.json');
             let st = {};
@@ -751,22 +894,28 @@ export function apply(ctx, config = {}) {
             const supersedesList = Array.isArray(input.supersedes) ? input.supersedes : (typeof input.supersedes === 'string' && input.supersedes ? [input.supersedes] : []);
             for (const old of supersedesList) closeSuperseded(String(old));
             const ia = String(input.intended_action || '');
-            // 一预测一工具：intended_action 枚举多个 consequential 工具名 =
-            // 批发式授权（一次 predict 放行整类动作）→ 拒绝。逐个 predict。
+            // 一预测一工具：intended_action 枚举多个工具名 = 批发式授权 → 拒绝。
+            // 词典 = 全工具词表（含只读名——ia 里出现即计数，未知名不计也无妨：
+            // 守卫只绑定被调用的那个工具，1:1 消耗保证一张预测放不了两个调用）。
+            // span 去重保留最长名——'shell_exec' 命中 exec+shell+shell_exec
+            // 但只占一个 span；contains 式去重会把并列名误并。
             const iaToolHits = new Set();
             if (ia) {
               const iaLow = ia.toLowerCase();
-              for (const name of CONSEQUENT_TOOLS) {
-                const pat = [...name].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s]?');
-                if (new RegExp(`(^|[^a-z0-9])${pat}([^a-z0-9]|$)`).test(iaLow)) iaToolHits.add(name);
-              }
-              // 嵌套名去重：'editor' 命中 'str_replace_editor' 的尾部 token 不算
-              // 第二个工具——只有词根互不包含的独立名才算多工具枚举
-              for (const h of [...iaToolHits]) {
-                for (const o of iaToolHits) {
-                  if (o !== h && (o.endsWith(h) || o.startsWith(h))) iaToolHits.delete(h);
+              const hits = [];
+              for (const name of TOOL_LEXICON) {
+                const pat = [...name].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s./:]?');
+                const re = new RegExp(`(^|[^a-z0-9])(${pat})([^a-z0-9]|$)`, 'g');
+                let mm;
+                while ((mm = re.exec(iaLow)) !== null) {
+                  hits.push({ name, s: mm.index + mm[1].length, e: mm.index + mm[1].length + mm[2].length });
+                  if (mm[0].length === 0) re.lastIndex++;
                 }
               }
+              hits.sort((a, b) => (b.e - b.s) - (a.e - a.s));
+              const kept = [];
+              for (const h of hits) if (!kept.some(k => h.s < k.e && k.s < h.e)) kept.push(h);
+              for (const h of kept) iaToolHits.add(h.name);
             }
             if (iaToolHits.size > 1) {
               return { ok: false, code: 'PREDICTION_TOO_BROAD', tools: [...iaToolHits], message: 'one prediction binds one tool — issue separate predict calls' };
@@ -1017,7 +1166,14 @@ export function apply(ctx, config = {}) {
           }
           default:
             return { ok: false, code: 'UNKNOWN_OP', message: `unknown op ${op}` };
+        } })();
+        // OP_DENIED：所有用户面拒绝必须留审计——静默 deny 会让对抗探测不可见。
+        // （AUDIT_UNAVAILABLE 走不到这里；专用事件如 LEASE_DENIED 已由下游发出，
+        //   本条记录"哪个 op 因何被拒"的决策面。）
+        if (out && out.ok === false) {
+          try { emit(s.id, 'OP_DENIED', { ...base, happened: `op ${op || '(none)'} denied: ${out.code || 'DENIED'}`, payload: { code: out.code || 'DENIED', holder: out.holder } }); } catch { /* emit 失败不得让拒绝路径崩掉 */ }
         }
+        return out;
         } catch (e) { return { ok: false, code: 'INTERNAL_ERROR', message: String(e?.message || e) }; }
       }
     });
@@ -1036,13 +1192,47 @@ export function apply(ctx, config = {}) {
           return '[dsh-world-model] BLOCKED: unnamed tool call cannot bind a prediction (fail closed)';
         }
         if (!isConsequential(rawName)) return undefined;
-        const irreversible = isIrreversibleByDefault(rawName)
-          || isIrreversibleArgs(execution?.arguments ?? execution?.args ?? execution?.params ?? execution?.input ?? {});
-        // arg 绑定：调用参数里至少一个 ≥2 字符的 token 必须出现在
-        // intended_action 词表里——"predict exec ls" 不能授权 "exec rm -rf /"。
-        const argToks = flattenStrings(execution?.arguments ?? execution?.args ?? execution?.params ?? execution?.input ?? {}, [])
+        // 参数面别名：全部已知键都合并进扫描（?? 链会在 arguments:{} 时短路，
+        // 让 parameters/tool_input 的载荷完全不可见）；自有非结构属性同样展平
+        // ——看不见的载荷 = 绑定绕过面（藏起来 ≠ 不存在）。
+        const argPool = [];
+        if (execution && typeof execution === 'object') {
+          for (const k of ['arguments', 'args', 'params', 'input', 'parameters', 'payload', 'tool_input']) {
+            if (execution[k] != null) argPool.push(execution[k]);
+          }
+          const extraArgs = {};
+          for (const k of Object.keys(execution)) if (!EXEC_STRUCT_KEYS.has(k)) extraArgs[k] = execution[k];
+          argPool.push(extraArgs);
+        }
+        const irreversible = isIrreversibleByDefault(rawName) || isIrreversibleArgs(argPool);
+        // 通用绑定池只取值——键名是结构不是载荷（path:/command: 这类键进池
+        // 会让每个正常调用都绑不上）。键名自身藏载荷的 {rm:'-rf /'} 形态
+        // 由命令面检测兜住（键头落命令词表 → 进 cmdSurface）。
+        const argToks = new Set(flattenVals(argPool, [])
           .flatMap(v => String(v).toLowerCase().split(/[^a-z0-9]+/))
-          .filter(t => t.length >= 2);
+          .filter(t => t.length >= 2));
+        // 命令面收集：命令型键名 或 词头落在命令词表的字符串 → 结构绑定对象；
+        // 键名自身落在命令词表同样算面（{rm:'-rf /'} 的键就是命令头）。
+        const cmdSurface = [];
+        const walkCmd = (v, key) => {
+          if (v == null) return;
+          const t = typeof v;
+          if (t === 'string' || t === 'number' || t === 'boolean') {
+            const sv = String(v).trim();
+            const head = normWord((sv.split(/\s+/)[0] || '').replace(/["'`]/g, '').split(/[\/\\]/).pop() || '').toLowerCase();
+            if ((key && CMD_ARG_KEYS.has(key)) || CMD_HEAD_LEX.has(head)) cmdSurface.push(sv);
+            return;
+          }
+          if (Array.isArray(v)) { for (const x of v) walkCmd(x, key); return; }
+          if (t === 'object') for (const k of Object.keys(v)) {
+            const kk = String(k).toLowerCase();
+            const khead = normWord(kk.replace(/["'`]/g, '').split(/[\/\\]/).pop() || '');
+            // 键即载荷的 {rm:'-rf /'} 形态——但结构键（command/path/...）只是载体不算命令
+            if (CMD_HEAD_LEX.has(khead) && !CMD_ARG_KEYS.has(kk)) cmdSurface.push(kk);
+            walkCmd(v[k], kk);
+          }
+        };
+        walkCmd(argPool, null);
         for (const [pid, p] of s.predictions) {
           if (s.evaluated.has(pid)) continue;   // superseded/evaluated prediction cannot authorize
           if (s.bound.has(pid)) continue;        // 1:1 消耗——一张预测只放行一个动作
@@ -1050,14 +1240,30 @@ export function apply(ctx, config = {}) {
           if (!ia) continue;
           // 精确绑定：intended_action 里该工具名必须是独立 token（词边界），
           // 分隔符 -_ 可选等价。子串不算——"credit"/"overwrite" 不再误中 edit/write。
-          const pat = [...toolName].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s]?');
+          const pat = [...toolName].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s./:]?');
           const bound = new RegExp(`(^|[^a-z0-9])${pat}([^a-z0-9]|$)`).test(ia.toLowerCase());
           if (!bound) continue;
           if (irreversible && p.irreversible !== true) continue;
-          if (argToks.length) {
-            const iaToks = new Set(ia.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
-            if (!argToks.some(t => iaToks.has(t))) continue;
+          const iaToks = new Set(ia.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 2));
+          // 结构性 arg 绑定（替代"共享任一 token 即授权"）：
+          // ① 通用：至少一个可见 arg token 被 ia 命名；
+          // ② 命令面：每个命令串的 head（首个词，basename 归一）必须进 ia 词表；
+          // ③ 复合命令/解释器/破坏词头：全部词 token + flag 签名 ⊆ ia——
+          //    'predict exec ls' 不再授权 'exec "ls; rm -rf /"'；
+          //    'predict exec rm' 不再授权 'exec "rm -rf /"'（rf flag 未命名）。
+          if (argToks.size && ![...argToks].some(t => iaToks.has(t))) continue;
+          let structOk = true;
+          for (const cs of cmdSurface) {
+            const cst = scanTokens(cs);
+            const cWords = cst.words.map(normWord);
+            const head = cWords.find(w => w.length >= 2 && !/^\d+$/.test(w));
+            if (head && !iaToks.has(head)) { structOk = false; break; }
+            if (/[;|&`<>\n]|\$\(/.test(cs) || CMD_HEAD_LEX.has(head)) {
+              const sig = [...cst.words, ...cst.flagWords, [...cst.flagChars].join('')].filter(x => x && x.length >= 2);
+              if (!sig.every(x => iaToks.has(x))) { structOk = false; break; }
+            }
           }
+          if (!structOk) continue;
           s.bound.add(pid);   // 消耗：本预测已授权一个动作，evaluate 语义不受影响
           return undefined; // bound prediction exists → allow
         }
