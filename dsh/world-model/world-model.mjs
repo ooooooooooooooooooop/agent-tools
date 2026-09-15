@@ -31,7 +31,7 @@ const SCHEMA_VERSION = '1.2';
 const THEORY_VERSION = '0.4';
 const BCC_VERSION = 'BCC-1';
 const BRIEF_HARD_CAP = 8 * 1024;
-const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'notebook_edit', 'exec', 'mcp_call_tool']);
+const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'str_replace_editor', 'notebook_edit', 'exec', 'mcp_call_tool', 'apply_patch', 'write_to_process', 'request_scope']);
 const IRREVERSIBLE_RE = /rm\s+-rf|del\s+\/[sq]|rmdir|Remove-Item[^\n]*-Recurse|drop\s+table|drop\s+database|truncate|git\s+push[^\n]*(--force|-f\b)|git\s+reset[^\n]*--hard/i;
 const SEMANTIC_TYPES = new Set(['EPISTEMIC_CLAIM', 'NORMATIVE_DIRECTIVE', 'AUTHORIZATION', 'DURABLE_VALUE_STATEMENT', 'PREFERENCE']);
 
@@ -535,7 +535,7 @@ export function apply(ctx, config = {}) {
   try {
     ctx.tools.guard((execution) => {
       try {
-        const toolName = execution?.name;
+        const toolName = String(execution?.name || '').trim().toLowerCase();
         if (!toolName || !CONSEQUENT_TOOLS.has(toolName)) return undefined;
         const s = sessionFor(execution);
         if (s.mode !== 'core' && s.mode !== 'full') return undefined;
@@ -545,7 +545,9 @@ export function apply(ctx, config = {}) {
           if (s.evaluated.has(pid)) continue;   // superseded/evaluated prediction cannot authorize
           const ia = String(p.intended_action || '');
           if (!ia) continue;
-          const bound = ia.includes(toolName) || /mutation|edit|write|exec|modify|change/i.test(ia);
+          // 精确绑定：intended_action 必须点名该工具（全名子串）。通用动词
+          // （mutation/change/...）不再授权——"edit notes" 不得放行 exec/mcp_call_tool。
+          const bound = ia.toLowerCase().includes(toolName);
           if (!bound) continue;
           if (irreversible && p.irreversible !== true) continue;
           return undefined; // bound prediction exists → allow
