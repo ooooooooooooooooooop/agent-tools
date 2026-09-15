@@ -42,8 +42,11 @@ function flattenStrings(v, acc) {
   else if (t === 'object') for (const k of Object.keys(v)) flattenStrings(v[k], acc);
   return acc;
 }
+// 包装命令不遮蔽内层：sudo/sh -c/timeout 10/cmd /c 之后的词仍是命令头。
+const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'nice', 'ionice', 'time', 'timeout', 'watch', 'xargs', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'sh', 'bash', 'zsh', 'command', 'exec', 'start', 'runas', 'busybox', 'sshpass']);
 function isIrreversibleArgs(args) {
-  const toks = flattenStrings(args, []).flatMap(s => s.split(/\s+/)).filter(Boolean).map(s => s.toLowerCase());
+  const toks = flattenStrings(args, []).flatMap(s => s.split(/\s+/))
+    .map(s => s.replace(/^["'`]+|["'`]+$/g, '').toLowerCase()).filter(Boolean);
   if (!toks.length) return false;
   const flagChars = new Set(), flagWords = new Set(), words = [];
   for (const t of toks) {
@@ -52,23 +55,28 @@ function isIrreversibleArgs(args) {
     else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));
     else words.push(t);
   }
-  const cmd = words[0], sub = words[1];
   const has = (...cs) => cs.some(c => flagChars.has(c) || flagWords.has(c));
   const forceWord = [...flagWords].some(w => w.startsWith('force'));
-  const sigs = [
-    () => cmd === 'rm' && has('r', 'f', 'recursive', 'force'),
-    () => cmd === 'rmdir' && has('s', 'r', 'recursive'),
-    () => cmd === 'del' && has('f', 's', 'q'),
-    () => cmd === 'rd' && has('s', 'q'),
-    () => cmd === 'remove-item' && has('r', 'recurse', 'force'),
-    () => cmd === 'git' && sub === 'push' && (has('f') || forceWord),
-    () => cmd === 'git' && sub === 'reset' && flagWords.has('hard'),
-    () => cmd === 'git' && sub === 'clean' && has('f', 'd', 'x'),
-    () => ['format', 'dd', 'mkfs', 'diskpart', 'shutdown'].includes(cmd),
-    () => words.includes('drop') && (words.includes('table') || words.includes('database')),
-    () => words.includes('truncate') && words.includes('table'),
-  ];
-  return sigs.some(f => f());
+  // 全位置扫描：误报（良性词被判不可逆）只导致要求 irreversible:true——安全方向；
+  // 漏报才是漏洞。管道/分号/wrapper 后的命令头都在 words 里被检查。
+  for (let j = 0; j < words.length; j++) {
+    const cmd = words[j], sub = words[j + 1];
+    if (CMD_WRAPPERS.has(cmd)) continue;
+    if (cmd === 'rm' && has('r', 'f', 'recursive', 'force')) return true;
+    if (cmd === 'rmdir' && has('s', 'r', 'recursive')) return true;
+    if (cmd === 'del' && has('f', 's', 'q')) return true;
+    if (cmd === 'rd' && has('s', 'q')) return true;
+    if (cmd === 'remove-item' && has('r', 'recurse', 'force')) return true;
+    if (cmd === 'rimraf' || cmd === 'shutil.rmtree(' || cmd.startsWith('shutil.rmtree')) return true;
+    if (cmd === 'git' && sub === 'push' && (has('f') || forceWord)) return true;
+    if (cmd === 'git' && sub === 'reset' && flagWords.has('hard')) return true;
+    if (cmd === 'git' && sub === 'clean' && has('f', 'd', 'x')) return true;
+    if (cmd === 'reg' && sub === 'delete') return true;
+    if (cmd === 'format' || cmd === 'dd' || cmd === 'diskpart' || cmd === 'shutdown' || cmd.startsWith('mkfs')) return true;
+    if (cmd === 'drop' && (sub === 'table' || sub === 'database')) return true;
+    if (cmd === 'truncate' && sub === 'table') return true;
+  }
+  return false;
 }
 const SEMANTIC_TYPES = new Set(['EPISTEMIC_CLAIM', 'NORMATIVE_DIRECTIVE', 'AUTHORIZATION', 'DURABLE_VALUE_STATEMENT', 'PREFERENCE']);
 
@@ -187,6 +195,33 @@ export function apply(ctx, config = {}) {
     catch { return { _present: true, _corrupt: true }; }
   }
 
+  // governance.yaml 的 normative_authorities 是权威源（runtime-state.json 只是投影，
+  // 可能缺失/陈旧）。缩进式最小解析：只认 source: → scopes: → scope: level 结构。
+  let _govCache;
+  function governanceAuthorities() {
+    if (_govCache !== undefined) return _govCache;
+    _govCache = null;
+    const gp = join(canonicalDir, 'governance.yaml');
+    if (!existsSync(gp)) return null;
+    try {
+      const table = {};
+      let inBlock = false, cur = null, inScopes = false;
+      for (const ln of readFileSync(gp, 'utf8').split(/\r?\n/)) {
+        const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
+        if (!m) continue;
+        const indent = m[1].length, key = m[2].trim(), val = (m[3] || '').trim();
+        if (indent === 0) { inBlock = key === 'normative_authorities'; cur = null; inScopes = false; continue; }
+        if (!inBlock) continue;
+        if (indent === 2) { cur = key; inScopes = false; table[cur] = table[cur] || { scopes: {} }; continue; }
+        if (!cur) continue;
+        if (indent === 4 && key === 'scopes') { inScopes = true; continue; }
+        if (inScopes && indent >= 6 && val) table[cur].scopes[key] = val;
+      }
+      _govCache = table;
+    } catch { _govCache = null; }
+    return _govCache;
+  }
+
   function emit(sessionId, eventType, data = {}) {
     const s = sessions.get(sessionId);
     const seq = ++globalSeq;
@@ -201,8 +236,13 @@ export function apply(ctx, config = {}) {
     };
     if (s) s.lastEventId = ev.event_id;
     try {
-      appendFileSync(join(wmDir, 'ledger', `${today()}.jsonl`), safeJson(ev) + '\n');
-      appendFileSync(join(wmDir, 'runs', `${sessionFileId(sessionId)}.jsonl`), safeJson(ev) + '\n');
+      let line = safeJson(ev);
+      if (bytes(line) > 16384) {   // L1 payload 全局上限：防 300KB 单行写爆 ledger
+        ev.payload = { _truncated: true, preview: safeJson(ev.payload).slice(0, 4000) };
+        line = safeJson(ev);
+      }
+      appendFileSync(join(wmDir, 'ledger', `${today()}.jsonl`), line + '\n');
+      appendFileSync(join(wmDir, 'runs', `${sessionFileId(sessionId)}.jsonl`), line + '\n');
     } catch { /* ledger write must never crash the loop */ }
     return ev;
   }
@@ -214,8 +254,20 @@ export function apply(ctx, config = {}) {
       emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
       return { ok: false, holder: 'corrupt-runtime-state' };
     }
-    const active = (rs.active_body && typeof rs.active_body === 'object') ? rs.active_body : {};
+    // active_body 存在但畸形（string/0/null/非对象/缺 body_id）= 状态不可信 → fail closed
+    const rawActive = rs._present ? rs.active_body : undefined;
+    if (rawActive !== undefined && rawActive !== null
+        && (typeof rawActive !== 'object' || typeof rawActive.body_id !== 'string' || !rawActive.body_id)) {
+      emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json active_body malformed — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: 'malformed-active-body' };
+    }
+    const active = (rawActive && typeof rawActive === 'object') ? rawActive : {};
     if (!active.body_id) return { ok: true, note: 'no active body bound' };
+    // lease 字段若声明则必须合法（exclusive 语义）；expired/released 等一律拒绝
+    if (active.lease !== undefined && !String(active.lease).startsWith('exclusive')) {
+      emit(s.id, 'LEASE_DENIED', { happened: `lease state '${active.lease}' is not an active exclusive lease`, payload: { holder: active.body_id, requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: active.body_id };
+    }
     if (active.body_id === bodyId) {
       // fork detection: canonical head moved under us by another writer → deny further writes
       const head = rs.lineage_head;
@@ -413,7 +465,8 @@ export function apply(ctx, config = {}) {
               s.evaluated.add(old);
               emit(s.id, 'PREDICTION_EVALUATED', { ...base, prediction_id: old, happened: 'verdict=superseded', payload: { verdict: 'unknown', superseded_by: pid, residual: 'superseded by newer prediction' } });
             };
-            for (const old of (Array.isArray(input.supersedes) ? input.supersedes : [])) closeSuperseded(String(old));
+            const supersedesList = Array.isArray(input.supersedes) ? input.supersedes : (typeof input.supersedes === 'string' && input.supersedes ? [input.supersedes] : []);
+            for (const old of supersedesList) closeSuperseded(String(old));
             const ia = String(input.intended_action || '');
             const subj = String(input.subject || '');
             for (const [old, p] of s.predictions) {
@@ -441,7 +494,9 @@ export function apply(ctx, config = {}) {
             // 只有本会话创建或本会话恢复（persist 的 open_predictions）的 pid 才进 evaluated——
             // 未知 pid 计入 evaluated 会让 persist 删掉其他会话仍 open 的预测（跨会话杀伤）
             const known = pred !== undefined || s.restored.has(input.prediction_id);
-            if (input.prediction_id && known) s.evaluated.add(input.prediction_id);
+            // 未知 pid = 伪造判决原语：不落 PREDICTION_EVALUATED，直接拒绝
+            if (input.prediction_id && !known) return { ok: false, code: 'UNKNOWN_PREDICTION', prediction_id: input.prediction_id };
+            if (input.prediction_id) s.evaluated.add(input.prediction_id);
             emit(s.id, 'PREDICTION_EVALUATED', { ...base, prediction_id: input.prediction_id, happened: `verdict=${input.verdict}`, payload: { verdict: input.verdict, observation_refs: input.observation_refs, residual: input.reason, evaluation_source: input.evaluation_source || 'self' } });
             return { ok: true, prior: pred ? 'bound' : (s.restored.has(input.prediction_id) ? 'restored' : 'unbound'), verdict: input.verdict };
           }
@@ -486,16 +541,22 @@ export function apply(ctx, config = {}) {
               return { ok: true, routed: 'world_model_evidence', note: 'epistemic claim recorded as evidence; principled disagreement permitted if direct evidence is stronger — record via evaluate/update' };
             }
             if (st === 'NORMATIVE_DIRECTIVE') {
-              const rs = runtimeState();
-              if (rs._corrupt) {
-                emit(s.id, 'NORMATIVE_DENIED', { ...base, happened: 'normative denied: runtime-state corrupt (fail closed)', payload: { source_id: src, scope }, source_id: src });
-                return { ok: false, code: 'NORMATIVE_DENIED', scope, authority: 'corrupt-runtime-state' };
+              // 权威源优先 governance.yaml；无该文件才退到投影；两者皆无 = fresh bootstrap
+              const gov = governanceAuthorities();
+              let table, tablePresent;
+              if (gov) { table = gov; tablePresent = true; }
+              else {
+                const rs = runtimeState();
+                if (rs._corrupt) {
+                  emit(s.id, 'NORMATIVE_DENIED', { ...base, happened: 'normative denied: runtime-state corrupt (fail closed)', payload: { source_id: src, scope }, source_id: src });
+                  return { ok: false, code: 'NORMATIVE_DENIED', scope, authority: 'corrupt-runtime-state' };
+                }
+                table = rs.normative_authorities || {};
+                tablePresent = rs._present && Object.keys(table).length > 0;
               }
-              const table = rs.normative_authorities || {};
-              const tablePresent = rs._present && Object.keys(table).length > 0;
               const auth = (((table[src] || {}).scopes || {})[scope]);
-              // default-user-root 只在编译投影缺失（fresh canonical bootstrap）时兜底；
-              // 投影存在 → 严格查表，自报 source_id 不能凭空获得权威
+              // default-user-root 只在没有任何权威声明（fresh canonical bootstrap）时兜底；
+              // 权威表存在 → 严格查表，自报 source_id 不能凭空获得权威
               if (auth === 'authoritative' || auth === 'authoritative-via-value-proposal' || (!tablePresent && src === 'user')) {
                 emit(s.id, 'CONSTRAINT_ACCEPTED', { ...base, happened: `normative directive accepted scope=${scope}`, payload: { source_id: src, scope, authority: auth || 'default-user-root', content: content.slice(0, 500) }, source_id: src });
                 return { ok: true, routed: 'constraint', scope, authority: auth || 'default-user-root' };
@@ -546,7 +607,7 @@ export function apply(ctx, config = {}) {
             for (const [pid] of s.predictions) { if (!s.evaluated.has(pid)) merged.add(pid); }
             for (const pid of s.evaluated) merged.delete(pid);
             const patch = { open_predictions: [...merged], last_summary: input.summary || prior.last_summary };
-            if (input.open_loops !== undefined) patch.open_loops = input.open_loops;
+            if (Array.isArray(input.open_loops)) patch.open_loops = input.open_loops;
             const st = updateCurrentJson(patch);
             let proposal;
             if (input.canonical_proposal) {
@@ -576,14 +637,16 @@ export function apply(ctx, config = {}) {
         if (!toolName || !CONSEQUENT_TOOLS.has(toolName)) return undefined;
         const s = sessionFor(execution);
         if (s.mode !== 'core' && s.mode !== 'full') return undefined;
-        const irreversible = isIrreversibleArgs(execution?.arguments ?? execution?.args ?? {});
+        const irreversible = isIrreversibleArgs(execution?.arguments ?? execution?.args ?? execution?.params ?? execution?.input ?? {});
         for (const [pid, p] of s.predictions) {
           if (s.evaluated.has(pid)) continue;   // superseded/evaluated prediction cannot authorize
           const ia = String(p.intended_action || '');
           if (!ia) continue;
-          // 精确绑定：intended_action 必须点名该工具（全名子串）。通用动词
-          // （mutation/change/...）不再授权——"edit notes" 不得放行 exec/mcp_call_tool。
-          const bound = ia.toLowerCase().includes(toolName);
+          // 精确绑定：intended_action 里该工具名必须是独立 token（词边界）。
+          // 子串不算——"credit"/"overwrite" 不再误中 edit/write，"exchange" 不命中
+          // 任何工具；通用动词（mutation/change/...）不再授权。
+          const pat = toolName.split('').map(c => /[-_]/.test(c) ? '[-_]' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
+          const bound = new RegExp(`(^|[^a-z0-9_-])${pat}([^a-z0-9_-]|$)`).test(ia.toLowerCase());
           if (!bound) continue;
           if (irreversible && p.irreversible !== true) continue;
           return undefined; // bound prediction exists → allow
