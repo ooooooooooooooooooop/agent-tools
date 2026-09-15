@@ -159,7 +159,7 @@ const LONG_FLAG_ALIASES = { 'in-place': 'i', inplace: 'i', recursive: 'r', force
 // basename/版本/后缀归一：python3.11 / python.exe / /usr/bin/python3 → python
 function normWord(w) { return w.replace(/\.(exe|com|dll)$/i, '').replace(/[\d.]+$/, ''); }
 // 命令面键：这些键名下的字符串按"可执行内容"绑定（不只 token 重叠）
-const CMD_ARG_KEYS = new Set(['command', 'cmd', 'script', 'code', 'commandline', 'command_line', 'cmdline', 'shell', 'run', 'exec', 'argv', 'input_line', 'stdin', 'program', 'executable', 'file', 'path', 'file_path', 'filepath', 'target', 'url', 'uri']);
+const CMD_ARG_KEYS = new Set(['command', 'cmd', 'script', 'code', 'commandline', 'command_line', 'cmdline', 'shell', 'run', 'exec', 'argv', 'args', 'arguments', 'input_line', 'stdin', 'program', 'executable', 'file', 'path', 'file_path', 'filepath', 'target', 'url', 'uri']);
 // 命令词表：词头落在其中 = 命令面字符串（与扫描器共享同一份语义）
 const CMD_HEAD_LEX = new Set([...INTERPRETERS, ...DESTRUCTIVE_CMDS, ...CMD_WRAPPERS, ...HOST_TOOLS]);
 // execution 上的结构性自有键——参数载体之外的元数据不参与绑定词表
@@ -484,7 +484,7 @@ export function apply(ctx, config = {}) {
         }
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
-        const indent = m[1].length, key = m[2].trim();
+        const indent = m[1].length, key = m[2].trim().replace(/^['"]|['"]$/g, '');
         const val = (m[3] || '').trim();
         if (indent === 0) {
           inBlock = key === 'normative_authorities'; cur = null; inScopes = false; pendingScope = null;
@@ -600,20 +600,24 @@ export function apply(ctx, config = {}) {
         if (!ln.trim()) continue;
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
-        const indent = m[1].length, key = m[2].trim();
+        const indent = m[1].length, key = m[2].trim().replace(/^['"]|['"]$/g, '');
         const val = YAML_NULL((m[3] || '').trim().replace(/^['"]|['"]$/g, ''));
         if (indent === 0) {
           inActive = key === 'active_body';
           if (inActive) {
             sawActive = true;
-            if (val !== '') out._corrupt = true;   // 内联/标量 active_body 解析不了 → 不可信
+            // 'active_body: null' 是出厂骨架的合法"未绑定"态（编译器映射为 {}）；
+            // 其余内联/标量形态解析不了 → 不可信
+            if (val === null) out.active_body = null;
+            else if (val !== '') out._corrupt = true;
           } else if (val !== '') out[key] = val;
           continue;
         }
         if (inActive && indent > 0 && val !== '' && val !== null) (out.active_body ??= {})[key] = val;
       }
-      // active_body 键出现过但一个字段都没解析到 = 静默丢失 lease → 不可信
-      if (sawActive && (!out.active_body || !Object.keys(out.active_body).length)) out._corrupt = true;
+      // active_body 键出现过但既非显式 null 也无字段解析到 = 静默丢失 lease → 不可信
+      if (sawActive && out.active_body === undefined) out._corrupt = true;
+      if (out.active_body && typeof out.active_body === 'object' && !Object.keys(out.active_body).length) out._corrupt = true;
       if (out._corrupt) return { _present: true, _corrupt: true };
       if (out.continuity_epoch != null) {
         const n = Number(out.continuity_epoch);
@@ -638,6 +642,13 @@ export function apply(ctx, config = {}) {
     // lineage.yaml 是权威源：存在即优先于 runtime-state.json 投影
     // （投影可能未重编译而陈旧——陈旧投影不得压制更新的 lease）
     const eff = lin._present ? lin : rs;
+    // lin 在场却没有 active_body 键而投影记录了 lease → 两源矛盾 = 不可信
+    // （否则一份残缺的 lineage.yaml 会静默解锁 rs 里登记的占用者）
+    if (eff === lin && lin._present && lin.active_body === undefined
+        && rs._present && rs.active_body != null) {
+      emit(s.id, 'LEASE_DENIED', { happened: 'lineage.yaml lacks active_body while runtime-state records a lease — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: 'lineage-projection-conflict' };
+    }
     // active_body 存在但畸形（string/0/null/非对象/缺 body_id）= 状态不可信 → fail closed
     const rawActive = eff._present ? eff.active_body : undefined;
     if (rawActive !== undefined && rawActive !== null
@@ -903,7 +914,7 @@ export function apply(ctx, config = {}) {
                   if (typeof m.declass_ref !== 'string' || !m.declass_ref.trim()) return false;
                   const ref = m.declass_ref.trim();
                   if (ref.includes('..') || isAbsolute(ref)) return false;
-                  try { return existsSync(join(canonicalDir, ref)); } catch { return false; }
+                  try { return statSync(join(canonicalDir, ref)).isFile(); } catch { return false; }
                 })();
                 if ((level === 'SANITIZED' || level === 'PUBLIC') && !declassOk) level = 'INTERNAL';
                 m.access = { level, basis: ['taint_or_default'] };
@@ -1266,8 +1277,13 @@ export function apply(ctx, config = {}) {
         // 命令面收集：命令型键名 / 词头落命令词表 / 含 shell 元字符（任何键下）→
         // 结构绑定对象；键名自身落命令词表同样算面（{rm:'-rf /'} 的键就是命令头）。
         const cmdSurface = [];
-        const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=\S*(\s+|$)/;
+        // env 赋值的 value 字符集必须排除 shell 元字符——'X=1;rm -rf /' 的
+        // \S* 会把 ';rm' 吞进"value"再剥掉，让残留 '-rf /' 免检逃逸。
+        const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=[^\s;&|`<>\n$()'"\\]*(\s+|$)/;
         const SHELL_META_RE = /[;|&`<>\n]|\$\(/;
+        // 文件内容键不是命令载体——write/edit 的 content/new_str 里出现
+        // 换行或 '>' 是文本不是命令；但仍进 argPool 做 token 重叠绑定。
+        const CONTENT_KEYS = new Set(['content', 'new_str', 'new_string', 'old_str', 'old_string', 'patch']);
         // head = 剥 env 赋值前缀后首词的 basename：/bin/rm → rm；FOO=x rm → rm
         const cmdHead = (s) => {
           let rest = s;
@@ -1277,6 +1293,7 @@ export function apply(ctx, config = {}) {
         const pushSurface = (sv, key) => {
           const s = String(sv).trim();
           if (!s) return;
+          if (key && CONTENT_KEYS.has(key)) return;   // 内容键不做命令面判定
           if ((key && CMD_ARG_KEYS.has(key)) || CMD_HEAD_LEX.has(cmdHead(s)) || SHELL_META_RE.test(s)) cmdSurface.push(s);
         };
         const walkCmd = (v, key) => {
@@ -1320,18 +1337,33 @@ export function apply(ctx, config = {}) {
           //    'predict exec ls' 不再授权 'exec "ls; rm -rf /"'；
           //    'predict exec rm' 不再授权 'exec "rm -rf /"'（rf flag 未命名）。
           if (argToks.size && ![...argToks].some(t => iaToks.has(t))) continue;
+          // ia 里的单字符 token（'exec rm -r' 的 r）进独立集合——单字符 flag
+          // 也能被签名要求命中，否则 'exec rm' 会授权 'rm -r /'
+          const iaChars = new Set(ia.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length === 1));
           let structOk = true;
-          for (const cs0 of cmdSurface) {
+          const surfaces = cmdSurface.map(cs0 => {
             let cs = cs0;
             while (ENV_ASSIGN.test(cs)) cs = cs.replace(ENV_ASSIGN, '');
-            const cst = scanTokens(cs);
+            return { cs, cst: scanTokens(cs) };
+          });
+          for (const { cst } of surfaces) {
             const cWords = cst.words.map(normWord);
             const head = cWords.find(w => w.length >= 2 && !/^\d+$/.test(w));
             if (head && !iaToks.has(head)) { structOk = false; break; }
-            // 任一词落命令词表即触发严格签名——/bin/rm 的 head 是 'bin' 也逃不过 'rm'
-            if (SHELL_META_RE.test(cs) || cWords.some(w => CMD_HEAD_LEX.has(w))) {
-              const sig = [...cst.words, ...cst.flagWords, [...cst.flagChars].join('')].filter(x => x && x.length >= 2);
-              if (!sig.every(x => iaToks.has(x))) { structOk = false; break; }
+          }
+          // 全局严格签名：任一命令面含元字符或词表词头 → 全部命令面的
+          // 词+flag 签名 ⊆ ia——program:'rm' + args:['-rf','/'] 的拆分形态
+          // 与嵌套数组片段不能再散装逃逸。
+          const strictNeeded = surfaces.some(({ cs, cst }) =>
+            SHELL_META_RE.test(cs) || cst.words.some(w => CMD_HEAD_LEX.has(normWord(w))));
+          if (structOk && strictNeeded) {
+            const sig = new Set();
+            for (const { cst } of surfaces) {
+              // 只收含字母数字的 token——' '/'/' 这类分隔符 token 无法被 ia 命名
+              for (const x of [...cst.words, ...cst.flagWords, [...cst.flagChars].join('')]) if (x && /[a-z0-9]/i.test(x)) sig.add(x);
+            }
+            for (const x of sig) {
+              if (x.length >= 2 ? !iaToks.has(x) : !iaChars.has(x)) { structOk = false; break; }
             }
           }
           if (!structOk) continue;
