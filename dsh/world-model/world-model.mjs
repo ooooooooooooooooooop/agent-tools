@@ -31,6 +31,12 @@ const SCHEMA_VERSION = '1.2';
 const THEORY_VERSION = '0.4';
 const BCC_VERSION = 'BCC-1';
 const BRIEF_HARD_CAP = 8 * 1024;
+// 工具名归一：小写 + 去 -_ 分隔 + 去可执行后缀（str-replace-editor /
+// StrReplaceEditor / str_replace_editor / sh.exe 归一到同一身份）——
+// 分隔符变体和大小写不再是逃逸面。
+function normToolName(n) {
+  return String(n).toLowerCase().trim().replace(/\.(exe|com|bat|cmd|ps1)$/i, '').replace(/[-_\s]/g, '');
+}
 const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'str_replace_editor', 'notebook_edit', 'exec', 'mcp_call_tool', 'apply_patch', 'write_to_process', 'request_scope',
   // 跨 harness 常见别名——守卫集宁宽勿窄（不在 harness 里的名字无代价，
   // 在而没登记的 = 完全无守卫的变更通道）。
@@ -38,13 +44,35 @@ const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'str_re
   'run_command', 'run-command', 'execute', 'execute_command', 'execute-command',
   'run_terminal_command', 'shell_exec', 'editor', 'file_editor', 'file-editor',
   'str_replace', 'patch', 'create_file', 'delete_file', 'move_file', 'fs_write',
-  'fs_edit', 'browser', 'computer', 'computer_use', 'mcp', 'call_tool', 'tool_call']);
-// 默认不可逆：参数=任意命令/远端调用/权限申请的通道，载荷不可静态证安全 →
-// 一律要求 irreversible:true 预测。扫描器在此之下只剩纵深意义。
+  'fs_edit', 'browser', 'computer', 'computer_use', 'mcp', 'call_tool', 'tool_call',
+  'multi_edit', 'multiedit', 'multi-edit', 'call_mcp_tool', 'write_file', 'edit_file',
+  'replace_in_file', 'rename_file', 'copy_file'].map(normToolName));
+// 词根前缀：归一名以这些开头 = 命令执行/文件删除移动/GUI 动作类
+const CONSEQUENT_STEMS = ['exec', 'shell', 'bash', 'terminal', 'powershell', 'pwsh',
+  'shellexec', 'runcommand', 'runterminal', 'mcp', 'calltool', 'toolcall', 'callmcp',
+  'browser', 'computer', 'deletefile', 'movefile', 'createfile', 'writefile',
+  'editfile', 'replaceinfile', 'renamefile', 'copyfile', 'patchfile', 'applypatch',
+  'notebookedit', 'strreplace', 'multiedit'];
+function isConsequential(name) {
+  const tn = normToolName(name);
+  if (!tn) return false;
+  return CONSEQUENT_TOOLS.has(tn) || CONSEQUENT_STEMS.some(st => tn.startsWith(st));
+}
+// 默认不可逆：参数=任意命令/远端调用/权限申请/GUI动作/删除移动的通道，载荷不可
+// 静态证安全 → 一律要求 irreversible:true 预测。扫描器在此之下只剩纵深意义。
+// 文件编辑类（edit/write/patch/fs_write）保持检测层——VCS 下可回滚。
 const IRREVERSIBLE_BY_DEFAULT = new Set(['exec', 'mcp_call_tool', 'write_to_process', 'request_scope',
   'bash', 'shell', 'terminal', 'sh', 'powershell', 'pwsh', 'cmd', 'run', 'command',
   'run_command', 'run-command', 'execute', 'execute_command', 'execute-command',
-  'run_terminal_command', 'shell_exec', 'mcp', 'call_tool', 'tool_call']);
+  'run_terminal_command', 'shell_exec', 'mcp', 'call_tool', 'tool_call',
+  'delete_file', 'move_file', 'browser', 'computer', 'computer_use', 'multi_edit'].map(normToolName));
+const IRREVERSIBLE_STEMS = ['exec', 'shell', 'bash', 'terminal', 'powershell', 'pwsh',
+  'shellexec', 'runcommand', 'runterminal', 'mcp', 'calltool', 'toolcall', 'callmcp',
+  'browser', 'computer', 'deletefile', 'movefile'];
+function isIrreversibleByDefault(name) {
+  const tn = normToolName(name);
+  return IRREVERSIBLE_BY_DEFAULT.has(tn) || IRREVERSIBLE_STEMS.some(st => tn.startsWith(st));
+}
 // 不可逆判定（宽检测、安全方向偏向）：arguments 全部字符串值展平 → unicode 归一
 // （全角/长短破折号→-，弯引号→'，驼峰边界断词）→ 按空白+shell 元字符+路径分隔
 // 切词（管道/分号/$(…)/重定向/路径段都断词）→ 剥引号 → flag 归一 → basename/
@@ -235,13 +263,20 @@ export function apply(ctx, config = {}) {
   let globalSeq = 0;
   // session id 卫生：非字符串 id 坍缩成 "[object Object]" 会合并会话——哈希区分；
   // 文件路径单独消毒（含 hash 后缀防 '..' / 路径逃逸 / 伪造他人 run 文件）。
-  let anonSid = null;
+  let anonSidShared = null;
   function safeSid(raw) {
+    // 事件路径（tools/result、session/event）：非字符串 sid 归到本实例唯一的
+    // 随机 anon 桶——不可预测、且只产生一个 run 文件（防事件风暴垃圾）。
     if (typeof raw === 'string' && raw) return raw;
-    // 非字符串 sid 用本实例唯一的随机 anon 桶——攻击者无法预计算碰撞值；
-    // 每实例一个（非每调用一个）避免事件风暴刷出 run 文件垃圾。
-    if (!anonSid) anonSid = 'anon-' + randomUUID().slice(0, 12);
-    return anonSid;
+    if (!anonSidShared) anonSidShared = 'anon-' + randomUUID().slice(0, 12);
+    return anonSidShared;
+  }
+  function safeSidStrict(raw) {
+    // 执行/守卫路径：非字符串 sid 每调用独立成新会话——畸形 id 永远没有会话
+    // 连续性，predict/guard 无法跨调用累积授权（fail closed），也杜绝畸形
+    // sid 之间共享预测桶的串话。
+    if (typeof raw === 'string' && raw) return raw;
+    return 'anon-' + randomUUID().slice(0, 12);
   }
   function sessionFileId(sid) {
     const clean = String(sid).replace(/[^A-Za-z0-9._-]/g, '_') || 'x';
@@ -250,7 +285,7 @@ export function apply(ctx, config = {}) {
     return ('s-' + clean).slice(0, 48) + '-' + createHash('sha256').update(String(sid)).digest('hex').slice(0, 8);
   }
   function sessionFor(exec) {
-    const sid = safeSid(exec?.agent?.session?.id ?? exec?.session?.id);
+    const sid = safeSidStrict(exec?.agent?.session?.id ?? exec?.session?.id);
     if (!sessions.has(sid)) sessions.set(sid, {
       id: sid, mode: envMode, predictions: new Map(), evaluated: new Set(), restored: new Set(),
       activated: envMode !== 'off', seq: 0, lastEventId: null
@@ -280,7 +315,8 @@ export function apply(ctx, config = {}) {
       // Object.prototype 会崩掉整个权威表 → 静默退回 bootstrap）。own-prop 语义。
       const table = Object.create(null);
       let inBlock = false, cur = null, inScopes = false, found = false;
-      for (const ln of readFileSync(gp, 'utf8').split(/\r?\n/)) {
+      // BOM/CRLF 归一：BOM 会让首行缩进错位 → 整个权威节静默失配
+      for (const ln of readFileSync(gp, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)) { // eslint-disable-line
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
         const indent = m[1].length, key = m[2].trim();
@@ -295,7 +331,11 @@ export function apply(ctx, config = {}) {
       }
       // 文件存在但无 normative_authorities 节 → 未声明权威 → 回退投影/bootstrap 判定
       _govCache = found ? table : null;
-    } catch { _govCache = null; }
+    } catch {
+      // 存在但不可读/解析失败（目录、损坏）→ 权威声明失效 = deny-all，
+      // 绝不能静默回退 bootstrap（会把 default-user-root 送给自报 user）
+      _govCache = Object.create(null);
+    }
     return _govCache;
   }
 
@@ -370,22 +410,34 @@ export function apply(ctx, config = {}) {
       return { ok: false, holder: active.body_id };
     }
     if (active.body_id === bodyId) {
-      // fork detection：已记录的 head 之后，head 缺失/变化/epoch 回退都 = 不可信 → 拒写
+      // fork detection：已记录的 head 之后，head 缺失/变化/epoch 回退都 = 不可信 → 拒写。
+      // head 必须是 string|null——对象/数字会让 !== 比较每次自叉（自锁死）。
       const head = rs.lineage_head;
+      if (head != null && typeof head !== 'string') {
+        emit(s.id, 'LEASE_DENIED', { happened: 'lineage_head malformed (non-string) — fail closed', payload: { seen_type: typeof head }, source: 'plugin' });
+        return { ok: false, holder: 'lineage-head-malformed' };
+      }
       if (bodyState.last_lineage_head && head !== bodyState.last_lineage_head) {
         emit(s.id, 'FORK_DETECTED', { happened: 'canonical lineage_head changed/missing under active lease', payload: { expected: bodyState.last_lineage_head, seen: head }, source: 'plugin' });
         return { ok: false, holder: 'fork-detected' };
       }
-      // epoch 必须有限数值——非数值（"abc"/NaN/Infinity）= 状态不可信 → fail closed，
+      // epoch 必须安全整数——非整数/非数值（"abc"/NaN/1e99/5.5）= 状态不可信 → fail closed，
       // 且绝不写进 epoch_seen（否则毒化 floor 后真实回退也被放行）。
-      if (rs.continuity_epoch != null && !Number.isFinite(rs.continuity_epoch)) {
-        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch malformed (non-finite) — fail closed', payload: { seen: rs.continuity_epoch }, source: 'plugin' });
+      if (rs.continuity_epoch != null && !Number.isSafeInteger(rs.continuity_epoch)) {
+        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch malformed (non-integer) — fail closed', payload: { seen: rs.continuity_epoch }, source: 'plugin' });
         return { ok: false, holder: 'epoch-malformed' };
       }
-      const seenEpoch = Number.isFinite(bodyState.epoch_seen) ? bodyState.epoch_seen : null;
-      if (seenEpoch != null && rs.continuity_epoch != null && rs.continuity_epoch < seenEpoch) {
-        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch regressed — state not trusted', payload: { seen: rs.continuity_epoch, expected_min: seenEpoch }, source: 'plugin' });
-        return { ok: false, holder: 'epoch-regression' };
+      const seenEpoch = Number.isSafeInteger(bodyState.epoch_seen) ? bodyState.epoch_seen : null;
+      if (seenEpoch != null && rs.continuity_epoch != null) {
+        if (rs.continuity_epoch < seenEpoch) {
+          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch regressed — state not trusted', payload: { seen: rs.continuity_epoch, expected_min: seenEpoch }, source: 'plugin' });
+          return { ok: false, holder: 'epoch-regression' };
+        }
+        // 前跳荒谬值（5→1e9）也会永久锁死 floor —— 超界即不可信
+        if (rs.continuity_epoch > seenEpoch + 1000000) {
+          emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch implausible forward jump — fail closed', payload: { seen: rs.continuity_epoch, expected_max: seenEpoch + 1000000 }, source: 'plugin' });
+          return { ok: false, holder: 'epoch-forward-jump' };
+        }
       }
       bodyState.last_lineage_head = head || bodyState.last_lineage_head;
       if (rs.continuity_epoch != null) bodyState.epoch_seen = rs.continuity_epoch;
@@ -399,14 +451,20 @@ export function apply(ctx, config = {}) {
   function writeProposal(kind, payload, sessionId, s, access) {
     const lease = s ? leaseCheck(s) : { ok: true };
     if (!lease.ok) return { denied: true, holder: lease.holder };
+    const body = safeJson({
+      schema_version: SCHEMA_VERSION, kind, session_id: sessionId,
+      timestamp: new Date().toISOString(), body_id: bodyId,
+      classification: { level: access || 'PRIVATE', basis: ['taint_or_default'] },
+      payload, status: 'proposed'
+    });
+    // canonical 提案也有界：无界写入 = 经 canonical 灌任意体积数据
+    if (bytes(body) > 256 * 1024) {
+      emit(sessionId, 'PROPOSAL_DENIED', { happened: 'proposal exceeds 256KiB cap', payload: { kind }, source: 'plugin' });
+      return { denied: true, holder: 'proposal-too-large' };
+    }
     const p = join(canonicalDir, 'proposals', `${today()}-${kind}-${randomUUID().slice(0, 8)}.json`);
     try {
-      writeFileSync(p, safeJson({
-        schema_version: SCHEMA_VERSION, kind, session_id: sessionId,
-        timestamp: new Date().toISOString(), body_id: bodyId,
-        classification: { level: access || 'PRIVATE', basis: ['taint_or_default'] },
-        payload, status: 'proposed'
-      }));
+      writeFileSync(p, body);
       if (!existsSync(p)) return { denied: true, holder: 'proposal-write-unverified' };
     } catch (e) {
       emit(sessionId, 'LEASE_DENIED', { happened: `proposal write failed: ${e?.message || e}`, payload: { kind }, source: 'plugin' });
@@ -506,7 +564,7 @@ export function apply(ctx, config = {}) {
           // 恢复的 open_predictions 记为 known——跨会话 evaluate 合法；未知 pid 不计入 evaluated
           try {
             const prior = readJson(join(wmDir, 'current.json')) || {};
-            for (const pid of (prior.open_predictions || [])) s.restored.add(pid);
+            for (const pid of (Array.isArray(prior.open_predictions) ? prior.open_predictions : [])) s.restored.add(pid);
           } catch { /* restore best-effort */ }
           const stale = canonicalStale();
           emit(s.id, 'STATE_RESTORE', {
@@ -611,6 +669,16 @@ export function apply(ctx, config = {}) {
             return { ok: true, prediction_id: pid };
           }
           case 'observe': {
+            // prediction_id 声称关联必须可证：未知 pid 或外属 pid → 拒绝（防伪造关联）
+            if (input.prediction_id != null && input.prediction_id !== '') {
+              const pid = input.prediction_id;
+              if (!s.predictions.has(pid)) {
+                if (!s.restored.has(pid)) return { ok: false, code: 'UNKNOWN_PREDICTION', prediction_id: pid };
+                const prior = readJson(join(wmDir, 'current.json')) || {};
+                const owner = Object.hasOwn(prior.prediction_owners || {}, pid) ? prior.prediction_owners[pid] : undefined;
+                if (owner !== s.id) return { ok: false, code: 'FOREIGN_PREDICTION', prediction_id: pid, owner: owner || 'unowned' };
+              }
+            }
             emit(s.id, 'OBSERVATION_RECORDED', { ...base, prediction_id: input.prediction_id, happened: 'observation linked', payload: { observation: input.observation, source: input.source }, source_id: input.source_id, channel_id: input.channel_id, sensor_id: input.sensor_id });
             return { ok: true };
           }
@@ -646,7 +714,11 @@ export function apply(ctx, config = {}) {
             // 审计顺序：先验租约（失败只落 LEASE_DENIED），再落成功事件
             const lease = leaseCheck(s);
             if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
-            const r = writeProposal('model-update', { model_id: input.model_id, revision_type: input.revision_type, change: input.change, reason: input.reason, update_class: input.update_class || 'world_model' }, s.id, s);
+            // kind 与 update_class 一致：u0/u1 提案走对应评审通道，不出现
+            // kind=model-update 而 class=governance_u0 的类别混淆。
+            const uclass = String(input.update_class || 'world_model');
+            const pkind = /^[a-z0-9_-]+$/.test(uclass) && uclass !== 'world_model' ? uclass : 'model-update';
+            const r = writeProposal(pkind, { model_id: input.model_id, revision_type: input.revision_type, change: input.change, reason: input.reason, update_class: uclass }, s.id, s);
             if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
             // 审计顺序：proposal 落盘成功后才允许出现 MODEL_UPDATED
             emit(s.id, 'MODEL_UPDATED', { ...base, model_id: input.model_id, prediction_id: input.prediction_id, happened: `revision=${input.revision_type}`, payload: { revision_type: input.revision_type, change: input.change, reason: input.reason, supersedes: input.supersedes, update_class: input.update_class || 'world_model', proposal: r.path } });
@@ -720,8 +792,27 @@ export function apply(ctx, config = {}) {
               return { ok: false, code: 'NORMATIVE_DENIED', scope, authority: auth || 'none' };
             }
             if (st === 'AUTHORIZATION') {
+              // AUTHORIZATION 也要查权威——无权威的 source 自报许可不能留下成功记录
+              const govA = governanceAuthorities();
+              let tableA, tablePresentA;
+              if (govA) { tableA = govA; tablePresentA = true; }
+              else {
+                const rs = runtimeState();
+                if (rs._corrupt) {
+                  emit(s.id, 'AUTHORIZATION_DENIED', { ...base, happened: 'authorization denied: runtime-state corrupt (fail closed)', payload: { source_id: src, scope }, source_id: src });
+                  return { ok: false, code: 'AUTHORIZATION_DENIED', scope, authority: 'corrupt-runtime-state' };
+                }
+                tableA = rs.normative_authorities || {};
+                tablePresentA = rs._present && Object.keys(tableA).length > 0;
+              }
+              const entryA = Object.hasOwn(tableA, src) ? tableA[src] : null;
+              const authA = (((entryA || {}).scopes || {})[scope]);
+              if (authA !== 'authoritative' && !(!tablePresentA && src === 'user')) {
+                emit(s.id, 'AUTHORIZATION_DENIED', { ...base, happened: `authorization denied: ${src} lacks authority on ${scope}`, payload: { source_id: src, scope, authority: authA || 'none' }, source_id: src });
+                return { ok: false, code: 'AUTHORIZATION_DENIED', scope, authority: authA || 'none' };
+              }
               emit(s.id, 'AUTHORIZATION_RECORDED', { ...base, happened: `authorization ${src} → ${input.action_ref || scope}`, payload: { source_id: src, scope, action_ref: input.action_ref, content: content.slice(0, 300) }, source_id: src });
-              return { ok: true, routed: 'session_authorization', note: 'action-scoped permission; NOT a durable value' };
+              return { ok: true, routed: 'session_authorization', authority: authA || 'default-user-root', note: 'action-scoped permission; NOT a durable value' };
             }
             if (st === 'DURABLE_VALUE_STATEMENT') {
               const lease = leaseCheck(s);
@@ -749,28 +840,27 @@ export function apply(ctx, config = {}) {
             return { ok: true, proposal: r.path };
           }
           case 'persist': {
-            // canonical_proposal 带租约语义——先验租约再落 STATE_PERSISTED，保证审计顺序真实
+            // canonical_proposal 带租约语义——提案先落盘，成功才提交 current.json，
+            // STATE_PERSISTED 最后落账；任何一步失败不留半成品状态
+            let proposal;
             if (input.canonical_proposal) {
               const lease = leaseCheck(s);
               if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
+              const r = writeProposal('canonical', input.canonical_proposal, s.id, s);
+              if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
+              proposal = r.path;
             }
-            emit(s.id, 'STATE_PERSISTED', { ...base, happened: 'state persisted', payload: { summary: input.summary, open_loops: input.open_loops } });
             const cur = join(wmDir, 'current.json');
             let prior = {};
             try { if (existsSync(cur)) prior = JSON.parse(readFileSync(cur, 'utf8')); } catch { /* ignore */ }
             const merged = new Set(Array.isArray(prior.open_predictions) ? prior.open_predictions : []);
-            const owners = { ...(prior.prediction_owners && typeof prior.prediction_owners === 'object' ? prior.prediction_owners : {}) };
+            const owners = Object.assign(Object.create(null), (prior.prediction_owners && typeof prior.prediction_owners === 'object' ? prior.prediction_owners : {}));
             for (const [pid] of s.predictions) { if (!s.evaluated.has(pid)) { merged.add(pid); owners[pid] = s.id; } }
             for (const pid of s.evaluated) { merged.delete(pid); delete owners[pid]; }
             const patch = { open_predictions: [...merged], prediction_owners: owners, last_summary: input.summary || prior.last_summary };
             if (Array.isArray(input.open_loops)) patch.open_loops = input.open_loops;
             const st = updateCurrentJson(patch);
-            let proposal;
-            if (input.canonical_proposal) {
-              const r = writeProposal('canonical', input.canonical_proposal, s.id, s);
-              if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder, state: st };
-              proposal = r.path;
-            }
+            emit(s.id, 'STATE_PERSISTED', { ...base, happened: 'state persisted', payload: { summary: input.summary, open_loops: input.open_loops } });
             return proposal ? { ok: true, state: st, canonical_proposal: proposal } : { ok: true, state: st };
           }
           case 'status': {
@@ -790,21 +880,21 @@ export function apply(ctx, config = {}) {
   try {
     ctx.tools.guard((execution) => {
       try {
-        const toolName = String(execution?.name || '').trim().toLowerCase();
-        if (!toolName || !CONSEQUENT_TOOLS.has(toolName)) return undefined;
+        const rawName = String(execution?.name || '');
+        const toolName = normToolName(rawName);
+        if (!toolName || !isConsequential(rawName)) return undefined;
         const s = sessionFor(execution);
         if (s.mode !== 'core' && s.mode !== 'full') return undefined;
-        const irreversible = IRREVERSIBLE_BY_DEFAULT.has(toolName)
+        const irreversible = isIrreversibleByDefault(rawName)
           || isIrreversibleArgs(execution?.arguments ?? execution?.args ?? execution?.params ?? execution?.input ?? {});
         for (const [pid, p] of s.predictions) {
           if (s.evaluated.has(pid)) continue;   // superseded/evaluated prediction cannot authorize
           const ia = String(p.intended_action || '');
           if (!ia) continue;
-          // 精确绑定：intended_action 里该工具名必须是独立 token（词边界）。
-          // 子串不算——"credit"/"overwrite" 不再误中 edit/write，"exchange" 不命中
-          // 任何工具；通用动词（mutation/change/...）不再授权。
-          const pat = toolName.split('').map(c => /[-_]/.test(c) ? '[-_]' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
-          const bound = new RegExp(`(^|[^a-z0-9_-])${pat}([^a-z0-9_-]|$)`).test(ia.toLowerCase());
+          // 精确绑定：intended_action 里该工具名必须是独立 token（词边界），
+          // 分隔符 -_ 可选等价。子串不算——"credit"/"overwrite" 不再误中 edit/write。
+          const pat = [...toolName].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s]?');
+          const bound = new RegExp(`(^|[^a-z0-9])${pat}([^a-z0-9]|$)`).test(ia.toLowerCase());
           if (!bound) continue;
           if (irreversible && p.irreversible !== true) continue;
           return undefined; // bound prediction exists → allow
@@ -814,8 +904,7 @@ export function apply(ctx, config = {}) {
       } catch {
         // fail closed：守卫自身异常时，consequential 工具拒绝放行
         try {
-          const tn = String(execution?.name || '').trim().toLowerCase();
-          if (CONSEQUENT_TOOLS.has(tn)) return '[dsh-world-model] BLOCKED: guard internal error (fail closed)';
+          if (isConsequential(execution?.name)) return '[dsh-world-model] BLOCKED: guard internal error (fail closed)';
         } catch { /* fall through */ }
         return undefined;
       }
