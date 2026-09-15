@@ -9,7 +9,14 @@ so the account sees a bounded request rate no matter which process asks.
 
 State: ``~/.chatgpt_web2api/request_pace.json``
 
-    {"last_send_at": f, "last_read_at": f, "cooldown_until": f}
+    {"last_send_at": f, "last_read_at": f,
+     "cooldown_until": f, "read_cooldown_until": f}
+
+``cooldown_until`` is the full gate (send-path rate limit — ChatGPT's popup
+blocks the whole UI, so both sends and reads honor it). ``read_cooldown_until``
+is narrower: ChatGPT's conversation-endpoint limiter (429 on
+``/backend-api/conversation*``) is endpoint-scoped — sends keep working while
+it is active, so it gates reads only.
 
 This is pacing, not a lock — a lost read-modify-write race merely loosens
 pacing slightly. Each pace() re-reads the file after sleeping so a peer's
@@ -17,11 +24,14 @@ update during our wait is honored.
 """
 import asyncio
 import json
+import logging
 import os
 import time
 from pathlib import Path
 
 from .tab_registry import REGISTRY_DIR
+
+logger = logging.getLogger(__name__)
 
 PACE_PATH = REGISTRY_DIR / "request_pace.json"
 
@@ -91,34 +101,67 @@ class RequestPace:
         """
         interval = self.send_interval if kind == "send" else self.read_interval
         waited = 0.0
+        in_cooldown = False
         async with self._lock:
             for _ in range(4):
                 state = self._read_state()
                 now = time.time()
+                cooldown_until = state.get("cooldown_until", 0.0)
+                if kind == "read":
+                    cooldown_until = max(
+                        cooldown_until, state.get("read_cooldown_until", 0.0)
+                    )
                 due = max(
-                    state.get("cooldown_until", 0.0),
+                    cooldown_until,
                     state.get(f"last_{kind}_at", 0.0) + interval,
                 )
                 wait = due - now
                 if wait <= 0:
                     break
+                in_cooldown = in_cooldown or cooldown_until > now
                 waited += wait
                 await asyncio.sleep(wait)
             state = self._read_state()
             state[f"last_{kind}_at"] = time.time()
             self._write_state(state)
+        if waited >= 1.0:
+            logger.info(
+                "pace(%s): waited %.1fs%s", kind, waited,
+                " (account cooldown in effect)" if in_cooldown else "",
+            )
         return waited
 
-    def record_throttle(self, seconds: float | None = None) -> float:
+    def record_throttle(
+        self,
+        seconds: float | None = None,
+        *,
+        source: str = "",
+        kind: str = "send",
+    ) -> float:
         """Set a shared cooldown after a throttle/429 signal.
 
-        Any process that observes ChatGPT's rate-limit popup or a backend 429
-        writes ``cooldown_until``; every other process honors it on its next
-        paced call. Returns the cooldown_until timestamp.
+        ``kind="send"`` (rate-limit popup on the send path — the account-wide
+        signal) writes ``cooldown_until``, which gates both sends and reads.
+        ``kind="read"`` (429 on ``/backend-api/conversation*`` — ChatGPT's
+        endpoint-scoped conversation limiter) writes ``read_cooldown_until``,
+        which gates reads only: sends still go through, matching the upstream
+        behavior where the modal blocks conversation history while other
+        endpoints keep answering 200.
+
+        Returns the cooldown_until timestamp. ``source`` names the observing
+        call site so the log can attribute the cooldown.
         """
+        key = "read_cooldown_until" if kind == "read" else "cooldown_until"
         state = self._read_state()
-        until = time.time() + (seconds if seconds and seconds > 0 else self.cooldown_seconds)
-        if until > state.get("cooldown_until", 0.0):
-            state["cooldown_until"] = until
+        now = time.time()
+        until = now + (seconds if seconds and seconds > 0 else self.cooldown_seconds)
+        if until > state.get(key, 0.0):
+            state[key] = until
             self._write_state(state)
+        logger.warning(
+            "%s throttle recorded (source=%s): cooldown %.0fs, until %s",
+            "read-path" if kind == "read" else "account",
+            source or "unspecified", until - now,
+            time.strftime("%H:%M:%S", time.localtime(until)),
+        )
         return until

@@ -272,6 +272,11 @@ def _run_start(args: argparse.Namespace) -> None:
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 
+    # Daemon log file — the hidden-window launch drops stderr.
+    from .diagnostics import attach_daemon_log
+
+    attach_daemon_log(f"rest-{config.server.port}")
+
     # Run
     try:
         asyncio.run(run_service(config))

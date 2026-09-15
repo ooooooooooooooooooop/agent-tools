@@ -4,6 +4,7 @@ Tests the do_* functions in mcp_server.py and API handler logic
 with AsyncMock to avoid needing a live Chrome instance.
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -888,3 +889,133 @@ async def test_wait_reply_legacy_payload_without_status_still_replies():
     )
     assert result["status"] == "replied"
     assert result["tail_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_wait_reply_holds_call_lock_only_around_fetch():
+    """Pool mode: the slot's call_lock is held for each fetch but released
+    across the poll sleep — a 600s wait must not queue every other utility
+    tool (from every session) behind one caller (2026-09-15 incident)."""
+    from chatgpt_web2api.mcp_server import do_wait_reply
+
+    lock = asyncio.Lock()
+    base = _chain_driver([("user", "q")])  # tail stays 'user' → keeps polling
+    locked_during_fetch = []
+
+    async def fetch(cid):
+        locked_during_fetch.append(lock.locked())
+        return await base.get_conversation(cid)
+
+    d = MagicMock()
+    d.get_conversation = fetch
+
+    task = asyncio.create_task(
+        do_wait_reply(
+            d,
+            {"conversation_id": "c", "timeout_seconds": 2, "poll_seconds": 8},
+            call_lock=lock,
+        )
+    )
+    await asyncio.sleep(0.2)  # first fetch done; now sleeping until deadline
+    assert locked_during_fetch == [True]
+    # Another tool on the same slot must get the lock while wait_reply sleeps.
+    await asyncio.wait_for(lock.acquire(), timeout=0.5)
+    lock.release()
+
+    result = await task
+    assert result["status"] == "timeout"
+    assert not lock.locked()
+
+
+# ── conversation read coalescing ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_conv_read_coalesced_cache_hit_within_read_interval(monkeypatch):
+    """A second read within one read interval is served from cache — the
+    shared pace gate could not have returned fresher data anyway, so the
+    extra fetch would only feed the conversation-endpoint limiter."""
+    import contextlib
+
+    from chatgpt_web2api import mcp_server as ms
+
+    monkeypatch.setattr(ms, "_conv_read_ttl", lambda d: 60.0)
+    d = MagicMock()
+    d.get_conversation = AsyncMock(return_value={"id": "c", "mapping": {}})
+
+    first = await ms._conv_read_coalesced(d, "c", contextlib.nullcontext())
+    second = await ms._conv_read_coalesced(d, "c", contextlib.nullcontext())
+    assert first is second
+    assert d.get_conversation.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_conv_read_coalesced_joins_inflight_without_lock():
+    """A concurrent read joins the leader's fetch instead of starting its
+    own — and must not touch the slot lock while joining, or a leader
+    sitting in the shared pace queue would stall the whole slot again."""
+    import contextlib
+
+    from chatgpt_web2api import mcp_server as ms
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    lock = asyncio.Lock()
+    calls = []
+
+    async def slow_fetch(cid):
+        calls.append(cid)
+        started.set()
+        await release.wait()
+        return {"id": cid, "mapping": {}}
+
+    d = MagicMock()
+    d.get_conversation = slow_fetch
+
+    t1 = asyncio.ensure_future(
+        ms._conv_read_coalesced(d, "c", contextlib.nullcontext())
+    )
+    await started.wait()
+    t2 = asyncio.ensure_future(ms._conv_read_coalesced(d, "c", lock))
+    await asyncio.sleep(0.05)
+    assert not lock.locked()  # the joiner never acquired the slot lock
+    release.set()
+    r1, r2 = await asyncio.gather(t1, t2)
+    assert r1 == r2 == {"id": "c", "mapping": {}}
+    assert calls == ["c"]  # one backend fetch served both callers
+
+
+@pytest.mark.asyncio
+async def test_conv_read_coalesced_error_payload_not_cached(monkeypatch):
+    """A failed fetch (_fetch_error / HTTP>=400 envelope) is not cached —
+    the next caller gets a real retry, not a sticky error."""
+    import contextlib
+
+    from chatgpt_web2api import mcp_server as ms
+
+    monkeypatch.setattr(ms, "_conv_read_ttl", lambda d: 60.0)
+    d = MagicMock()
+    d.get_conversation = AsyncMock(return_value={"_fetch_error": "boom"})
+
+    await ms._conv_read_coalesced(d, "c", contextlib.nullcontext())
+    await ms._conv_read_coalesced(d, "c", contextlib.nullcontext())
+    assert d.get_conversation.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_verify_reply_persisted_bypasses_and_refreshes_cache(monkeypatch):
+    """The post-send check reads current truth: a stale cached payload can
+    never satisfy it, and its fresh result repopulates the cache so
+    coalesced waiters see post-send state."""
+    import time as _time
+
+    from chatgpt_web2api import mcp_server as ms
+
+    monkeypatch.setattr(ms, "_conv_read_ttl", lambda d: 60.0)
+    stale = {"id": "c", "mapping": {}}
+    ms._CONV_READ_CACHE["c"] = (_time.monotonic() + 60.0, stale)
+
+    d = _chain_driver([("user", "q"), ("assistant", "a")])
+    assert await ms._verify_reply_persisted(d, "c") is True
+    assert d.get_conversation.await_count == 1
+    fresh = ms._CONV_READ_CACHE["c"][1]
+    assert fresh is not stale and fresh.get("id") == "c"

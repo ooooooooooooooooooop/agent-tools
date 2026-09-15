@@ -89,7 +89,11 @@ async def retry_on_rate_limit(
             # (REST daemon, MCP slots, scripts) honor the cooldown too — the
             # account limit is global, not per-driver.
             try:
-                driver._pace.record_throttle(e.retry_after)
+                driver._pace.record_throttle(
+                    e.retry_after,
+                    source=f"rate-limit popup on send (attempt {attempt}/{max_attempts})",
+                    kind="send",
+                )
             except Exception:
                 pass
             if attempt >= max_attempts:

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from chatgpt_web2api.mcp_driver_pool import (
+    UTILITY_SLOT_KEY,
     AccountThrottleBreaker,
     DriverLease,
     McpSessionDriverPool,
@@ -206,6 +207,33 @@ async def test_idle_ttl_closes_driver_and_removes_mapping():
     assert "sess-1" not in pool._active_keys
 
     await pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_idle_ttl_skips_pinned_utility_slot():
+    """The shared utility slot is exempt from the idle sweep: closing its tab
+    makes the next read tool pay a full page load to recreate it."""
+    pool = McpSessionDriverPool(
+        _make_config(pool_size=2, ttl=0.1, acquire_timeout=2.0),
+        driver_factory=_fake_driver_factory,
+    )
+    pool._sweep_interval = 0.05
+    await pool.start_sweeper()
+
+    async with pool.acquire(UTILITY_SLOT_KEY) as lease:
+        utility_driver = lease.driver
+    async with pool.acquire("sess-1") as lease:
+        session_driver = lease.driver
+
+    await asyncio.sleep(0.3)
+
+    session_driver.close.assert_called_once()
+    assert "sess-1" not in pool._active_keys
+    utility_driver.close.assert_not_called()
+    assert UTILITY_SLOT_KEY in pool._active_keys
+
+    await pool.close_all()
+    utility_driver.close.assert_called_once()  # shutdown still closes it
 
 
 @pytest.mark.asyncio

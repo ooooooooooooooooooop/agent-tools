@@ -201,6 +201,37 @@ logger = logging.getLogger(__name__)
 _DIAG_DIR = DiagnosticsDir()
 _capture_enabled = False
 
+_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024
+_DAEMON_LOG_BACKUPS = 3
+
+
+def attach_daemon_log(name: str) -> Path | None:
+    """Mirror root logging into ``<diagnostics>/<name>.log`` (rotating).
+
+    Daemons run with a hidden window (start.ps1) or stderr=DEVNULL (ensure),
+    so stderr logging is lost — account cooldowns and slot waits were
+    unattributable after the fact. Attached by the daemon entrypoints
+    themselves, so it holds for every launcher. Best-effort: returns the log
+    path, or None when the directory is not writable.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    path = _DIAG_DIR.base / f"{name}.log"
+    try:
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=_DAEMON_LOG_MAX_BYTES,
+            backupCount=_DAEMON_LOG_BACKUPS,
+            encoding="utf-8",
+        )
+    except OSError:
+        return None
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(handler)
+    return path
+
 
 def set_capture_enabled(enabled: bool) -> None:
     """Toggle whether broken results trigger an artifact capture."""

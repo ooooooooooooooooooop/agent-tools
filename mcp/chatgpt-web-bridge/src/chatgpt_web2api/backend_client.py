@@ -326,10 +326,15 @@ class BackendClient:
             if status == 404:
                 raise _Transient404(conversation_id)
             if status == 429:
-                # Account-level throttle seen on the wire — record a shared
-                # cooldown so every process backs off before the next request.
+                # ChatGPT's conversation-endpoint limiter (endpoint-scoped —
+                # sends still work). Record a read-only cooldown so every
+                # process backs off reads before the next request without
+                # freezing the send path.
                 try:
-                    d._pace.record_throttle()
+                    d._pace.record_throttle(
+                        kind="read",
+                        source=f"backend-api 429 (conversation fetch {conversation_id})",
+                    )
                 except Exception:
                     pass
                 raise RuntimeError(f"projection HTTP 429 for {conversation_id}")
@@ -541,6 +546,17 @@ class BackendClient:
             self._check_auth_in_raw(raw)
             envelope = json.loads(raw)
             status = envelope.get("status")
+            if status == 429:
+                # Same endpoint-scoped limiter as the projection path. Without
+                # this, polls during the upstream probation window keep firing
+                # every read interval and extend it.
+                try:
+                    d._pace.record_throttle(
+                        kind="read",
+                        source=f"backend-api 429 (get_conversation {conversation_id})",
+                    )
+                except Exception:
+                    pass
             try:
                 body = json.loads(envelope.get("body") or "")
             except json.JSONDecodeError:

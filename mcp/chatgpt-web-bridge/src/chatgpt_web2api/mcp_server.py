@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -1022,6 +1023,71 @@ _PERSIST_MAX_CHECKS = 3
 _PERSIST_TAIL_USER_DELAY_S = 6.0  # grace when tail is still our own message
 _PERSIST_EMPTY_DELAY_S = 4.0      # retry delay on inconclusive (empty/failed) fetch
 
+# Conversation-read coalescing. Every get_conversation poll hits
+# /backend-api/conversation/{id} — the endpoint family behind ChatGPT's
+# "限制访问对话记录" limiter, which can 429 on a single request once the
+# account is flagged. Multiple waiters across pool slots (wait_reply,
+# get_conversation, post-send checks) used to each issue their own fetch.
+# A single-flight map plus a cache whose TTL equals the read pace interval
+# collapses the duplicates: the pace gate could not have produced fresher
+# data anyway. Verification paths that require current truth (reply
+# persistence) bypass via _verify_reply_persisted's direct fetch.
+_CONV_READ_CACHE: dict[str, tuple[float, dict]] = {}
+_CONV_READ_INFLIGHT: dict[str, asyncio.Task] = {}
+
+
+def _conv_read_ttl(driver: CDPDriver) -> float:
+    return max(1.0, getattr(getattr(driver, "_pace", None), "read_interval", 0.0) or 8.0)
+
+
+def _conv_read_cacheable(payload) -> bool:
+    return isinstance(payload, dict) and not payload.get("_fetch_error") and not (
+        isinstance(payload.get("_fetch_status"), int) and payload["_fetch_status"] >= 400
+    )
+
+
+def _conv_read_store(driver: CDPDriver, conv_id: str, payload) -> None:
+    if _conv_read_cacheable(payload):
+        _CONV_READ_CACHE[conv_id] = (time.monotonic() + _conv_read_ttl(driver), payload)
+
+
+def _conv_read_invalidate(conv_id: str) -> None:
+    _CONV_READ_CACHE.pop(conv_id, None)
+
+
+async def _conv_read_coalesced(
+    driver: CDPDriver, conv_id: str, lock_cm
+) -> dict:
+    """get_conversation with cross-slot dedup.
+
+    Cache hit → return immediately. Peer fetch already in flight → join it
+    via shield, WITHOUT touching lock_cm, so a waiter never holds the slot
+    lock while a leader sits in the shared pace queue. Only a cache-miss
+    leader takes lock_cm around the real fetch.
+    """
+    hit = _CONV_READ_CACHE.get(conv_id)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    task = _CONV_READ_INFLIGHT.get(conv_id)
+    if task is None:
+        async def _lead():
+            async with lock_cm:
+                return await driver.get_conversation(conv_id)
+
+        task = asyncio.ensure_future(_lead())
+        _CONV_READ_INFLIGHT[conv_id] = task
+
+        def _store(t: asyncio.Task, cid: str = conv_id) -> None:
+            if _CONV_READ_INFLIGHT.get(cid) is t:
+                del _CONV_READ_INFLIGHT[cid]
+            try:
+                _conv_read_store(driver, cid, t.result())
+            except BaseException:
+                pass
+
+        task.add_done_callback(_store)
+    return await asyncio.shield(task)
+
 
 async def _verify_reply_persisted(
     driver: CDPDriver, conv_id: str | None
@@ -1039,11 +1105,16 @@ async def _verify_reply_persisted(
     """
     if not conv_id:
         return None
+    # The send just mutated this conversation — a pre-send cache entry must
+    # never satisfy this check, and each fresh result is the newest truth for
+    # any coalesced waiter.
+    _conv_read_invalidate(conv_id)
     for attempt in range(_PERSIST_MAX_CHECKS):
         try:
             data = await driver.get_conversation(conv_id)
             # Non-dict (mock/weird backend) = inconclusive, never crash the send.
             chain = _conversation_chain(data) if isinstance(data, dict) else []
+            _conv_read_store(driver, conv_id, data)
         except Exception:
             # A weird/failed fetch must never break a successful send —
             # inconclusive just means "retry or report unknown".
@@ -1064,10 +1135,17 @@ async def _verify_reply_persisted(
     return None
 
 
-async def do_get_conversation(driver: CDPDriver, args: dict) -> dict:
+async def do_get_conversation(
+    driver: CDPDriver,
+    args: dict,
+    call_lock: asyncio.Lock | None = None,
+) -> dict:
     """Retrieve conversation history (paginated, oldest-first)."""
     validated = GetConversationInput(**args)
-    data = await driver.get_conversation(validated.conversation_id)
+    fetch_lock = call_lock if call_lock is not None else contextlib.nullcontext()
+    data = await _conv_read_coalesced(
+        driver, validated.conversation_id, fetch_lock
+    )
     chain = _conversation_chain(data)
 
     # Why the result looks the way it does — previously 404s, fetch errors
@@ -1114,6 +1192,7 @@ async def do_wait_reply(
     driver: CDPDriver,
     args: dict,
     on_progress: ProgressCallback | None = None,
+    call_lock: asyncio.Lock | None = None,
 ) -> dict:
     """Block until an assistant reply persists (or the deadline hits).
 
@@ -1121,6 +1200,10 @@ async def do_wait_reply(
     prevents is waiting on a ghost — if the last stored message is still the
     caller's own user message, the generation is dead, and the right move is
     a nudge, not more polling. Status tells the two apart.
+
+    ``call_lock`` (pool mode) is the leased slot's per-driver lock: it is held
+    only around each fetch, never across the poll sleep, so a wait of up to
+    ``timeout_seconds`` does not block the other tools sharing that slot.
     """
     validated = WaitReplyInput(**args)
     deadline = time.monotonic() + validated.timeout_seconds
@@ -1129,10 +1212,13 @@ async def do_wait_reply(
     last_role = None
     tail_status = None
     user_tail_since: float | None = None
+    fetch_lock = call_lock if call_lock is not None else contextlib.nullcontext()
 
     while True:
         try:
-            data = await driver.get_conversation(validated.conversation_id)
+            data = await _conv_read_coalesced(
+                driver, validated.conversation_id, fetch_lock
+            )
         except Exception:
             data = {}
         chain = _conversation_chain(data, with_meta=True) if isinstance(data, dict) else []
@@ -1932,7 +2018,11 @@ def create_server() -> Server:
         operations per session. The existing MutationLock is resolved against
         lease.driver (not the global _driver).
         """
-        from .mcp_driver_pool import PoolExhaustedError, PoolShuttingDownError
+        from .mcp_driver_pool import (
+            UTILITY_SLOT_KEY,
+            PoolExhaustedError,
+            PoolShuttingDownError,
+        )
         from .session_key import current_mcp_session_key
 
         # Canary logging — distinguishes failure modes A/B/C/D (see PR #42 review).
@@ -1976,7 +2066,7 @@ def create_server() -> Server:
         elif name in (*_CHATTY, ToolName.CREATE_MEMORY.value):
             slot_key = session_key
         else:
-            slot_key = "utility"
+            slot_key = UTILITY_SLOT_KEY
         if slot_key is None:
             return mcp_types.CallToolResult(
                 content=[mcp_types.TextContent(
@@ -1997,6 +2087,28 @@ def create_server() -> Server:
         try:
             logger.info("pool.acquire entered: slot_key=%s", slot_key)
             async with _driver_pool.acquire(slot_key) as lease:
+                if name in (
+                    ToolName.WAIT_REPLY.value,
+                    ToolName.GET_CONVERSATION.value,
+                ):
+                    # Reads that can wait on or join a shared fetch: holding
+                    # call_lock for their whole duration would queue every
+                    # other read tool, from every session, behind one caller.
+                    # Take the lock only for the breaker check; the handler
+                    # re-acquires it around each real fetch (never while
+                    # sleeping or joining a peer's in-flight read).
+                    async with lease.call_lock:
+                        await _fail_fast_on_open_breaker(lease.driver, lease.breakers)
+                    if name == ToolName.WAIT_REPLY.value:
+                        result = await do_wait_reply(
+                            lease.driver, arguments, on_progress, call_lock=lease.call_lock
+                        )
+                    else:
+                        result = await do_get_conversation(
+                            lease.driver, arguments, call_lock=lease.call_lock
+                        )
+                    return _format_tool_result(name, result)
+
                 async with lease.call_lock:
                     driver = lease.driver
                     breakers = lease.breakers
@@ -2016,15 +2128,7 @@ def create_server() -> Server:
                                     exc_info=True,
                                 )
 
-                    # Circuit-open fail-fast on the leased driver's breakers.
-                    if breakers is not None:
-                        open_kind = breakers.first_open()
-                        if open_kind is not None:
-                            if open_kind is BreakerKind.AUTH_EXPIRED:
-                                if await driver.recover_auth():
-                                    open_kind = breakers.first_open()
-                            if open_kind is not None:
-                                raise CircuitOpenError(open_kind)
+                    await _fail_fast_on_open_breaker(driver, breakers)
 
                     # Build handlers bound to the LEASED driver (not _driver).
                     handler = _build_tool_handler(name, arguments, driver, on_progress)
@@ -2074,6 +2178,18 @@ def create_server() -> Server:
             if mapped is not None:
                 return mapped
             raise
+
+    async def _fail_fast_on_open_breaker(driver, breakers) -> None:
+        """Circuit-open fail-fast on the leased driver's breakers."""
+        if breakers is None:
+            return
+        open_kind = breakers.first_open()
+        if open_kind is not None:
+            if open_kind is BreakerKind.AUTH_EXPIRED:
+                if await driver.recover_auth():
+                    open_kind = breakers.first_open()
+            if open_kind is not None:
+                raise CircuitOpenError(open_kind)
 
     def _build_tool_handler(name, arguments, driver, on_progress):
         """Build a tool handler bound to a specific driver (singleton or leased)."""
@@ -2683,6 +2799,11 @@ def main() -> None:
     )
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("mcp").setLevel(logging.WARNING)
+    if args.transport == "sse":
+        # Shared daemon: nobody reads its stderr. (stdio: the harness owns it.)
+        from .diagnostics import attach_daemon_log
+
+        attach_daemon_log(f"mcp-sse-{args.port}")
 
     config = Config.load(args.config)
     if args.cdp_port:

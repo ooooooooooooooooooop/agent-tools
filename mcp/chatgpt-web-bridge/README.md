@@ -29,7 +29,12 @@ Chrome 里登录 ChatGPT 一次（profile 持久）。
 
 - conv-affinity：一会话一 tab，`/c/{id}` tab 跨进程收养，不导航不关闭
 - `Target.createTarget` 全部 `background:true`——不抢前台焦点
-- `request_pace.py`：账号级跨进程节流（send≥30s / read≥8s / 429→冷却300s）
+- `request_pace.py`：账号级跨进程节流（send≥30s / read≥8s / 429→冷却300s）。
+  冷却分级：发送路径限流弹窗 → `cooldown_until`（读写全停）；读路径
+  `/backend-api/conversation*` 的 429 → `read_cooldown_until`（只停读——
+  上游该限流器是端点级的，发送不受影响）
+- 会话读去重：`wait_reply`/`get_conversation` 的轮询按读间隔合并
+  （in-flight join + TTL=read_interval 缓存），核查类读绕过缓存取真值
 - `resolve_project_id`：project_id 可传项目名，未知/歧义直接报错
 - 上游修复：临时路由误采、zh 占位文本过早完成判定
 - composer 多行插入：会话页 `Input.insertText` 遇 `\n` 只落首段（2026-09-14
@@ -45,5 +50,11 @@ Chrome 里登录 ChatGPT 一次（profile 持久）。
 - `no driver slot available` / health `degraded` + `driver_connected:false`：
   daemon 丢了 CDP 连接且不自愈，重跑 `start.ps1`（幂等，不动 Chrome/登录态）；
   若存在多个同名 daemon 进程，先清掉再起
+- 所有调用一起变慢/挂住：先看 `~/.chatgpt_web2api/request_pace.json`——
+  `cooldown_until` 未过期 = 账号级冷却（读写都等）；`read_cooldown_until`
+  未过期 = 只读端点被限（读等、发送不受影响）。谁触发的看 daemon 日志
+  `~/.chatgpt-web2api/diagnostics/mcp-sse-8090.log`（REST 在
+  `rest-8080.log`）里的 `account/read-path throttle recorded (source=…)`；
+  `lease released … held=` 给出每次调用占槽时长
 
 License: MIT（见 `LICENSE`）。

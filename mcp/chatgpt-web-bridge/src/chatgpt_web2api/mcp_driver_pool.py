@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 # P1.5: cap for lease history records (prevents unbounded growth).
 _LEASE_HISTORY_LIMIT = 100
 
+# Slot key shared by every non-chat (read/maintenance) tool. Its tab is an
+# owned scratch tab: sweeping it closes the tab, and the next read tool pays a
+# full chatgpt.com page load (unpaced backend traffic) to recreate it — so it
+# is pinned: exempt from the idle-TTL sweep. Conversation-bound slots are not
+# pinned; their tabs persist on their own and re-materializing is an adopt.
+UTILITY_SLOT_KEY = "utility"
+PINNED_SLOT_KEYS = frozenset({UTILITY_SLOT_KEY})
+
 
 # ── Errors ────────────────────────────────────────────────────────────────
 
@@ -547,6 +555,10 @@ class McpSessionDriverPool:
                 record.released_at = time.monotonic()
                 record.hold_duration_s = record.released_at - record.acquired_at
                 record.release_reason = release_reason
+                logger.info(
+                    "lease released: session=%s held=%.1fs reason=%s",
+                    slot.session_key, record.hold_duration_s, release_reason,
+                )
                 self._lease_history.append(record)
                 # Cap history to prevent unbounded growth.
                 if len(self._lease_history) > _LEASE_HISTORY_LIMIT:
@@ -587,6 +599,8 @@ class McpSessionDriverPool:
                     slot = self._slots.get(key)
                     if slot is None:
                         self._active_keys.discard(key)
+                        continue
+                    if key in PINNED_SLOT_KEYS:
                         continue
                     async with slot.meta_lock:
                         if (

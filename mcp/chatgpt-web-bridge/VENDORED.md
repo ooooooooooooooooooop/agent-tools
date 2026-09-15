@@ -12,6 +12,20 @@ Local delta carried in this copy (applied on top of upstream):
 - **request pacing** (`request_pace.py`): cross-process account-level throttle —
   send ≥30s, backend reads ≥8s, shared cooldown on 429. Prevents the
   「请求过于频繁/限制访问对话记录」 interstitial instead of reacting to it.
+  Cooldowns are kind-split: a send-path rate limit (UI popup — account-wide)
+  writes `cooldown_until` and gates both kinds; a 429 on
+  `/backend-api/conversation*` — upstream's endpoint-scoped conversation
+  limiter, sends keep working while it is active — writes
+  `read_cooldown_until` and gates reads only.
+- **conversation-read coalescing** (`mcp_server._conv_read_coalesced`):
+  `wait_reply`/`get_conversation` polls dedup across pool slots via an
+  in-flight join plus a cache whose TTL equals the read pace interval — the
+  shared gate could not have returned fresher data anyway, and every saved
+  request is one fewer hit on the flagged endpoint family. A joiner never
+  holds the slot lock while awaiting a peer's fetch. Verification reads
+  (`_verify_reply_persisted`) bypass the cache for current truth, invalidate
+  the conversation's entry at send time, and write fresh results back so
+  coalesced waiters see post-send state immediately.
 - **project name resolution** (`resolve_project_id`): `project_id` accepts an
   exact project name; unknown/ambiguous names fail instead of landing in the
   wrong project.
@@ -62,6 +76,26 @@ Local delta carried in this copy (applied on top of upstream):
   clears the composer — a failed send can no longer leave a draft that
   poisons the next send's canonical verification (observed 2026-09-15:
   recovery previously required manual `evaluate_script` surgery).
+- **`wait_reply` lock scope** (pool mode): the leased slot's `call_lock` is
+  held only around each fetch, not across the poll sleep. It ran on the
+  shared utility slot inside the lock for up to `timeout_seconds`, so one
+  caller's wait queued every other read tool from every session behind it
+  (observed 2026-09-15: a single MCP session shared by all Devin
+  conversations, all of them stalled on chatgpt-web).
+- **pinned utility slot**: `mcp_driver_pool.PINNED_SLOT_KEYS` exempts the
+  shared utility slot from the idle-TTL sweep — closing its owned tab made the
+  next read tool pay a full chatgpt.com page load (unpaced backend traffic)
+  to recreate it. Conversation-bound slots stay sweepable (their tabs persist;
+  re-materializing is an adopt, not a page load).
+- **throttle attribution + pace logging**: `record_throttle(source=…)` logs
+  which call site observed the 429 / rate-limit popup and how long the shared
+  cooldown runs; `pace()` logs waits ≥1s (flagging account cooldown); the pool
+  logs each lease's hold time on release. Both daemon entrypoints attach a
+  rotating file log (`diagnostics.attach_daemon_log`) at
+  `~/.chatgpt-web2api/diagnostics/{rest-8080,mcp-sse-8090}.log` — every
+  launcher (start.ps1 hidden window, `ensure` self-heal with stderr=DEVNULL)
+  used to drop stderr, leaving cooldowns unattributable. stdio MCP is
+  untouched: the harness owns its stderr.
 
 Runtime state is NOT vendored: `.venv`, `~/.chatgpt_web2api/` (config, tab
 registry, pace file), Chrome profile, and conversation ids live per-device /

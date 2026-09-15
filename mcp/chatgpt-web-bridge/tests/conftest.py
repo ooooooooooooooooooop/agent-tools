@@ -38,6 +38,12 @@ def _fast_persist_check(monkeypatch):
         return
     monkeypatch.setattr(ms, "_PERSIST_TAIL_USER_DELAY_S", 0.0)
     monkeypatch.setattr(ms, "_PERSIST_EMPTY_DELAY_S", 0.0)
+    # Read-coalescing state is process-global: payloads and in-flight tasks
+    # must not leak across tests. TTL 0 preserves pre-coalescing semantics
+    # (every poll refetches); cache tests set the TTL back explicitly.
+    monkeypatch.setattr(ms, "_CONV_READ_CACHE", {})
+    monkeypatch.setattr(ms, "_CONV_READ_INFLIGHT", {})
+    monkeypatch.setattr(ms, "_conv_read_ttl", lambda driver: 0.0)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
