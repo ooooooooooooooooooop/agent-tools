@@ -32,7 +32,44 @@ const THEORY_VERSION = '0.4';
 const BCC_VERSION = 'BCC-1';
 const BRIEF_HARD_CAP = 8 * 1024;
 const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'str_replace_editor', 'notebook_edit', 'exec', 'mcp_call_tool', 'apply_patch', 'write_to_process', 'request_scope']);
-const IRREVERSIBLE_RE = /rm\s+-rf|del\s+\/[sq]|rmdir|Remove-Item[^\n]*-Recurse|drop\s+table|drop\s+database|truncate|git\s+push[^\n]*(--force|-f\b)|git\s+reset[^\n]*--hard/i;
+// 不可逆判定：先把 arguments 的全部字符串值展平成 token 流（覆盖 command+args 拆分、
+// 嵌套对象），归一 flag（-rf→{r,f}，--force→force，/s→s），再做签名匹配——不堆正则。
+function flattenStrings(v, acc) {
+  if (v == null) return acc;
+  const t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean') acc.push(String(v));
+  else if (Array.isArray(v)) for (const x of v) flattenStrings(x, acc);
+  else if (t === 'object') for (const k of Object.keys(v)) flattenStrings(v[k], acc);
+  return acc;
+}
+function isIrreversibleArgs(args) {
+  const toks = flattenStrings(args, []).flatMap(s => s.split(/\s+/)).filter(Boolean).map(s => s.toLowerCase());
+  if (!toks.length) return false;
+  const flagChars = new Set(), flagWords = new Set(), words = [];
+  for (const t of toks) {
+    if (/^--[a-z]/.test(t)) flagWords.add(t.slice(2));
+    else if (/^-[a-z]/i.test(t)) for (const c of t.slice(1)) flagChars.add(c);
+    else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));
+    else words.push(t);
+  }
+  const cmd = words[0], sub = words[1];
+  const has = (...cs) => cs.some(c => flagChars.has(c) || flagWords.has(c));
+  const forceWord = [...flagWords].some(w => w.startsWith('force'));
+  const sigs = [
+    () => cmd === 'rm' && has('r', 'f', 'recursive', 'force'),
+    () => cmd === 'rmdir' && has('s', 'r', 'recursive'),
+    () => cmd === 'del' && has('f', 's', 'q'),
+    () => cmd === 'rd' && has('s', 'q'),
+    () => cmd === 'remove-item' && has('r', 'recurse', 'force'),
+    () => cmd === 'git' && sub === 'push' && (has('f') || forceWord),
+    () => cmd === 'git' && sub === 'reset' && flagWords.has('hard'),
+    () => cmd === 'git' && sub === 'clean' && has('f', 'd', 'x'),
+    () => ['format', 'dd', 'mkfs', 'diskpart', 'shutdown'].includes(cmd),
+    () => words.includes('drop') && (words.includes('table') || words.includes('database')),
+    () => words.includes('truncate') && words.includes('table'),
+  ];
+  return sigs.some(f => f());
+}
 const SEMANTIC_TYPES = new Set(['EPISTEMIC_CLAIM', 'NORMATIVE_DIRECTIVE', 'AUTHORIZATION', 'DURABLE_VALUE_STATEMENT', 'PREFERENCE']);
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -539,8 +576,7 @@ export function apply(ctx, config = {}) {
         if (!toolName || !CONSEQUENT_TOOLS.has(toolName)) return undefined;
         const s = sessionFor(execution);
         if (s.mode !== 'core' && s.mode !== 'full') return undefined;
-        const argsText = safeJson(execution?.arguments ?? execution?.args ?? {});
-        const irreversible = IRREVERSIBLE_RE.test(argsText);
+        const irreversible = isIrreversibleArgs(execution?.arguments ?? execution?.args ?? {});
         for (const [pid, p] of s.predictions) {
           if (s.evaluated.has(pid)) continue;   // superseded/evaluated prediction cannot authorize
           const ia = String(p.intended_action || '');
@@ -554,7 +590,14 @@ export function apply(ctx, config = {}) {
         }
         emit(s.id, 'GUARD_BLOCKED', { subject: toolName, happened: `blocked ${toolName} (no bound prediction)`, payload: { irreversible } });
         return `[dsh-world-model] BLOCKED: ${toolName} is a consequential action in ${s.mode} mode. First call world_model(op:"predict") with intended_action naming this tool/action${irreversible ? ' and irreversible:true (irreversible pattern detected)' : ''}.`;
-      } catch { return undefined; }
+      } catch {
+        // fail closed：守卫自身异常时，consequential 工具拒绝放行
+        try {
+          const tn = String(execution?.name || '').trim().toLowerCase();
+          if (CONSEQUENT_TOOLS.has(tn)) return '[dsh-world-model] BLOCKED: guard internal error (fail closed)';
+        } catch { /* fall through */ }
+        return undefined;
+      }
     });
   } catch { /* guard optional */ }
 }
