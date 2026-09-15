@@ -382,6 +382,14 @@ runtime_composition:
         plugin_directory: dsh-autonomous-execution-governor
         entry_relative: lib/index.js
         config: {}
+      - id: dsh-world-model
+        package: 'dsh-world-model'
+        version: 0.1.0
+        source_relative: dsh/world-model
+        plugin_directory: dsh-world-model
+        entry_relative: world-model.mjs
+        config:
+          mode: core
   archive_anchor:
     session_id: session-cdc4ad5d-0e4c-45c3-a596-efee4a7544b9
     status: READ_ONLY_CONTEXT_EXHAUSTED

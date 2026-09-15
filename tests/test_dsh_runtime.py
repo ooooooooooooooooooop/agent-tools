@@ -24,7 +24,7 @@ class DshRuntimeCompositionTests(unittest.TestCase):
     def test_contract_has_pinned_overlays(self) -> None:
         self.assertEqual(dsh_runtime.validate_contract(self.contract), [])
         plugins = self.cfg["managed_rows"]["plugins"]
-        self.assertEqual(len(plugins), 8)
+        self.assertEqual(len(plugins), 9)
         self.assertEqual([p["plugin_directory"] for p in plugins], [
             "dsh-token-meter-pressure-guard",
             "dsh-agent-loop-pressure-guard",
@@ -34,6 +34,7 @@ class DshRuntimeCompositionTests(unittest.TestCase):
             "dsh-model-switch-controller",
             "dsh-workflow-model-preflight-gate",
             "dsh-autonomous-execution-governor",
+            "dsh-world-model",
         ])
 
     def test_generated_patch_is_idempotent_and_uses_profile_layout(self) -> None:
