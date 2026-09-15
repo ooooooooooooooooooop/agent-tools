@@ -20,7 +20,7 @@
 // 用法：plugins/ + cordis.patch.yml 条目。模式 config.mode/env DSH_WM_MODE。
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 
@@ -60,11 +60,13 @@ const CONSEQUENT_STEMS = ['exec', 'shell', 'bash', 'terminal', 'powershell', 'pw
 // 只读白名单：精确匹配归一名（非前缀！）——前缀匹配会把 read_exec/getshell/
 // search_replace 这类变异/恶意命名放进免门区，等于在反转默认里重开一个
 // 可枚举逃逸面。名字不在此表的 = consequential。不收录 printenv/whoami/echo。
+// 注：裸 'find'/'get'/'fetch'/'skill' 不收——find -delete、get/fetch 落盘、
+// skill 调技能包都可写，叫这个名字的 harness 工具不应免检（误伤方向=安全）。
 const SAFE_READONLY_TOOLS = new Set(['read', 'readfile', 'readtool', 'glob',
-  'grep', 'search', 'find', 'findfilebyname', 'list', 'fetch', 'get', 'getoutput',
+  'grep', 'search', 'findfilebyname', 'list', 'getoutput',
   'view', 'status', 'show', 'describe', 'cat', 'head', 'tail', 'ls', 'dir',
   'websearch', 'webfetch', 'codesearch', 'askuser', 'askuserquestion',
-  'worldmodel', 'dshworldmodel', 'skill', 'todowrite', 'notebookread',
+  'worldmodel', 'dshworldmodel', 'todowrite', 'notebookread',
   'resolve', 'exists', 'count', 'diff', 'inspect', 'readresource',
   'mcpreadresource', 'mcplisttools', 'mcplistservers', 'readsubagent',
   'getmanagedclaudesupervisor', 'listmanagedclaudesupervisors']);
@@ -161,7 +163,7 @@ const CMD_ARG_KEYS = new Set(['command', 'cmd', 'script', 'code', 'commandline',
 // 命令词表：词头落在其中 = 命令面字符串（与扫描器共享同一份语义）
 const CMD_HEAD_LEX = new Set([...INTERPRETERS, ...DESTRUCTIVE_CMDS, ...CMD_WRAPPERS, ...HOST_TOOLS]);
 // execution 上的结构性自有键——参数载体之外的元数据不参与绑定词表
-const EXEC_STRUCT_KEYS = new Set(['name', 'arguments', 'args', 'params', 'input', 'parameters', 'payload', 'tool_input', 'agent', 'session', 'id', 'meta', 'metadata', 'context']);
+const EXEC_STRUCT_KEYS = new Set(['name', 'arguments', 'args', 'params', 'input', 'parameters', 'payload', 'tool_input', 'agent', 'session']);
 // 参数切词器（守卫绑定与扫描器共用同一 token 视图——防止两处语义漂移）
 function scanTokens(args) {
   const raw = flattenStrings(args, []);
@@ -366,6 +368,8 @@ export function apply(ctx, config = {}) {
   const bodyId = config.bodyId || `dsh-${hostname()}`;
   // fail-closed: 未知模式回退 core（守卫在场），不能因笔误静默变 off
   const rawMode = String(config.mode || process.env.DSH_WM_MODE || 'off').toLowerCase().trim();
+  // strict-off 语义 = 硬关闭：工具不注册、守卫全放行——是给"确认不要世界模型"
+  // 的部署用的，不是"更严格的 off"。命名保留以兼容既有 cordis.patch.yml。
   const envMode = ['off', 'strict-off', 'core', 'full'].includes(rawMode) ? rawMode : 'core';
   for (const d of [join(wmDir, 'ledger'), join(wmDir, 'runs'), join(canonicalDir, 'proposals'), join(canonicalDir, 'history')]) {
     try { mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
@@ -460,14 +464,22 @@ export function apply(ctx, config = {}) {
         const ln = rawLn.replace(/\s+#.*$/, '');
         if (!ln.trim()) continue;
         const li = ln.match(/^(\s*)-\s+(.+?)\s*$/);
-        if (li && inBlock && inScopes && cur && Object.hasOwn(table, cur) && li[1].length >= 4) {
-          // 列表项：'- task_goal' → authoritative（bootstrap 写法）；
-          // '- name: x' → 挂 pendingScope，由 level: 子项决定（默认 none）
-          const item = li[2];
-          const im = item.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
-          if (im && im[1] === 'name') { pendingScope = im[2] || null; }
-          else if (im) { table[cur].scopes[im[1]] = im[2] || 'none'; pendingScope = null; }
-          else { table[cur].scopes[item] = 'authoritative'; pendingScope = null; }
+        if (li) {
+          // 列表项绝不能落到键匹配器——'  - source: user' 会造出名为 '- source'
+          // 的幻影权威。只在 scopes 上下文且缩进合规时才记录。
+          if (inBlock && inScopes && cur && Object.hasOwn(table, cur) && li[1].length >= 4) {
+            // '- task_goal' → authoritative（bootstrap 写法）；
+            // '- name: x' → 挂 pendingScope，由 level: 子项决定（默认 none）；
+            // '- level: x' 无 pending = 幻影 scope，忽略
+            const item = li[2];
+            const im = item.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
+            if (im && im[1] === 'name') { pendingScope = im[2] || null; }
+            else if (im && im[1] === 'level') {
+              if (pendingScope) { table[cur].scopes[pendingScope] = im[2] || 'none'; pendingScope = null; }
+            }
+            else if (im) { table[cur].scopes[im[1]] = im[2] || 'none'; pendingScope = null; }
+            else { table[cur].scopes[item] = 'authoritative'; pendingScope = null; }
+          }
           continue;
         }
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
@@ -495,8 +507,14 @@ export function apply(ctx, config = {}) {
           continue;
         }
         if (indent < 6) continue;
+        // 'name'/'level' 是条目属性不是 scope——裸 'level: x' 落表会造幻影权威
+        if (key === 'name') { pendingScope = val || null; continue; }
+        if (key === 'level') {
+          if (pendingScope) { table[cur].scopes[pendingScope] = val || 'none'; pendingScope = null; }
+          continue;
+        }
         pendingScope = null;
-        if (val === '') { pendingScope = key; continue; }          // 'name:' → 等 level: 子键
+        if (val === '') { pendingScope = key; continue; }          // 'task_goal:' → 等 level: 子键
         if (val.startsWith('{')) {                                  // 'name: {level: x}' 内联
           const lm = val.match(/level\s*:\s*['"]?([A-Za-z0-9_-]+)/);
           table[cur].scopes[key] = lm ? lm[1] : 'none';
@@ -574,7 +592,8 @@ export function apply(ctx, config = {}) {
     if (!existsSync(p)) return { _present: false };
     try {
       const out = { _present: true };
-      let inActive = false;
+      let inActive = false, sawActive = false;
+      const YAML_NULL = v => (v === 'null' || v === '~') ? null : v;  // YAML 标量 null 语义，防字符串 'null' 与真 null 碰撞
       for (const rawLn of readFileSync(p, 'utf8').replace(/^﻿/, '').split(/\r?\n/)) {
         if (/\t/.test(rawLn)) throw new Error('tab indentation not allowed');
         const ln = rawLn.replace(/\s+#.*$/, '');
@@ -582,14 +601,20 @@ export function apply(ctx, config = {}) {
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
         const indent = m[1].length, key = m[2].trim();
-        const val = (m[3] || '').trim().replace(/^['"]|['"]$/g, '');
+        const val = YAML_NULL((m[3] || '').trim().replace(/^['"]|['"]$/g, ''));
         if (indent === 0) {
           inActive = key === 'active_body';
-          if (!inActive && val !== '') out[key] = val;
+          if (inActive) {
+            sawActive = true;
+            if (val !== '') out._corrupt = true;   // 内联/标量 active_body 解析不了 → 不可信
+          } else if (val !== '') out[key] = val;
           continue;
         }
-        if (inActive && indent >= 2 && val !== '') (out.active_body ??= {})[key] = val;
+        if (inActive && indent > 0 && val !== '' && val !== null) (out.active_body ??= {})[key] = val;
       }
+      // active_body 键出现过但一个字段都没解析到 = 静默丢失 lease → 不可信
+      if (sawActive && (!out.active_body || !Object.keys(out.active_body).length)) out._corrupt = true;
+      if (out._corrupt) return { _present: true, _corrupt: true };
       if (out.continuity_epoch != null) {
         const n = Number(out.continuity_epoch);
         out.continuity_epoch = Number.isSafeInteger(n) ? n : NaN;  // NaN → 下游 malformed 判 fail closed
@@ -601,16 +626,18 @@ export function apply(ctx, config = {}) {
   // ---- body lease: single canonical writer per entity (V0.3.1 §11) ----
   function leaseCheck(s) {
     const rs = runtimeState();
-    if (rs._corrupt) {
-      emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
-      return { ok: false, holder: 'corrupt-runtime-state' };
-    }
-    // runtime-state.json 缺失时 lineage.yaml 接管——缺失即放行 = 绕过 lease 检查
-    const eff = rs._present ? rs : lineageState();
-    if (eff._corrupt) {
+    const lin = lineageState();
+    if (lin._corrupt) {
       emit(s.id, 'LEASE_DENIED', { happened: 'lineage.yaml corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
       return { ok: false, holder: 'corrupt-lineage' };
     }
+    if (!lin._present && rs._corrupt) {
+      emit(s.id, 'LEASE_DENIED', { happened: 'runtime-state.json corrupt — fail closed', payload: { requester: bodyId }, source: 'plugin' });
+      return { ok: false, holder: 'corrupt-runtime-state' };
+    }
+    // lineage.yaml 是权威源：存在即优先于 runtime-state.json 投影
+    // （投影可能未重编译而陈旧——陈旧投影不得压制更新的 lease）
+    const eff = lin._present ? lin : rs;
     // active_body 存在但畸形（string/0/null/非对象/缺 body_id）= 状态不可信 → fail closed
     const rawActive = eff._present ? eff.active_body : undefined;
     if (rawActive !== undefined && rawActive !== null
@@ -668,7 +695,9 @@ export function apply(ctx, config = {}) {
   // 会骗过信任 payload.status 的消费者——写入前一律剥掉。
   const PROPOSAL_RESERVED = /^(status|decision|authority|applied|applied_at|applied_by|applied_model|rollback)$/i;
   function writeProposal(kind, payload, sessionId, s, access) {
-    const lease = s ? leaseCheck(s) : { ok: true };
+    // s 缺失 = 无会话上下文可审计 lease —— fail closed，不得静默放行
+    if (!s) return { denied: true, holder: 'no-session', event: 'LEASE_DENIED' };
+    const lease = leaseCheck(s);
     if (!lease.ok) return { denied: true, holder: lease.holder };
     const clean = {};
     for (const k of Object.keys(payload || {})) {
@@ -721,11 +750,18 @@ export function apply(ctx, config = {}) {
     } catch { return null; }
   }
 
+  const CURRENT_JSON_CAP = 256 * 1024;   // 与 canonical 提案同上限——无界 summary/models = 磁盘灌满
   function updateCurrentJson(patch) {
     const cur = join(wmDir, 'current.json');
     let state = { schema_version: SCHEMA_VERSION, updated_at: null, open_predictions: [], models: {}, open_loops: [] };
     try { if (existsSync(cur)) state = { ...state, ...JSON.parse(readFileSync(cur, 'utf8')) }; } catch { /* ignore */ }
     Object.assign(state, patch, { updated_at: new Date().toISOString() });
+    // 字段级截断：单值 ≤64KiB，数组 ≤1024 项——超限不再无限增长
+    for (const [k, v] of Object.entries(state)) {
+      if (typeof v === 'string' && bytes(v) > 64 * 1024) state[k] = v.slice(0, 64 * 1024);
+      else if (Array.isArray(v) && v.length > 1024) state[k] = v.slice(-1024);
+    }
+    if (bytes(safeJson(state)) > CURRENT_JSON_CAP) return { state, ok: false, error: 'current.json exceeds 256KiB cap' };
     // 失败必须上报——caller 不得在未落盘时冒称 STATE_PERSISTED（审计与磁盘矛盾）
     try { writeAtomic(cur, safeJson(state)); return { state, ok: true }; }
     catch (e) { return { state, ok: false, error: String(e?.message || e) }; }
@@ -784,6 +820,8 @@ export function apply(ctx, config = {}) {
       try {
         const sid = safeSid(session?.id);
         if (briefedSessions.has(sid)) return;
+        // 无界 Set = 每新 sid 一条 STATE_RESTORE + briefing 重算 → ledger/磁盘风暴
+        if (briefedSessions.size >= 4096) briefedSessions.delete(briefedSessions.keys().next().value);
         const s = sessionFor({ agent: { session: { id: sid } } });
         if (event?.type === 'turn/start' || event?.type === 'step/start' || event?.type === 'user/message') {
           briefedSessions.add(sid);
@@ -831,10 +869,11 @@ export function apply(ctx, config = {}) {
       parameters: WM_PARAMETERS,
       output: { schema: { type: 'object', additionalProperties: true }, render: (_a, v) => [{ type: 'text', text: safeJson(v) }] },
       execute: (input, exec) => {
+        let s = null, op = '';
         try {
         if (!input || typeof input !== 'object' || Array.isArray(input)) input = {};
-        const s = sessionFor(exec);
-        const op = String(input.op || '');
+        s = sessionFor(exec);
+        op = String(input.op || '');
         // 审计不可用 = fail closed：任何会落账的操作在零审计状态下都拒绝
         if (!auditOk && op !== 'status') return { ok: false, code: 'AUDIT_UNAVAILABLE', message: 'stateDir unwritable — audit infrastructure down, ops refused (fail closed)' };
         const base = { subject: input.subject, evidence_refs: input.evidence_refs || [] };
@@ -858,7 +897,15 @@ export function apply(ctx, config = {}) {
               if (m && typeof m === 'object') {
                 const lvl = (m.access && typeof m.access === 'object') ? m.access.level : null;
                 let level = ACCESS_ENUM.has(lvl) ? lvl : declLevel;
-                if ((level === 'SANITIZED' || level === 'PUBLIC') && !(typeof m.declass_ref === 'string' && m.declass_ref)) level = 'INTERNAL';
+                // declass_ref 必须是可核验的 canonical 内相对路径——' '/'x' 这类
+                // 非空白即过的形式满足不了"自报 PUBLIC 需脱敏链证据"的语义
+                const declassOk = (() => {
+                  if (typeof m.declass_ref !== 'string' || !m.declass_ref.trim()) return false;
+                  const ref = m.declass_ref.trim();
+                  if (ref.includes('..') || isAbsolute(ref)) return false;
+                  try { return existsSync(join(canonicalDir, ref)); } catch { return false; }
+                })();
+                if ((level === 'SANITIZED' || level === 'PUBLIC') && !declassOk) level = 'INTERNAL';
                 m.access = { level, basis: ['taint_or_default'] };
               }
             }
@@ -892,7 +939,6 @@ export function apply(ctx, config = {}) {
               emit(s.id, 'PREDICTION_EVALUATED', { ...base, prediction_id: old, happened: 'verdict=superseded', payload: { verdict: 'unknown', superseded_by: pid, residual: 'superseded by newer prediction' } });
             };
             const supersedesList = Array.isArray(input.supersedes) ? input.supersedes : (typeof input.supersedes === 'string' && input.supersedes ? [input.supersedes] : []);
-            for (const old of supersedesList) closeSuperseded(String(old));
             const ia = String(input.intended_action || '');
             // 一预测一工具：intended_action 枚举多个工具名 = 批发式授权 → 拒绝。
             // 词典 = 全工具词表（含只读名——ia 里出现即计数，未知名不计也无妨：
@@ -905,7 +951,7 @@ export function apply(ctx, config = {}) {
               const hits = [];
               for (const name of TOOL_LEXICON) {
                 const pat = [...name].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s./:]?');
-                const re = new RegExp(`(^|[^a-z0-9])(${pat})([^a-z0-9]|$)`, 'g');
+                const re = new RegExp(`(^|[^a-z0-9_./:\\-])(${pat})([^a-z0-9_./:\\-]|$)`, 'g');
                 let mm;
                 while ((mm = re.exec(iaLow)) !== null) {
                   hits.push({ name, s: mm.index + mm[1].length, e: mm.index + mm[1].length + mm[2].length });
@@ -920,6 +966,8 @@ export function apply(ctx, config = {}) {
             if (iaToolHits.size > 1) {
               return { ok: false, code: 'PREDICTION_TOO_BROAD', tools: [...iaToolHits], message: 'one prediction binds one tool — issue separate predict calls' };
             }
+            // supersedes 在 TOO_BROAD 判定之后处理——被拒的预测不得先关门旧预测（自 DoS）
+            for (const old of supersedesList) closeSuperseded(String(old));
             const subj = String(input.subject || '');
             for (const [old, p] of s.predictions) {
               if (s.evaluated.has(old)) continue;
@@ -1174,7 +1222,11 @@ export function apply(ctx, config = {}) {
           try { emit(s.id, 'OP_DENIED', { ...base, happened: `op ${op || '(none)'} denied: ${out.code || 'DENIED'}`, payload: { code: out.code || 'DENIED', holder: out.holder } }); } catch { /* emit 失败不得让拒绝路径崩掉 */ }
         }
         return out;
-        } catch (e) { return { ok: false, code: 'INTERNAL_ERROR', message: String(e?.message || e) }; }
+        } catch (e) {
+          // 内部异常也要落 OP_DENIED——静默 deny 会让对抗探测不可见
+          try { emit(s ? s.id : safeSid(exec?.agent?.session?.id), 'OP_DENIED', { happened: `op ${op || '(none)'} threw: INTERNAL_ERROR`, payload: { code: 'INTERNAL_ERROR' } }); } catch { /* emit 失败不得让拒绝路径崩掉 */ }
+          return { ok: false, code: 'INTERNAL_ERROR', message: String(e?.message || e) };
+        }
       }
     });
   }
@@ -1211,19 +1263,35 @@ export function apply(ctx, config = {}) {
         const argToks = new Set(flattenVals(argPool, [])
           .flatMap(v => String(v).toLowerCase().split(/[^a-z0-9]+/))
           .filter(t => t.length >= 2));
-        // 命令面收集：命令型键名 或 词头落在命令词表的字符串 → 结构绑定对象；
-        // 键名自身落在命令词表同样算面（{rm:'-rf /'} 的键就是命令头）。
+        // 命令面收集：命令型键名 / 词头落命令词表 / 含 shell 元字符（任何键下）→
+        // 结构绑定对象；键名自身落命令词表同样算面（{rm:'-rf /'} 的键就是命令头）。
         const cmdSurface = [];
+        const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=\S*(\s+|$)/;
+        const SHELL_META_RE = /[;|&`<>\n]|\$\(/;
+        // head = 剥 env 赋值前缀后首词的 basename：/bin/rm → rm；FOO=x rm → rm
+        const cmdHead = (s) => {
+          let rest = s;
+          while (ENV_ASSIGN.test(rest)) rest = rest.replace(ENV_ASSIGN, '');
+          return normWord((rest.split(/\s+/)[0] || '').replace(/["'`]/g, '').split(/[\/\\]/).pop() || '').toLowerCase();
+        };
+        const pushSurface = (sv, key) => {
+          const s = String(sv).trim();
+          if (!s) return;
+          if ((key && CMD_ARG_KEYS.has(key)) || CMD_HEAD_LEX.has(cmdHead(s)) || SHELL_META_RE.test(s)) cmdSurface.push(s);
+        };
         const walkCmd = (v, key) => {
           if (v == null) return;
           const t = typeof v;
-          if (t === 'string' || t === 'number' || t === 'boolean') {
-            const sv = String(v).trim();
-            const head = normWord((sv.split(/\s+/)[0] || '').replace(/["'`]/g, '').split(/[\/\\]/).pop() || '').toLowerCase();
-            if ((key && CMD_ARG_KEYS.has(key)) || CMD_HEAD_LEX.has(head)) cmdSurface.push(sv);
+          if (t === 'string' || t === 'number' || t === 'boolean') { pushSurface(v, key); return; }
+          if (Array.isArray(v)) {
+            // argv 形态 ['rm','-rf','/']：元素分开看会丢 flag/目标签名——先拼成一条命令
+            if (v.length && v.every(x => x == null || ['string', 'number', 'boolean'].includes(typeof x))) {
+              pushSurface(v.map(x => String(x)).join(' '), key);
+              return;
+            }
+            for (const x of v) walkCmd(x, key);
             return;
           }
-          if (Array.isArray(v)) { for (const x of v) walkCmd(x, key); return; }
           if (t === 'object') for (const k of Object.keys(v)) {
             const kk = String(k).toLowerCase();
             const khead = normWord(kk.replace(/["'`]/g, '').split(/[\/\\]/).pop() || '');
@@ -1241,7 +1309,7 @@ export function apply(ctx, config = {}) {
           // 精确绑定：intended_action 里该工具名必须是独立 token（词边界），
           // 分隔符 -_ 可选等价。子串不算——"credit"/"overwrite" 不再误中 edit/write。
           const pat = [...toolName].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-_\\s./:]?');
-          const bound = new RegExp(`(^|[^a-z0-9])${pat}([^a-z0-9]|$)`).test(ia.toLowerCase());
+          const bound = new RegExp(`(^|[^a-z0-9_./:\\-])${pat}([^a-z0-9_./:\\-]|$)`).test(ia.toLowerCase());
           if (!bound) continue;
           if (irreversible && p.irreversible !== true) continue;
           const iaToks = new Set(ia.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 2));
@@ -1253,12 +1321,15 @@ export function apply(ctx, config = {}) {
           //    'predict exec rm' 不再授权 'exec "rm -rf /"'（rf flag 未命名）。
           if (argToks.size && ![...argToks].some(t => iaToks.has(t))) continue;
           let structOk = true;
-          for (const cs of cmdSurface) {
+          for (const cs0 of cmdSurface) {
+            let cs = cs0;
+            while (ENV_ASSIGN.test(cs)) cs = cs.replace(ENV_ASSIGN, '');
             const cst = scanTokens(cs);
             const cWords = cst.words.map(normWord);
             const head = cWords.find(w => w.length >= 2 && !/^\d+$/.test(w));
             if (head && !iaToks.has(head)) { structOk = false; break; }
-            if (/[;|&`<>\n]|\$\(/.test(cs) || CMD_HEAD_LEX.has(head)) {
+            // 任一词落命令词表即触发严格签名——/bin/rm 的 head 是 'bin' 也逃不过 'rm'
+            if (SHELL_META_RE.test(cs) || cWords.some(w => CMD_HEAD_LEX.has(w))) {
               const sig = [...cst.words, ...cst.flagWords, [...cst.flagChars].join('')].filter(x => x && x.length >= 2);
               if (!sig.every(x => iaToks.has(x))) { structOk = false; break; }
             }
@@ -1274,10 +1345,13 @@ export function apply(ctx, config = {}) {
         }
         return `[dsh-world-model] BLOCKED: ${toolName} is a consequential action in ${s.mode} mode. First call world_model(op:"predict") with intended_action naming this tool AND its target arguments${irreversible ? ' and irreversible:true (irreversible pattern detected)' : ''}.`;
       } catch {
-        // fail closed：守卫自身异常时，consequential 工具拒绝放行
+        // fail closed：守卫自身异常时拒绝放行一切——isConsequential 也可能抛
+        // （恶意 name 的 toString），那时连"安全与否"都未知 → 只能挡。
         try {
           if (isConsequential(execution?.name)) return '[dsh-world-model] BLOCKED: guard internal error (fail closed)';
-        } catch { /* fall through */ }
+        } catch {
+          return '[dsh-world-model] BLOCKED: guard internal error — tool classification failed (fail closed)';
+        }
         return undefined;
       }
     });

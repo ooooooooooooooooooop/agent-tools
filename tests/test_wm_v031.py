@@ -61,6 +61,20 @@ def fixture_canonical(tmp: Path, extra_models: int = 0) -> Path:
     return canon
 
 
+def bind_lease(canon: Path, body: str):
+    """Bind the canonical-writer lease to `body` in lineage.yaml (the
+    authoritative source) and mirror it into the runtime-state.json projection."""
+    lin_path = canon / "lineage.yaml"
+    lin = canonical_compile.load(lin_path)
+    lin["active_body"] = {"body_id": body, "lease": "exclusive-canonical-writer"}
+    lin_path.write_text(yaml.safe_dump(lin, allow_unicode=True), encoding="utf-8")
+    rs_path = canon / "runtime-state.json"
+    rs = (json.loads(rs_path.read_text(encoding="utf-8"))
+          if rs_path.exists() else canonical_compile.compile_runtime_state(canon))
+    rs["active_body"] = {"body_id": body, "lease": "exclusive-canonical-writer"}
+    rs_path.write_text(json.dumps(rs), encoding="utf-8")
+
+
 def run_body(tmp: Path, canon: Path, steps, mode="core", body_id="body-A"):
     """Drive the real plugin through simulate_body.mjs."""
     state = tmp / f"state-{body_id}"
@@ -179,10 +193,8 @@ class TestInputSemantics(unittest.TestCase):
     def _canon(self, td):
         canon = fixture_canonical(Path(td))
         canonical_compile.compile_briefing(canon)
-        rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": "body-A",
-                             "lease": "exclusive-canonical-writer"}
-        (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
+        canonical_compile.compile_runtime_state(canon)
+        bind_lease(canon, "body-A")
         return canon
 
     def test_epistemic_routed_to_w(self):
@@ -257,10 +269,8 @@ class TestClassificationCoverage(unittest.TestCase):
 
     def _canon(self, td, body="body-A"):
         canon = fixture_canonical(Path(td))
-        rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": body,
-                             "lease": "exclusive-canonical-writer"}
-        (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
+        canonical_compile.compile_runtime_state(canon)
+        bind_lease(canon, body)
         return canon
 
     def test_model_entry_carries_access(self):
@@ -296,10 +306,8 @@ class TestClassificationCoverage(unittest.TestCase):
 class TestGovernanceLease(unittest.TestCase):
     def _canon(self, td, body="body-A"):
         canon = fixture_canonical(Path(td))
-        rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": body,
-                             "lease": "exclusive-canonical-writer"}
-        (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
+        canonical_compile.compile_runtime_state(canon)
+        bind_lease(canon, body)
         return canon
 
     def test_single_writer_lease_denies_foreign_body(self):
@@ -387,10 +395,8 @@ class TestDeclassificationTaint(unittest.TestCase):
     def test_declassify_op_creates_proposal_not_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             canon = fixture_canonical(Path(td))
-            rs = canonical_compile.compile_runtime_state(canon)
-            rs["active_body"] = {"body_id": "body-A",
-                                 "lease": "exclusive-canonical-writer"}
-            (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
+            canonical_compile.compile_runtime_state(canon)
+            bind_lease(canon, "body-A")
             before = (canon / "current.yaml").read_bytes()
             out = run_body(Path(td), canon, [
                 {"type": "tool_call", "input": {"op": "declassify",
