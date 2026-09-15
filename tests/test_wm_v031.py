@@ -180,7 +180,8 @@ class TestInputSemantics(unittest.TestCase):
         canon = fixture_canonical(Path(td))
         canonical_compile.compile_briefing(canon)
         rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": "body-A"}
+        rs["active_body"] = {"body_id": "body-A",
+                             "lease": "exclusive-canonical-writer"}
         (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
         return canon
 
@@ -257,7 +258,8 @@ class TestClassificationCoverage(unittest.TestCase):
     def _canon(self, td, body="body-A"):
         canon = fixture_canonical(Path(td))
         rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": body}
+        rs["active_body"] = {"body_id": body,
+                             "lease": "exclusive-canonical-writer"}
         (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
         return canon
 
@@ -295,7 +297,8 @@ class TestGovernanceLease(unittest.TestCase):
     def _canon(self, td, body="body-A"):
         canon = fixture_canonical(Path(td))
         rs = canonical_compile.compile_runtime_state(canon)
-        rs["active_body"] = {"body_id": body}
+        rs["active_body"] = {"body_id": body,
+                             "lease": "exclusive-canonical-writer"}
         (canon / "runtime-state.json").write_text(json.dumps(rs), encoding="utf-8")
         return canon
 

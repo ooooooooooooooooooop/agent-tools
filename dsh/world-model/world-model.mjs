@@ -32,8 +32,10 @@ const THEORY_VERSION = '0.4';
 const BCC_VERSION = 'BCC-1';
 const BRIEF_HARD_CAP = 8 * 1024;
 const CONSEQUENT_TOOLS = new Set(['edit', 'write', 'str-replace-editor', 'str_replace_editor', 'notebook_edit', 'exec', 'mcp_call_tool', 'apply_patch', 'write_to_process', 'request_scope']);
-// 不可逆判定：先把 arguments 的全部字符串值展平成 token 流（覆盖 command+args 拆分、
-// 嵌套对象），归一 flag（-rf→{r,f}，--force→force，/s→s），再做签名匹配——不堆正则。
+// 不可逆判定（宽检测、安全方向偏向）：arguments 全部字符串值展平 → unicode 归一
+// （全角/长短破折号→-，弯引号→'）→ 按空白+shell 元字符切词（管道/分号/$(…)/重定向
+// 都断词，> 与 | 保留为分隔符 token）→ 剥引号 → flag 归一 → 全位置签名扫描。
+// 误报 = 仅要求 prediction 带 irreversible:true（安全方向）；漏报 = 漏洞。
 function flattenStrings(v, acc) {
   if (v == null) return acc;
   const t = typeof v;
@@ -42,39 +44,72 @@ function flattenStrings(v, acc) {
   else if (t === 'object') for (const k of Object.keys(v)) flattenStrings(v[k], acc);
   return acc;
 }
-// 包装命令不遮蔽内层：sudo/sh -c/timeout 10/cmd /c 之后的词仍是命令头。
-const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'nice', 'ionice', 'time', 'timeout', 'watch', 'xargs', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'sh', 'bash', 'zsh', 'command', 'exec', 'start', 'runas', 'busybox', 'sshpass']);
+const CMD_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'nice', 'ionice', 'time', 'timeout', 'watch', 'xargs', 'command', 'exec', 'start', 'runas', 'busybox', 'sshpass', 'stdbuf', 'strace', 'ltrace', 'unbuffer', 'expect']);
+// 内联代码解释器：-c/-e/-Command/-EncodedCommand 等 → 载荷不可静态证安全 → 必标
+const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'nodejs', 'perl', 'ruby', 'php', 'lua', 'osascript', 'mshta', 'rundll32', 'regsvr32', 'installutil', 'wscript', 'cscript', 'wmic', 'bash', 'sh', 'zsh', 'fish', 'dash', 'ksh', 'powershell', 'powershell.exe', 'pwsh', 'cmd', 'cmd.exe', 'eval', 'source', 'groovy', 'jjs', 'irb']);
+// 裸用即破坏的命令（删/覆写/擦除/分区/服务）
+const DESTRUCTIVE_CMDS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'unlink', 'shred', 'sdelete', 'wipefs', 'remove-item', 'clear-content', 'set-content', 'rimraf', 'format', 'format.com', 'dd', 'diskpart', 'shutdown', 'fdisk', 'parted', 'bcdedit', 'vssadmin', 'wevtutil', 'fsutil', 'chattr', 'tee', 'truncate', 'mv', 'robocopy', 'cipher']);
+// host 工具 + 危险子命令矩阵
+const HOST_TOOLS = new Set(['git', 'docker', 'kubectl', 'terraform', 'npm', 'pip', 'pip3', 'yarn', 'pnpm', 'apt', 'apt-get', 'brew', 'helm', 'redis-cli', 'mongo', 'mongosh', 'mysql', 'psql', 'sqlite3', 'az', 'aws', 'gcloud', 'sc', 'schtasks', 'reg', 'dism', 'netsh', 'iptables', 'ufw', 'systemctl', 'find', 'sed', 'perl', 'awk', 'chmod', 'chown', 'mv', 'cp', 'copy', 'move', 'xcopy']);
+const DANGER_SUBS = new Set(['delete', 'destroy', 'prune', 'uninstall', 'unpublish', 'publish', 'flushall', 'flushdb', 'remove', 'purge', 'drop', 'truncate', 'reset', 'clean', 'cleanup', 'restore', 'expire', 'clear', 'disable', 'stop', 'kill', 'terminate', 'wipe']);
 function isIrreversibleArgs(args) {
-  const toks = flattenStrings(args, []).flatMap(s => s.split(/\s+/))
-    .map(s => s.replace(/^["'`]+|["'`]+$/g, '').toLowerCase()).filter(Boolean);
+  const raw = flattenStrings(args, []);
+  if (!raw.length) return false;
+  const toks = raw
+    .map(s => s.replace(/[‐‑‒–—―−﹘﹣－]/g, '-').replace(/[‘’‚‛]/g, "'").replace(/[“”„‟]/g, '"'))
+    .flatMap(s => s.split(/(\s+|[;&|(){}<>`$]|\n)/))
+    .map(s => s.replace(/^["'`]+|["'`]+$/g, '').toLowerCase())
+    .filter(Boolean);
   if (!toks.length) return false;
   const flagChars = new Set(), flagWords = new Set(), words = [];
-  for (const t of toks) {
-    if (/^--[a-z]/.test(t)) flagWords.add(t.slice(2));
-    else if (/^-[a-z]/i.test(t)) for (const c of t.slice(1)) flagChars.add(c);
-    else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));
+  let sawRedirectOut = false, pipeToInterp = false;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === '>') { sawRedirectOut = true; continue; }
+    if (t === '|' || t === '|&') {
+      const nxt = toks[i + 1];
+      if (nxt && INTERPRETERS.has(nxt)) pipeToInterp = true;
+      continue;
+    }
+    if (/^--[a-z][a-z0-9-]*/i.test(t)) flagWords.add(t.slice(2));
+    else if (/^-[a-z]{4,}/i.test(t)) flagWords.add(t.slice(1));   // PowerShell/长单横线 flag（-delete/-EncodedCommand）
+    else if (/^-[a-z]/i.test(t)) for (const c of t.slice(1)) flagChars.add(c);  // Unix 短 flag 束（-rf）
+    else if (/^\/[a-z]$/i.test(t)) flagChars.add(t.slice(1));     // cmd 单字符 /s
+    else if (/^\/[a-z][a-z0-9:=.]*$/i.test(t)) flagWords.add(t.slice(1));  // cmd 长 flag（/delete /cleanup /mir）
     else words.push(t);
   }
+  if (sawRedirectOut || pipeToInterp) return true;
   const has = (...cs) => cs.some(c => flagChars.has(c) || flagWords.has(c));
   const forceWord = [...flagWords].some(w => w.startsWith('force'));
-  // 全位置扫描：误报（良性词被判不可逆）只导致要求 irreversible:true——安全方向；
-  // 漏报才是漏洞。管道/分号/wrapper 后的命令头都在 words 里被检查。
+  const hasWord = (...ws) => ws.some(w => words.includes(w));
+  const hasDangerSub = [...words, ...flagWords].some(w => DANGER_SUBS.has(w));
+  const hasHost = words.some(w => HOST_TOOLS.has(w));
+  if (hasHost && hasDangerSub) return true;
+  // 解释器内联代码（python -c / node -e / powershell -Command/-EncodedCommand / sh -c / cmd /c）
+  if (words.some(w => INTERPRETERS.has(w)) && has('c', 'e', 'command', 'encodedcommand', 'enc', 'encoded')) return true;
+  // git 子命令矩阵（-c 选项值隔着也扫得到——按词不按位）
+  if (hasWord('git')) {
+    if (hasWord('push') && (has('f', 'd', 'delete') || forceWord || words.some(w => w.startsWith('+')))) return true;
+    if (hasWord('reset') && hasWord('hard')) return true;
+    if (hasWord('clean') || hasWord('restore') || hasWord('filter-branch') || hasWord('filter-repo') || hasWord('prune')) return true;
+    if (hasWord('checkout') && (has('f') || hasWord('--'))) return true;
+    if (hasWord('branch', 'update-ref', 'tag') && has('d')) return true;
+    if (hasWord('reflog') && hasWord('expire', 'delete')) return true;
+    if (hasWord('gc') && [...flagWords].some(w => w.startsWith('prune'))) return true;
+    if (hasWord('stash') && hasWord('clear', 'drop')) return true;
+    if (hasWord('worktree', 'remote') && hasWord('remove', 'prune')) return true;
+    if (hasWord('rm') && has('r', 'f', 'cached')) return true;
+  }
   for (let j = 0; j < words.length; j++) {
     const cmd = words[j], sub = words[j + 1];
     if (CMD_WRAPPERS.has(cmd)) continue;
-    if (cmd === 'rm' && has('r', 'f', 'recursive', 'force')) return true;
-    if (cmd === 'rmdir' && has('s', 'r', 'recursive')) return true;
-    if (cmd === 'del' && has('f', 's', 'q')) return true;
-    if (cmd === 'rd' && has('s', 'q')) return true;
-    if (cmd === 'remove-item' && has('r', 'recurse', 'force')) return true;
-    if (cmd === 'rimraf' || cmd === 'shutil.rmtree(' || cmd.startsWith('shutil.rmtree')) return true;
-    if (cmd === 'git' && sub === 'push' && (has('f') || forceWord)) return true;
-    if (cmd === 'git' && sub === 'reset' && flagWords.has('hard')) return true;
-    if (cmd === 'git' && sub === 'clean' && has('f', 'd', 'x')) return true;
-    if (cmd === 'reg' && sub === 'delete') return true;
-    if (cmd === 'format' || cmd === 'dd' || cmd === 'diskpart' || cmd === 'shutdown' || cmd.startsWith('mkfs')) return true;
-    if (cmd === 'drop' && (sub === 'table' || sub === 'database')) return true;
-    if (cmd === 'truncate' && sub === 'table') return true;
+    if (DESTRUCTIVE_CMDS.has(cmd) || cmd.startsWith('mkfs')) return true;
+    if (cmd.includes('rmtree') || cmd.startsWith('drop') || cmd.startsWith('delete') || cmd.startsWith('destroy')) return true;
+    if (INTERPRETERS.has(cmd) && sub && /\.(py|js|sh|ps1|bat|cmd|rb|pl|php|lua)$/.test(sub)) return true;
+    if ((cmd === 'sed' || cmd === 'perl' || cmd === 'awk' || cmd === 'find') && has('i', 'delete', 'exec')) return true;
+    if ((cmd === 'cp' || cmd === 'copy' || cmd === 'move' || cmd === 'xcopy') && (has('f', 'y') || hasWord('/dev/null'))) return true;
+    if ((cmd === 'chmod' || cmd === 'chown') && (has('r') || hasWord('000', '0000', '777'))) return true;
+    if (cmd === 'drop' || cmd === 'truncate') return true;
   }
   return false;
 }
@@ -170,12 +205,16 @@ export function apply(ctx, config = {}) {
   // 文件路径单独消毒（含 hash 后缀防 '..' / 路径逃逸 / 伪造他人 run 文件）。
   function safeSid(raw) {
     if (typeof raw === 'string' && raw) return raw;
-    if (raw == null) return 'unknown';
-    return 'obj-' + createHash('sha256').update(safeJson(raw)).digest('hex').slice(0, 12);
+    // 非字符串 sid（对象/数组/null/数字）不可预测化：随机 anon —— 攻击者无法
+    // 预计算碰撞值，且每次调用独立成会话（无连续性 = fail closed）。
+    return 'anon-' + randomUUID().slice(0, 12);
   }
   function sessionFileId(sid) {
     const clean = String(sid).replace(/[^A-Za-z0-9._-]/g, '_');
-    return clean === sid ? clean : clean + '-' + createHash('sha256').update(String(sid)).digest('hex').slice(0, 8);
+    if (clean.length > 48 || clean !== sid) {
+      return clean.slice(0, 48) + '-' + createHash('sha256').update(String(sid)).digest('hex').slice(0, 8);
+    }
+    return clean;
   }
   function sessionFor(exec) {
     const sid = safeSid(exec?.agent?.session?.id ?? exec?.session?.id);
@@ -205,19 +244,20 @@ export function apply(ctx, config = {}) {
     if (!existsSync(gp)) return null;
     try {
       const table = {};
-      let inBlock = false, cur = null, inScopes = false;
+      let inBlock = false, cur = null, inScopes = false, found = false;
       for (const ln of readFileSync(gp, 'utf8').split(/\r?\n/)) {
         const m = ln.match(/^(\s*)([^\s#][^:]*):(?:\s*(.*))?$/);
         if (!m) continue;
         const indent = m[1].length, key = m[2].trim(), val = (m[3] || '').trim();
-        if (indent === 0) { inBlock = key === 'normative_authorities'; cur = null; inScopes = false; continue; }
+        if (indent === 0) { inBlock = key === 'normative_authorities'; if (inBlock) found = true; cur = null; inScopes = false; continue; }
         if (!inBlock) continue;
         if (indent === 2) { cur = key; inScopes = false; table[cur] = table[cur] || { scopes: {} }; continue; }
         if (!cur) continue;
         if (indent === 4 && key === 'scopes') { inScopes = true; continue; }
         if (inScopes && indent >= 6 && val) table[cur].scopes[key] = val;
       }
-      _govCache = table;
+      // 文件存在但无 normative_authorities 节 → 未声明权威 → 回退投影/bootstrap 判定
+      _govCache = found ? table : null;
     } catch { _govCache = null; }
     return _govCache;
   }
@@ -237,9 +277,16 @@ export function apply(ctx, config = {}) {
     if (s) s.lastEventId = ev.event_id;
     try {
       let line = safeJson(ev);
-      if (bytes(line) > 16384) {   // L1 payload 全局上限：防 300KB 单行写爆 ledger
+      if (bytes(line) > 16384) {   // 全行上限：payload 之外的大字段也要截
         ev.payload = { _truncated: true, preview: safeJson(ev.payload).slice(0, 4000) };
+        for (const k of ['subject', 'happened', 'prediction_id', 'model_id']) {
+          if (typeof ev[k] === 'string' && bytes(ev[k]) > 1024) ev[k] = ev[k].slice(0, 1024) + '…';
+        }
         line = safeJson(ev);
+        if (bytes(line) > 16384) {
+          ev = { event_id: ev.event_id, schema_version: ev.schema_version, theory_version: ev.theory_version, session_id: ev.session_id, seq: ev.seq, prev_event: ev.prev_event, event_type: ev.event_type, timestamp: ev.timestamp, actor: ev.actor, body_id: ev.body_id, bcc: ev.bcc, layer: ev.layer, access: ev.access, happened: 'event truncated: oversized fields dropped', payload: { _truncated: true } };
+          line = safeJson(ev);
+        }
       }
       appendFileSync(join(wmDir, 'ledger', `${today()}.jsonl`), line + '\n');
       appendFileSync(join(wmDir, 'runs', `${sessionFileId(sessionId)}.jsonl`), line + '\n');
@@ -263,17 +310,21 @@ export function apply(ctx, config = {}) {
     }
     const active = (rawActive && typeof rawActive === 'object') ? rawActive : {};
     if (!active.body_id) return { ok: true, note: 'no active body bound' };
-    // lease 字段若声明则必须合法（exclusive 语义）；expired/released 等一律拒绝
-    if (active.lease !== undefined && !String(active.lease).startsWith('exclusive')) {
-      emit(s.id, 'LEASE_DENIED', { happened: `lease state '${active.lease}' is not an active exclusive lease`, payload: { holder: active.body_id, requester: bodyId }, source: 'plugin' });
+    // lease 必须恰好是 exclusive-canonical-writer——缺失/expired/近似拼写一律拒绝
+    if (active.lease !== 'exclusive-canonical-writer') {
+      emit(s.id, 'LEASE_DENIED', { happened: `lease state '${active.lease}' is not an active exclusive-canonical-writer`, payload: { holder: active.body_id, requester: bodyId }, source: 'plugin' });
       return { ok: false, holder: active.body_id };
     }
     if (active.body_id === bodyId) {
-      // fork detection: canonical head moved under us by another writer → deny further writes
+      // fork detection：已记录的 head 之后，head 缺失/变化/epoch 回退都 = 不可信 → 拒写
       const head = rs.lineage_head;
-      if (bodyState.last_lineage_head && head && head !== bodyState.last_lineage_head) {
-        emit(s.id, 'FORK_DETECTED', { happened: 'canonical lineage_head changed under active lease', payload: { expected: bodyState.last_lineage_head, seen: head }, source: 'plugin' });
+      if (bodyState.last_lineage_head && head !== bodyState.last_lineage_head) {
+        emit(s.id, 'FORK_DETECTED', { happened: 'canonical lineage_head changed/missing under active lease', payload: { expected: bodyState.last_lineage_head, seen: head }, source: 'plugin' });
         return { ok: false, holder: 'fork-detected' };
+      }
+      if (bodyState.epoch_seen != null && rs.continuity_epoch != null && rs.continuity_epoch < bodyState.epoch_seen) {
+        emit(s.id, 'LEASE_DENIED', { happened: 'continuity_epoch regressed — state not trusted', payload: { seen: rs.continuity_epoch, expected_min: bodyState.epoch_seen }, source: 'plugin' });
+        return { ok: false, holder: 'epoch-regression' };
       }
       bodyState.last_lineage_head = head || bodyState.last_lineage_head;
       bodyState.epoch_seen = rs.continuity_epoch || bodyState.epoch_seen;
@@ -295,7 +346,11 @@ export function apply(ctx, config = {}) {
         classification: { level: access || 'PRIVATE', basis: ['taint_or_default'] },
         payload, status: 'proposed'
       }));
-    } catch { /* ignore */ }
+      if (!existsSync(p)) return { denied: true, holder: 'proposal-write-unverified' };
+    } catch (e) {
+      emit(sessionId, 'LEASE_DENIED', { happened: `proposal write failed: ${e?.message || e}`, payload: { kind }, source: 'plugin' });
+      return { denied: true, holder: 'proposal-write-failed' };
+    }
     return { path: p };
   }
 
@@ -491,11 +546,23 @@ export function apply(ctx, config = {}) {
           }
           case 'evaluate': {
             const pred = s.predictions.get(input.prediction_id);
-            // 只有本会话创建或本会话恢复（persist 的 open_predictions）的 pid 才进 evaluated——
-            // 未知 pid 计入 evaluated 会让 persist 删掉其他会话仍 open 的预测（跨会话杀伤）
-            const known = pred !== undefined || s.restored.has(input.prediction_id);
-            // 未知 pid = 伪造判决原语：不落 PREDICTION_EVALUATED，直接拒绝
+            // 只有本会话创建、或本会话恢复且未被其他会话拥有的 pid 才可判——
+            // 未知/外属 pid 计入 evaluated 会让 persist 删掉他人仍 open 的预测（跨会话杀伤）
+            let known = pred !== undefined || s.restored.has(input.prediction_id);
+            if (known && s.restored.has(input.prediction_id) && !pred) {
+              const prior = readJson(join(wmDir, 'current.json')) || {};
+              const owner = (prior.prediction_owners || {})[input.prediction_id];
+              if (owner && owner !== s.id) {
+                return { ok: false, code: 'FOREIGN_PREDICTION', prediction_id: input.prediction_id, owner };
+              }
+            }
             if (input.prediction_id && !known) return { ok: false, code: 'UNKNOWN_PREDICTION', prediction_id: input.prediction_id };
+            if (input.verdict !== undefined && !['confirmed', 'refuted', 'partial', 'unknown'].includes(input.verdict)) {
+              return { ok: false, code: 'BAD_VERDICT', allowed: ['confirmed', 'refuted', 'partial', 'unknown'] };
+            }
+            if (input.evaluation_source !== undefined && !['mechanical', 'later_reality', 'independent_model', 'human', 'self'].includes(input.evaluation_source)) {
+              return { ok: false, code: 'BAD_EVALUATION_SOURCE' };
+            }
             if (input.prediction_id) s.evaluated.add(input.prediction_id);
             emit(s.id, 'PREDICTION_EVALUATED', { ...base, prediction_id: input.prediction_id, happened: `verdict=${input.verdict}`, payload: { verdict: input.verdict, observation_refs: input.observation_refs, residual: input.reason, evaluation_source: input.evaluation_source || 'self' } });
             return { ok: true, prior: pred ? 'bound' : (s.restored.has(input.prediction_id) ? 'restored' : 'unbound'), verdict: input.verdict };
@@ -504,9 +571,10 @@ export function apply(ctx, config = {}) {
             // 审计顺序：先验租约（失败只落 LEASE_DENIED），再落成功事件
             const lease = leaseCheck(s);
             if (!lease.ok) return { ok: false, code: 'LEASE_DENIED', holder: lease.holder };
-            emit(s.id, 'MODEL_UPDATED', { ...base, model_id: input.model_id, prediction_id: input.prediction_id, happened: `revision=${input.revision_type}`, payload: { revision_type: input.revision_type, change: input.change, reason: input.reason, supersedes: input.supersedes, update_class: input.update_class || 'world_model' } });
             const r = writeProposal('model-update', { model_id: input.model_id, revision_type: input.revision_type, change: input.change, reason: input.reason, update_class: input.update_class || 'world_model' }, s.id, s);
             if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
+            // 审计顺序：proposal 落盘成功后才允许出现 MODEL_UPDATED
+            emit(s.id, 'MODEL_UPDATED', { ...base, model_id: input.model_id, prediction_id: input.prediction_id, happened: `revision=${input.revision_type}`, payload: { revision_type: input.revision_type, change: input.change, reason: input.reason, supersedes: input.supersedes, update_class: input.update_class || 'world_model', proposal: r.path } });
             return { ok: true, canonical_proposal: r.path };
           }
           case 'probe': {
@@ -526,6 +594,7 @@ export function apply(ctx, config = {}) {
               if (r.denied) return { ok: false, code: 'LEASE_DENIED', holder: r.holder };
               proposal = r.path;
             }
+            // VALUE_DECISION 在 proposal 成功之后落账（若本调用带了 value_update）
             emit(s.id, 'VALUE_DECISION', { ...base, happened: 'value/decision recorded', payload: { goal: input.goal, decision_criteria: input.decision_criteria, proxy_risk: input.proxy_risk } });
             return proposal ? { ok: true, value_proposal: proposal } : { ok: true };
           }
@@ -604,9 +673,10 @@ export function apply(ctx, config = {}) {
             let prior = {};
             try { if (existsSync(cur)) prior = JSON.parse(readFileSync(cur, 'utf8')); } catch { /* ignore */ }
             const merged = new Set(Array.isArray(prior.open_predictions) ? prior.open_predictions : []);
-            for (const [pid] of s.predictions) { if (!s.evaluated.has(pid)) merged.add(pid); }
-            for (const pid of s.evaluated) merged.delete(pid);
-            const patch = { open_predictions: [...merged], last_summary: input.summary || prior.last_summary };
+            const owners = { ...(prior.prediction_owners && typeof prior.prediction_owners === 'object' ? prior.prediction_owners : {}) };
+            for (const [pid] of s.predictions) { if (!s.evaluated.has(pid)) { merged.add(pid); owners[pid] = s.id; } }
+            for (const pid of s.evaluated) { merged.delete(pid); delete owners[pid]; }
+            const patch = { open_predictions: [...merged], prediction_owners: owners, last_summary: input.summary || prior.last_summary };
             if (Array.isArray(input.open_loops)) patch.open_loops = input.open_loops;
             const st = updateCurrentJson(patch);
             let proposal;
