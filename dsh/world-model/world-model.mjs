@@ -121,10 +121,21 @@ export function apply(ctx, config = {}) {
 
   const sessions = new Map();
   let globalSeq = 0;
+  // session id 卫生：非字符串 id 坍缩成 "[object Object]" 会合并会话——哈希区分；
+  // 文件路径单独消毒（含 hash 后缀防 '..' / 路径逃逸 / 伪造他人 run 文件）。
+  function safeSid(raw) {
+    if (typeof raw === 'string' && raw) return raw;
+    if (raw == null) return 'unknown';
+    return 'obj-' + createHash('sha256').update(safeJson(raw)).digest('hex').slice(0, 12);
+  }
+  function sessionFileId(sid) {
+    const clean = String(sid).replace(/[^A-Za-z0-9._-]/g, '_');
+    return clean === sid ? clean : clean + '-' + createHash('sha256').update(String(sid)).digest('hex').slice(0, 8);
+  }
   function sessionFor(exec) {
-    const sid = String(exec?.agent?.session?.id || exec?.session?.id || 'unknown');
+    const sid = safeSid(exec?.agent?.session?.id ?? exec?.session?.id);
     if (!sessions.has(sid)) sessions.set(sid, {
-      id: sid, mode: envMode, predictions: new Map(), evaluated: new Set(),
+      id: sid, mode: envMode, predictions: new Map(), evaluated: new Set(), restored: new Set(),
       activated: envMode !== 'off', seq: 0, lastEventId: null
     });
     return sessions.get(sid);
@@ -154,7 +165,7 @@ export function apply(ctx, config = {}) {
     if (s) s.lastEventId = ev.event_id;
     try {
       appendFileSync(join(wmDir, 'ledger', `${today()}.jsonl`), safeJson(ev) + '\n');
-      appendFileSync(join(wmDir, 'runs', `${sessionId}.jsonl`), safeJson(ev) + '\n');
+      appendFileSync(join(wmDir, 'runs', `${sessionFileId(sessionId)}.jsonl`), safeJson(ev) + '\n');
     } catch { /* ledger write must never crash the loop */ }
     return ev;
   }
@@ -282,11 +293,16 @@ export function apply(ctx, config = {}) {
     const briefedSessions = new Set();
     ctx.on('session/event', (session, event) => {
       try {
-        const sid = String(session?.id || 'unknown');
+        const sid = safeSid(session?.id);
         if (briefedSessions.has(sid)) return;
         const s = sessionFor({ agent: { session: { id: sid } } });
         if (event?.type === 'turn/start' || event?.type === 'step/start' || event?.type === 'user/message') {
           briefedSessions.add(sid);
+          // 恢复的 open_predictions 记为 known——跨会话 evaluate 合法；未知 pid 不计入 evaluated
+          try {
+            const prior = readJson(join(wmDir, 'current.json')) || {};
+            for (const pid of (prior.open_predictions || [])) s.restored.add(pid);
+          } catch { /* restore best-effort */ }
           const stale = canonicalStale();
           emit(s.id, 'STATE_RESTORE', {
             happened: 'world-model state restored into session',
@@ -385,9 +401,12 @@ export function apply(ctx, config = {}) {
           }
           case 'evaluate': {
             const pred = s.predictions.get(input.prediction_id);
-            if (input.prediction_id) s.evaluated.add(input.prediction_id);
+            // 只有本会话创建或本会话恢复（persist 的 open_predictions）的 pid 才进 evaluated——
+            // 未知 pid 计入 evaluated 会让 persist 删掉其他会话仍 open 的预测（跨会话杀伤）
+            const known = pred !== undefined || s.restored.has(input.prediction_id);
+            if (input.prediction_id && known) s.evaluated.add(input.prediction_id);
             emit(s.id, 'PREDICTION_EVALUATED', { ...base, prediction_id: input.prediction_id, happened: `verdict=${input.verdict}`, payload: { verdict: input.verdict, observation_refs: input.observation_refs, residual: input.reason, evaluation_source: input.evaluation_source || 'self' } });
-            return { ok: true, prior: pred ? 'bound' : 'unbound', verdict: input.verdict };
+            return { ok: true, prior: pred ? 'bound' : (s.restored.has(input.prediction_id) ? 'restored' : 'unbound'), verdict: input.verdict };
           }
           case 'update': {
             // 审计顺序：先验租约（失败只落 LEASE_DENIED），再落成功事件
