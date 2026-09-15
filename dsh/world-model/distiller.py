@@ -561,7 +561,7 @@ def main() -> int:
         for c in accepted:
             p = pdir / f"{stamp}-model-proposal-{c['candidate_id']}.json"
             p.write_text(json.dumps({
-                "schema_version": "1.1", "kind": "MODEL_PROPOSAL",
+                "schema_version": "1.2", "kind": "MODEL_PROPOSAL",
                 "timestamp": utcnow(), "status": "proposed",
                 "update_class": "world_model",
                 "classification": c["access"],
@@ -571,7 +571,7 @@ def main() -> int:
         for i, lp in enumerate(life):
             p = pdir / f"{stamp}-lifecycle-{i:03d}.json"
             p.write_text(json.dumps({
-                "schema_version": "1.1", "kind": lp["kind"],
+                "schema_version": "1.2", "kind": lp["kind"],
                 "timestamp": utcnow(), "status": "proposed",
                 "update_class": "world_model",
                 "classification": {"level": "PRIVATE",

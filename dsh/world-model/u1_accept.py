@@ -109,7 +109,7 @@ def main() -> int:
             "ts": utcnow(), "kind": "U1_APPLY", "model_id": mid,
             "decision": args.decision, "proposal": args.proposal,
             "authority": args.authority, "rollback": str(bdir),
-            "schema_version": "1.1"}, ensure_ascii=False) + "\n")
+            "schema_version": "1.2"}, ensure_ascii=False) + "\n")
 
     print(json.dumps({"decision": args.decision, "model_id": mid,
                       "epistemic_status": status, "rollback": str(bdir),

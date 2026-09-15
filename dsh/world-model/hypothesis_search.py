@@ -230,7 +230,7 @@ def main() -> int:
         stamp = datetime.now().strftime("%Y-%m-%d")
         name = f"{stamp}-hypothesis-state-{m['hypothesis_id']}.json"
         (pdir / name).write_text(json.dumps({
-            "schema_version": "1.1", "kind": "HYPOTHESIS_STATE_UPDATE",
+            "schema_version": "1.2", "kind": "HYPOTHESIS_STATE_UPDATE",
             "timestamp": datetime.now(timezone.utc).isoformat(
                 timespec="seconds").replace("+00:00", "Z"),
             "status": "proposed", "update_class": "world_model",
@@ -274,7 +274,7 @@ def main() -> int:
             stamp = datetime.now().strftime("%Y-%m-%d")
             name = f"{stamp}-hypothesis-{prob.get('problem_id', 'x')}.json"
             (pdir / name).write_text(json.dumps({
-                "schema_version": "1.1", "kind": "HYPOTHESIS_PROPOSAL",
+                "schema_version": "1.2", "kind": "HYPOTHESIS_PROPOSAL",
                 "timestamp": datetime.now(timezone.utc).isoformat(
                     timespec="seconds").replace("+00:00", "Z"),
                 "status": "proposed", "update_class": "world_model",
